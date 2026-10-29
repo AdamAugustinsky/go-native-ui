@@ -4,6 +4,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"syscall"
 	"testing"
 	"time"
@@ -495,4 +496,43 @@ func postKey(hwnd, vk uintptr) {
 	scan := win32.Call(pMapVirtualKeyW, vk, 0 /* MAPVK_VK_TO_VSC */)
 	win32.Call(pPostMessageW, hwnd, wmKeyDown, vk, 1|scan<<16)
 	win32.Call(pPostMessageW, hwnd, wmKeyUp, vk, 1|scan<<16|3<<30)
+}
+
+// OnHostVisible reports a host shown and hidden by the placement, after
+// the batch; HostCommand queues the command a control in another process
+// (a WebView2 page) reports (H2).
+func TestHostVisibilityAndCommandForAControl(t *testing.T) {
+	lockThread(t)
+	w := openW(t, "host visibility")
+	id, err := w.NewHost(HostView, HostOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []bool
+	w.OnHostVisible(id, func(shown bool) { seen = append(seen, shown) })
+	r := HostRegion{ID: id, Rect: [4]float32{10, 10, 100, 60}, Clip: [4]float32{10, 10, 100, 60}}
+	place(w, r)
+	place(w, r) // unchanged: no call
+	r.Hidden = true
+	place(w, r)
+	place(w) // not built: still hidden, no call
+	if want := []bool{false, true, false}; fmt.Sprint(seen) != fmt.Sprint(want) {
+		t.Errorf("OnHostVisible calls %v, want %v (now, shown, hidden)", seen, want)
+	}
+	w.Events()
+	w.HostCommand(id, KeyTab, ModShift)
+	w.HostCommand(id+1<<8, KeyTab, 0) // stale: nothing
+	got := pumpEvents([]*Window{w}, time.Second, func(g [][]Event) bool { return hasKind(g[0], EvHostCommand) })[0]
+	if e := lastOf(got, EvHostCommand); e.Kind != EvHostCommand || HostID(e.Tag) != id || e.Key != KeyTab || e.Mods != ModShift {
+		t.Errorf("HostCommand: %+v", got)
+	}
+	n := 0
+	for _, e := range got {
+		if e.Kind == EvHostCommand {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d host commands, want 1 (a stale id queues none)", n)
+	}
 }

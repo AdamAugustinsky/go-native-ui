@@ -83,8 +83,10 @@
 //     DOMContentLoaded, done). Downloads report their bytes about every
 //     500 ms (Chromium's cadence). Location, notifications and clipboard
 //     reads reach the policy too. A missing runtime is ErrUnavailable, with
-//     RuntimeURL for the app to offer. A hidden view is suspended
-//     (TrySuspend) and resumed when shown.
+//     RuntimeURL for the app to offer. A hidden view (its host not built) is
+//     suspended (TrySuspend) and resumed when shown. Tab out of the page
+//     comes back as the host's EvHostCommand. The window needs no
+//     app.Config.ChildWindows: WebView2 presents with DirectComposition.
 //   - Linux: ErrUnsupported (WebKitGTK would bring GTK, D2).
 package webview
 

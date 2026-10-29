@@ -52,6 +52,7 @@ type harness struct {
 	events []webview.Event
 	kinds  []app.EventKind // every app event's kind, in order (the idle gate)
 	views  []*webview.View
+	hidden map[*webview.View]bool // views not built: their hosts hide
 	frames atomic.Int64
 	// atStart and afterOpen: the engine was loaded when Start began, and
 	// once the window had drawn its first frame
@@ -100,6 +101,9 @@ func (h *harness) Build(c *ui.Context) {
 	c.Push(c.Box(0, "views"))
 	n := len(h.views)
 	for i, v := range h.views {
+		if h.hidden[v] {
+			continue
+		}
 		c.NextSize(ui.Pct(1/float32(n)), ui.Pct(1))
 		c.Host(uint32(v.Host()), ui.KeyN(1, uint64(i)), ui.HostFocusable)
 	}
@@ -135,6 +139,17 @@ func startApp(t *testing.T) *harness {
 		}
 	})
 	return h
+}
+
+// show builds v's host or leaves it out, from the next frame (main thread).
+func (h *harness) show(v *webview.View, shown bool) {
+	h.Do(func(*app.App) {
+		if h.hidden == nil {
+			h.hidden = map[*webview.View]bool{}
+		}
+		h.hidden[v] = !shown
+		h.win.App().Win.RequestFrame()
+	})
 }
 
 func (h *harness) post(f func(a *app.App)) {
@@ -265,6 +280,7 @@ func newPages(t *testing.T) *pages {
 	}
 	mux.HandleFunc("/a", page("Page A", `<a href="/b">b</a>`))
 	mux.HandleFunc("/b", page("Page B", ""))
+	mux.HandleFunc("/green", page("Green", `<style>html,body{margin:0;height:100%;background:#00c000}</style>`))
 	mux.HandleFunc("/blocked", page("Blocked", `<script>setTimeout(function(){location.href="gnuitest:hello"},50)</script>`))
 	mux.HandleFunc("/popup", page("Popup", `<script>setTimeout(function(){window.open("/b")},50)</script>`))
 	mux.HandleFunc("/camera", page("Camera", `<script>

@@ -43,10 +43,6 @@ func engineProcesses() map[string]string {
 	return m
 }
 
-// Until the window hosts child windows (W3), a view's window covers the
-// window's client area.
-func init() { webview.UseTestHost() }
-
 // openReady opens a view and waits for its controller.
 func (h *harness) openReady(o webview.Options) *webview.View {
 	h.t.Helper()
@@ -230,8 +226,18 @@ func TestViewMatrix(t *testing.T) {
 	h.Do(func(*app.App) { v.Reload() })
 	h.wait("the page after Reload", 20*time.Second, func() bool { _, ok := h.saw(v, webview.LoadFinished); return ok })
 
-	// hidden: suspended within 1 s; shown: resumed
-	h.Do(func(*app.App) { webview.ShowView(v, false) })
+	// hosting (W3): the page shows on screen in a window without
+	// ChildWindows (WebView2 presents with DirectComposition, not GDI)
+	h.navigate(v, p.url("/green"), "Green")
+	var px uint32
+	h.wait("the page on screen", 10*time.Second, func() bool {
+		px = webview.ScreenPixel(v)
+		return near(px, 0x00c000)
+	})
+	t.Logf("hosting: the page's colour on screen at the view's centre is %06x (want 00c000)", px)
+
+	// hidden (its host not built): suspended within 1 s; shown: resumed
+	h.show(v, false)
 	t1 := time.Now()
 	h.wait("the hidden view suspended", 5*time.Second, func() bool { return webview.Suspended(v) })
 	if d := time.Since(t1); d > time.Second {
@@ -239,7 +245,7 @@ func TestViewMatrix(t *testing.T) {
 	} else {
 		t.Logf("gate: the hidden view was suspended after %v", d)
 	}
-	h.Do(func(*app.App) { webview.ShowView(v, true) })
+	h.show(v, true)
 	h.wait("the shown view resumed", 5*time.Second, func() bool { return !webview.Suspended(v) })
 
 	// idle: once loaded, the view adds no frames
@@ -263,4 +269,15 @@ func TestViewMatrix(t *testing.T) {
 	if idle != 0 {
 		t.Errorf("an idle view drew %d frames in 3 s", idle)
 	}
+}
+
+// near reports whether colour c (0xRRGGBB) is within 8 of want per channel.
+func near(c, want uint32) bool {
+	for sh := 0; sh < 24; sh += 8 {
+		d := int(c>>sh&0xFF) - int(want>>sh&0xFF)
+		if d > 8 || d < -8 {
+			return false
+		}
+	}
+	return true
 }

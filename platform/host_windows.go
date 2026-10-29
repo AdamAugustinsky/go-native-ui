@@ -49,6 +49,7 @@ type hostSlot struct {
 	rect, clipR  [4]float32
 	shown        bool
 	onSize       func(w, h int32) // OnHostResize
+	onShow       func(shown bool) // OnHostVisible
 	lastW, lastH int32            // the view's size last placed
 }
 
@@ -64,6 +65,9 @@ type hostState struct {
 	// deactivated: it gets the focus back on activation.
 	restore int
 	applied int // applyHosts calls (tests)
+	// flips are the slots whose visibility the batch changed (OnHostVisible)
+	flips  [MaxHosts]int8
+	nFlips int
 }
 
 // hostWin is the Window's part for hosts and the keyboard focus.
@@ -309,6 +313,34 @@ func (w *Window) OnHostResize(id HostID, fn func(width, height int32)) {
 	}
 }
 
+// OnHostVisible calls fn each time the placement shows or hides host id (a
+// host not built in a frame, or hidden under a popup, is hidden), after the
+// frame's batch, and once now with whether it shows. A hosted control that
+// works while hidden unless told (a WebView2 controller, which is made
+// invisible and suspended) follows it. nil removes it. Windows only. Main
+// thread.
+func (w *Window) OnHostVisible(id HostID, fn func(shown bool)) {
+	s := w.hosts.slot(id)
+	if s == nil {
+		return
+	}
+	s.onShow = fn
+	if fn != nil {
+		fn(s.shown)
+	}
+}
+
+// HostCommand queues EvHostCommand for host id, as a Tab, Shift+Tab, Escape
+// or Enter the host's control does not use: for a control whose keys the
+// pump never sees (a WebView2 page, in its own process, which reports a Tab
+// out of the page as MoveFocusRequested). Main thread. A stale id does
+// nothing.
+func (w *Window) HostCommand(id HostID, k Key, m Mods) {
+	if w.hosts.slot(id) != nil {
+		w.hostCommand(int(id&0xFF)-1, k, m)
+	}
+}
+
 // SetHosts sets where the hosts are this frame (ui's host regions). It is
 // copied and compared with the last list: unchanged, nothing happens;
 // changed, the geometry is staged and applied right after the next present
@@ -450,11 +482,21 @@ func (w *Window) applyHosts() {
 		} else if s.shown {
 			dwp = deferPos(dwp, s.clip, 0, 0, 0, 0, swpNoZOrder|swpNoActivate|swpNoMove|swpNoSize|swpHideWindow)
 		}
+		if show != s.shown && s.onShow != nil {
+			h.flips[h.nFlips] = int8(i)
+			h.nFlips++
+		}
 		s.shown = show
 	}
 	if dwp != 0 {
 		win32.Call(pEndDeferPos, dwp)
 	}
+	for _, i := range h.flips[:h.nFlips] { // after the batch: the windows show as they say
+		if s := &h.slots[i]; s.live && s.onShow != nil {
+			s.onShow(s.shown)
+		}
+	}
+	h.nFlips = 0
 }
 
 // deferPos adds one window to the batch; when the batch failed (0), the

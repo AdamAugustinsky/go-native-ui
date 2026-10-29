@@ -7,26 +7,29 @@ import (
 	"unsafe"
 
 	"gonativeui/internal/win32"
-	"gonativeui/platform"
 )
 
 var (
-	pSetWindowPos     = win32.Proc(user32, "SetWindowPos")
-	pShowWindow       = win32.Proc(user32, "ShowWindow")
-	pGetWindowRgnBox  = win32.Proc(user32, "GetWindowRgnBox")
-	parentRect, rgnBx [4]int32
+	pGetWindowRgnBox = win32.Proc(user32, "GetWindowRgnBox")
+	pGetWindowRect   = win32.Proc(user32, "GetWindowRect")
+	pGetDC           = win32.Proc(user32, "GetDC")
+	pReleaseDC       = win32.Proc(user32, "ReleaseDC")
+	pGetPixel        = win32.Proc(gdi32, "GetPixel")
+	rgnBx, winRect   [4]int32
 )
 
-// UseTestHost hosts each view's window over the whole client area of its
-// window, in place of platform.Window.NewHost: the matrix runs before the
-// window hosts child windows (W3). The host is 0.
-func UseTestHost() {
-	testHost = func(w *platform.Window, hwnd uintptr) (platform.HostID, error) {
-		call(pGetClientRect, w.Native().HWND, uintptr(unsafe.Pointer(&parentRect)))
-		call(pSetWindowPos, hwnd, 0, 0, 0, uintptr(parentRect[2]), uintptr(parentRect[3]), 0x0004|0x0010|0x0040) // SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW
-		return 0, nil
-	}
+// ScreenPixel is the screen's colour (0xRRGGBB) at the centre of v's window:
+// what the page shows there, composed.
+func ScreenPixel(v *View) uint32 {
+	call(pGetWindowRect, v.be.(*view).hwnd, uintptr(unsafe.Pointer(&winRect)))
+	dc := call(pGetDC, 0)
+	c := uint32(call(pGetPixel, dc, uintptr((winRect[0]+winRect[2])/2), uintptr((winRect[1]+winRect[3])/2)))
+	call(pReleaseDC, 0, dc)
+	return c&0xFF<<16 | c&0xFF00 | c>>16&0xFF // COLORREF is 0x00BBGGRR
 }
+
+// HostWindow is v's window, the host's view (platform.Window.HostView).
+func HostWindow(v *View) uintptr { return v.be.(*view).hwnd }
 
 // LoadTime is how long the first New took to find and load the runtime (0
 // before it).
@@ -34,15 +37,6 @@ func LoadTime() time.Duration { return rt.loadTime }
 
 // Ready reports whether v's controller is there.
 func Ready(v *View) bool { return v.be.(*view).ctrl != 0 }
-
-// ShowView shows or hides v's window, as the window hides a host.
-func ShowView(v *View, show bool) {
-	cmd := uintptr(0) // SW_HIDE
-	if show {
-		cmd = 5 // SW_SHOW
-	}
-	call(pShowWindow, v.be.(*view).hwnd, cmd)
-}
 
 // Suspended reports whether v's web view is suspended (ICoreWebView2_3).
 func Suspended(v *View) bool {

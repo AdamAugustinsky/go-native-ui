@@ -68,6 +68,8 @@ const (
 	ctrlPutIsVisible         = 4
 	ctrlPutBounds            = 6
 	ctrlMoveFocus            = 12
+	ctrlAddMoveFocusReq      = 13
+	ctrlRemoveMoveFocusReq   = 14
 	ctrlNotifyParentMoved    = 23
 	ctrlClose                = 24
 	ctrlGetCoreWebView2      = 25
@@ -137,6 +139,8 @@ const (
 	dlStartPutResultPath  = 7
 	dlStartPutHandled     = 9
 	procFailedGetKind     = 3 // ICoreWebView2ProcessFailedEventArgs
+	focusReqGetReason     = 3 // ICoreWebView2MoveFocusRequestedEventArgs
+	focusReqPutHandled    = 5
 	dlAddBytesReceived    = 3 // ICoreWebView2DownloadOperation
 	dlRemoveBytesReceived = 4
 	dlAddEndTime          = 5
@@ -176,6 +180,8 @@ const (
 	webErrorAborted  = 9  // COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED
 
 	focusProgrammatic = 0 // COREWEBVIEW2_MOVE_FOCUS_REASON
+	focusNext         = 1
+	focusPrevious     = 2
 )
 
 // IIDs.
@@ -206,6 +212,7 @@ var (
 	iidHandlerEndTime  = win32.GUID{Data1: 0x28f0d425, Data2: 0x93fe, Data3: 0x4e63, Data4: [8]byte{0x9f, 0x8d, 0x2a, 0xee, 0xc6, 0xd3, 0xba, 0x1e}}
 	iidHandlerDLState  = win32.GUID{Data1: 0x81336594, Data2: 0x7ede, Data3: 0x4ba9, Data4: [8]byte{0xbf, 0x71, 0xac, 0xf0, 0xa9, 0x5b, 0x58, 0xdd}}
 	iidHandlerDevTools = win32.GUID{Data1: 0x5c4889f0, Data2: 0x5ef6, Data3: 0x4c5a, Data4: [8]byte{0x95, 0x2c, 0xd8, 0xf1, 0xb9, 0x2d, 0x05, 0x74}} // ICoreWebView2CallDevToolsProtocolMethodCompletedHandler (tests)
+	iidHandlerFocus    = win32.GUID{Data1: 0x69035451, Data2: 0x6dc7, Data3: 0x4cb8, Data4: [8]byte{0x9b, 0xce, 0xb2, 0xbd, 0x70, 0xad, 0x28, 0x9f}}
 	iidHandlerSuspend  = win32.GUID{Data1: 0x00f206a7, Data2: 0x9d17, Data3: 0x4605, Data4: [8]byte{0x91, 0xf6, 0x4e, 0x8e, 0x4d, 0xe1, 0x92, 0xe3}}
 )
 
@@ -228,6 +235,7 @@ const (
 	hBytes
 	hDLState
 	hSuspend
+	hFocus
 )
 
 const runtimeGUID = `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`
@@ -249,7 +257,6 @@ var (
 	pDestroyWindow   = win32.Proc(user32, "DestroyWindow")
 	pDefWindowProc   = win32.Proc(user32, "DefWindowProcW")
 	pGetClientRect   = win32.Proc(user32, "GetClientRect")
-	pIsWindowVisible = win32.Proc(user32, "IsWindowVisible")
 	pGetDpiForWindow = win32.Proc(user32, "GetDpiForWindow")
 	pSetWindowRgn    = win32.Proc(user32, "SetWindowRgn")
 	pGetModuleHandle = win32.Proc(kernel32, "GetModuleHandleW")
@@ -290,10 +297,6 @@ var rt struct {
 	loadTime time.Duration
 }
 
-// testHost, set by tests, hosts the view's window in place of
-// platform.Window.NewHost.
-var testHost func(w *platform.Window, hwnd uintptr) (platform.HostID, error)
-
 // view is the Windows backend of a View.
 type view struct {
 	id   uint32
@@ -316,10 +319,11 @@ type view struct {
 	dls      []*download
 	failed   bool // the browser process ended: Reload makes a new controller
 	closed   bool
-	visible  bool
+	visible  bool // the controller is visible
+	shown    bool // the host shows
 	suspend  bool // a TrySuspend is wanted (hidden)
 
-	tokens [16]int64 // event registration tokens, by handler event
+	tokens [24]int64 // event registration tokens, by handler event
 
 	// out parameters: heap words the runtime writes
 	outPtr  uintptr
@@ -515,7 +519,7 @@ func load(o *Options) error {
 	rt.handlers = com.NewKind("webview2-handlers", 1024, []win32.GUID{
 		iidHandlerEnv, iidHandlerCtrl, iidHandlerNavStart, iidHandlerContent, iidHandlerSource, iidHandlerHistory,
 		iidHandlerNavDone, iidHandlerPerm, iidHandlerProc, iidHandlerNewWin, iidHandlerTitle, iidHandlerDOM,
-		iidHandlerDLStart, iidHandlerBytes, iidHandlerDLState, iidHandlerSuspend, iidHandlerDevTools, iidHandlerEndTime,
+		iidHandlerDLStart, iidHandlerBytes, iidHandlerDLState, iidHandlerSuspend, iidHandlerDevTools, iidHandlerEndTime, iidHandlerFocus,
 	}, []com.Method{{N: 2, Fn: invoke}})
 	rt.options = newOptionsKind()
 	rt.class = wide("GNUIWebView2Host")
@@ -677,13 +681,9 @@ func osNew(w *platform.Window, o *Options) (backend, platform.HostID, uint32, er
 		v.private = true
 		v.profile = fmt.Sprintf("gnui-private-%d-%d", os.Getpid(), rt.private)
 	}
-	var host platform.HostID
-	var err error
-	if testHost != nil {
-		host, err = testHost(w, hwnd)
-	} else {
-		host, err = w.NewHost(platform.HostView, platform.HostOptions{View: hwnd, Focusable: true})
-	}
+	// the window hosts our window in a clip container (W3), and tells us its
+	// size and whether it shows
+	host, err := w.NewHost(platform.HostView, platform.HostOptions{View: hwnd, Focusable: true})
 	if err != nil {
 		call(pDestroyWindow, hwnd)
 		return nil, 0, 0, err
@@ -691,6 +691,8 @@ func osNew(w *platform.Window, o *Options) (backend, platform.HostID, uint32, er
 	v.host = host
 	rt.views[v.id] = v
 	rt.byHWND[hwnd] = v
+	w.OnHostResize(host, func(int32, int32) { v.resize() })
+	w.OnHostVisible(host, v.setShown)
 	switch rt.envState {
 	case 0:
 		ensureEnv()
@@ -819,9 +821,10 @@ func (v *view) ready(hr int32, ctrl uintptr) {
 		win32.Release(wv2)
 	}
 
+	add(ctrl, ctrlAddMoveFocusReq, hFocus)
 	v.resize()
-	v.visible = false
-	v.showIfVisible()
+	v.visible = !v.shown // apply the host's visibility
+	v.showState(v.shown)
 	if u := v.pending; u != "" {
 		v.pending = ""
 		comh(v.wv, wvNavigate, uintptr(unsafe.Pointer(wide(u))))
@@ -871,35 +874,25 @@ func putBounds(ctrl uintptr, r *[4]int32) {
 	comh(ctrl, ctrlPutBounds, uintptr(unsafe.Pointer(r)))
 }
 
-// showIfVisible follows the window's visibility: a shown view is visible (and
-// resumed), a hidden one invisible and suspended (TrySuspend).
-func (v *view) showIfVisible() {
-	if vis := call(pIsWindowVisible, v.hwnd) != 0; v.ctrl != 0 && vis != v.visible {
-		v.showState(vis)
+// setShown follows the host's visibility (platform.Window.OnHostVisible): a
+// shown view is visible (and resumed), a hidden one invisible and suspended
+// (TrySuspend).
+func (v *view) setShown(shown bool) {
+	v.shown = shown
+	if v.ctrl != 0 && shown != v.visible {
+		v.showState(shown)
 	}
 }
 
-// hostProc is the view's window procedure: it keeps the controller's bounds,
-// visibility, position and focus with the window.
+// hostProc is the view's window procedure: it keeps the controller's
+// position and focus with the window (its size and visibility come from the
+// host: OnHostResize, OnHostVisible).
 func hostProc(hwnd, msg, wp, lp uintptr) uintptr {
 	v := rt.byHWND[hwnd]
 	switch msg {
-	case 0x0005: // WM_SIZE
-		if v != nil {
-			v.resize()
-		}
-	case 0x0003, 0x0047: // WM_MOVE, WM_WINDOWPOSCHANGED
-		if v != nil {
-			if v.ctrl != 0 {
-				com.Call(v.ctrl, ctrlNotifyParentMoved)
-			}
-			if msg == 0x0047 {
-				v.showIfVisible()
-			}
-		}
-	case 0x0018: // WM_SHOWWINDOW: wParam is the state the window is about to have
-		if v != nil && v.ctrl != 0 && (wp != 0) != v.visible {
-			v.showState(wp != 0)
+	case 0x0003: // WM_MOVE: the page's popups (a <select>, its menus) follow
+		if v != nil && v.ctrl != 0 {
+			com.Call(v.ctrl, ctrlNotifyParentMoved)
 		}
 	case 0x0007: // WM_SETFOCUS: into the page
 		if v != nil && v.ctrl != 0 {
@@ -1012,6 +1005,17 @@ func invoke(o *com.Object, a com.Args) uintptr {
 		}
 	case hDLStart:
 		v.downloadStarting(args)
+	case hFocus: // Tab or Shift+Tab out of the page: the app's focus traversal continues
+		v.outI32 = -1
+		comh(args, focusReqGetReason, uintptr(unsafe.Pointer(&v.outI32)))
+		if v.outI32 == focusNext || v.outI32 == focusPrevious {
+			comh(args, focusReqPutHandled, 1)
+			var m platform.Mods
+			if v.outI32 == focusPrevious {
+				m = platform.ModShift
+			}
+			v.w.HostCommand(v.host, platform.KeyTab, m)
+		}
 	}
 	return 0
 }
@@ -1363,12 +1367,18 @@ func (v *view) dropController() {
 				win32.Release(wv2)
 			}
 		}
-		v.tokens = [16]int64{}
+		f := v.tokens[hFocus] // the controller's own: removed below
+		v.tokens = [len(v.tokens)]int64{}
+		v.tokens[hFocus] = f
 		win32.Release(v.wv3)
 		win32.Release(v.wv)
 		v.wv, v.wv3 = 0, 0
 	}
 	if v.ctrl != 0 {
+		if v.tokens[hFocus] != 0 {
+			com.Call(v.ctrl, ctrlRemoveMoveFocusReq, uintptr(v.tokens[hFocus]))
+			v.tokens[hFocus] = 0
+		}
 		com.Call(v.ctrl, ctrlClose)
 		win32.Release(v.ctrl)
 		v.ctrl = 0
@@ -1392,10 +1402,9 @@ func (v *view) close() {
 		v.deleteProfile()
 	}
 	v.dropController()
-	v.w.ReleaseHost(v.host)
 	delete(rt.byHWND, v.hwnd)
-	call(pDestroyWindow, v.hwnd)
 	delete(rt.views, v.id)
+	v.w.ReleaseHost(v.host) // destroys the container and our window in it
 }
 
 // deleteProfile marks the view's own InPrivate profile for deletion
