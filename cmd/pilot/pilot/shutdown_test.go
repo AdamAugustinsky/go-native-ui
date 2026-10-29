@@ -84,7 +84,11 @@ func TestCloseStopsThePlacesWorker(t *testing.T) {
 	old := iconStyle
 	iconStyle = func() uint64 { return 0 } // (the style worker's own wake is not the one under test)
 	t.Cleanup(func() { iconStyle = old })
-	timer := time.AfterFunc(5*time.Second, release)
+	// The gate's release by time only keeps a failing test from hanging: at
+	// 5 s it opened before the check on a loaded arm64 runner, whose first
+	// frame took that long, and let the next probes through ("3 probes
+	// started", p8-windows-flakes 40825454957).
+	timer := time.AfterFunc(60*time.Second, release)
 	defer timer.Stop()
 	defer release()
 
@@ -99,7 +103,7 @@ func TestCloseStopsThePlacesWorker(t *testing.T) {
 	pl.wake = func() { wakes.Add(1) }
 	o := newOffscreen(t, pl)
 	o.Frame()
-	for n := 0; n < 500 && probes.Load() == 0; n++ {
+	for n := 0; n < 10000 && probes.Load() == 0; n++ {
 		time.Sleep(time.Millisecond)
 	}
 	if probes.Load() != 1 {

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"gonativeui/internal/testlock"
 	"gonativeui/internal/win32"
 )
 
@@ -187,7 +188,17 @@ func TestHostFocusHandOffAndCommands(t *testing.T) {
 		t.Fatal("the EDIT was not moved into the host's container")
 	}
 	place(w, HostRegion{ID: id, Rect: [4]float32{10, 10, 200, 40}, Clip: [4]float32{10, 10, 200, 40}})
-	win32.Call(pSetFocus, w.hwnd)
+	// The window has the focus before it hands it on, so the only focus
+	// change after FocusHost is the host's. It may not at first: another test
+	// process's window has the foreground, and the window gained the focus
+	// during FocusHost instead (EvFocus, arm64, p8-windows-flakes
+	// 40825454957). The test holds the activation, as the tests that take the
+	// foreground do, and waits for the focus.
+	testlock.Hold(t, "activation")
+	for end := time.Now().Add(5 * time.Second); !w.kbd && time.Now().Before(end); {
+		win32.Call(pSetFocus, w.hwnd)
+		settle(w)
+	}
 	settle(w)
 	w.Events()
 
