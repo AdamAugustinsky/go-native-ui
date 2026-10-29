@@ -255,7 +255,7 @@ func TestCaptureOfTheLiveWindow(t *testing.T) {
 // its window is on screen. A frame in the half second before the wait or the
 // 0.3 s after it is attributed to the causes the debug overlay recorded (it is
 // turned on here), and fails the test unless the system or another app made
-// it (outsideCause): above all another process taking the activation, which
+// it (widgettest.OutsideCause): above all another process taking the activation, which
 // side by side test runs do all the time.
 func TestIdleAppDrawsNothingBetweenWaits(t *testing.T) {
 	wantOverlay(t, false)
