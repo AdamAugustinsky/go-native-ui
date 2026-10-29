@@ -77,7 +77,6 @@ type appWindow struct {
 	oleThread      uint32 // the thread OleInitialize succeeded on (0: none)
 	got            bool   // it handled something the app's loop must see: the pump returns
 	modal          int    // native modal loops running now (enterModal)
-	lastTick       int64  // nanotime of the last modalTick
 	menuLoop       bool   // a menu the app window owns is tracking (a tray menu, W5)
 	started        bool   // StartApp ran (AppStarted)
 	pumps, wakes   uint64 // PumpStats
@@ -195,8 +194,7 @@ const (
 	wmExitMenuLoop   = 0x0212
 	wmAppGone        = 0x8000 + 3 // WM_APP+3: an app window a thread before this one made, to destroy on its own thread
 	modalTimerID     = 2
-	modalTimerMs     = 16                           // the frame handler's tick inside a native modal loop
-	modalTickLate    = 3 * modalTimerMs * 1_000_000 // ns: a tick this late is run by the next app message
+	modalTimerMs     = 16 // the frame handler's tick inside a native modal loop
 	endSessionLogoff = 0x80000000
 )
 
@@ -336,18 +334,6 @@ func TaskbarCreatedMessage() uint32 { return reg.app.taskbarCreated }
 
 // appWndProc is the app window's procedure.
 func appWndProc(hwnd, m, wp, lp uintptr) uintptr {
-	// A modal loop's frame tick is a WM_TIMER, which the system makes only
-	// when the thread has no posted message waiting: a stream of posted
-	// messages (wakes, another thread's) faster than the loop handles them
-	// keeps it from ever coming, and no window draws. Any message of the app
-	// window then runs an overdue tick. TestFileDialogsCancelledOnceEach's
-	// ticks, posted every 20 ms to a main thread slowed by a loaded runner,
-	// drew no frame in 83 ticks of a dialog's loop (p8-webview2 40811975293,
-	// 40816023392).
-	if reg.app.modal > 0 && hwnd == reg.app.hwnd && (m != wmTimer || wp != modalTimerID) &&
-		nanotime()-reg.app.lastTick >= modalTickLate {
-		modalTick()
-	}
 	switch m {
 	case wmWake:
 		reg.app.wakes++
@@ -644,7 +630,6 @@ func (w *Window) Events() []Event {
 func enterModal() {
 	reg.app.modal++
 	if reg.app.modal == 1 && reg.app.hwnd != 0 {
-		reg.app.lastTick = nanotime()
 		win32.Call(pSetTimer, reg.app.hwnd, modalTimerID, modalTimerMs, 0)
 	}
 }
@@ -665,7 +650,6 @@ func leaveModal() {
 // limits are applied.
 func modalTick() {
 	now := nanotime()
-	reg.app.lastTick = now
 	for i := 0; i < reg.n; i++ {
 		w := reg.open[i]
 		w.reapDrags()
