@@ -553,6 +553,8 @@ func TestReceiveAllocations(t *testing.T) {
 	// grown once, a thread's first callback).
 	if float64(ours) > float64(n)/100 {
 		t.Errorf("%d allocations through the module's code over %d messages; their stacks:\n%s", ours, n, sites)
+	} else if ours > 0 {
+		t.Logf("their stacks:\n%s", sites)
 	}
 }
 
