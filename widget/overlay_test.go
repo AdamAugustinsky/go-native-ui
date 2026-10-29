@@ -1,12 +1,14 @@
 package widget
 
 import (
+	"runtime"
 	"slices"
 	"testing"
 
 	"gonativeui/menu"
 	"gonativeui/rexui"
 	"gonativeui/ui"
+	"gonativeui/widget/base"
 )
 
 // shell is a window with a menu bar, a select, a text field and a dialog.
@@ -409,5 +411,227 @@ func TestDrawnMenuRoleTitleFollowsTheStrings(t *testing.T) {
 	g.must(ui.RoleMenuItem, "Selecionar Tudo")
 	if _, ok := g.find(ui.RoleMenuItem, "Copy"); ok {
 		t.Error("the drawn menu still reads Copy")
+	}
+}
+
+// ---- The menu bar from the keyboard (Windows' F10, Alt and mnemonics) ----
+
+// altKey sends a key press with Alt, as the platform reports it: the
+// character the key types on the layout, and the key.
+func (g *rig) altKey(letter byte) {
+	g.in.PushKey(ui.KeyEvent{Code: ui.KeyCode(letter), Mods: ui.ModAlt, Down: true, Char: rune(letter) + 'a' - 'A'})
+	g.frame()
+}
+
+// letter types a letter key alone (the key press; the text is not needed).
+func (g *rig) letter(letter byte) {
+	g.in.PushKey(ui.KeyEvent{Code: ui.KeyCode(letter), Down: true, Char: rune(letter) + 'a' - 'A'})
+	g.frame()
+}
+
+// altTap is Alt pressed and released on its own (ui.Input.AltTap).
+func (g *rig) altTap() {
+	g.in.AltTap = true
+	g.frame()
+}
+
+// focusField clicks the text field and returns its key.
+func (g *rig) focusField() ui.Key {
+	g.click(centre(g.must(ui.RoleTextField, "Name")))
+	return g.c.FocusKey()
+}
+
+// F10 and the Alt tap move the focus to the first title and give it back;
+// Escape gives it back too, and the arrows move along the bar.
+func TestMenuBarF10AndAltTapFocusTheBar(t *testing.T) {
+	for _, how := range []string{"F10", "Alt"} {
+		t.Run(how, func(t *testing.T) {
+			g, _ := newShell(t)
+			field := g.focusField()
+			toggle := func() {
+				if how == "F10" {
+					g.key(ui.KeyF10, 0)
+				} else {
+					g.altTap()
+				}
+				g.frame()
+			}
+			toggle()
+			if g.c.FocusKey() != g.keyOf(ui.RoleMenuItem, "File") {
+				t.Fatal("the first title does not have the focus")
+			}
+			if !g.c.FocusVisible() {
+				t.Error("the focus ring does not show on the title")
+			}
+			toggle()
+			if g.c.FocusKey() != field {
+				t.Fatal("pressed again, the focus did not go back to the field")
+			}
+			toggle()
+			g.key(ui.KeyRight, 0)
+			if g.c.FocusKey() != g.keyOf(ui.RoleMenuItem, "View") {
+				t.Fatal("Right did not move to View")
+			}
+			g.key(ui.KeyEscape, 0)
+			g.frame()
+			if g.c.FocusKey() != field {
+				t.Fatal("Escape on the bar did not give the focus back to the field")
+			}
+		})
+	}
+}
+
+// Alt and a title's mnemonic opens its menu with the first item focused; an
+// item's mnemonic chooses it, the command arrives once and the focus goes
+// back to where it was. The field does not take Alt+F off macOS.
+func TestMenuBarAltMnemonicOpensAndLetterChooses(t *testing.T) {
+	g, v := newShell(t)
+	var field ui.Key
+	if runtime.GOOS != "darwin" {
+		field = g.focusField()
+	} else { // Option+F types a character in a macOS field: the focus is on a button
+		field = g.keyOf(ui.RoleButton, "Delete…")
+		g.c.SetFocus(field)
+		g.frame()
+	}
+	g.altKey('F')
+	g.frames(2)
+	if !g.k.MenuOpen() {
+		t.Fatal("Alt+F did not open the File menu")
+	}
+	if g.c.FocusKey() != g.keyOf(ui.RoleMenuItem, "New") {
+		t.Fatal("the first item does not have the focus")
+	}
+	g.letter('S')
+	g.frames(3)
+	if g.k.MenuOpen() {
+		t.Fatal("S left the menu open")
+	}
+	if !slices.Equal(v.cmds, []menu.ID{3}) {
+		t.Fatalf("S chose %v, want [3] (Save) once", v.cmds)
+	}
+	if g.c.FocusKey() != field {
+		t.Fatal("the focus did not go back to where it was")
+	}
+	if v.field.String() != "" {
+		t.Fatalf("the letters reached the field: %q", v.field.String())
+	}
+}
+
+// With the focus on a title, its mnemonic alone opens it; in a menu a
+// submenu's mnemonic opens the submenu and its item's chooses it; Alt with
+// the letter works in an open menu as well.
+func TestMenuBarMnemonicsOnTheBarAndInSubmenus(t *testing.T) {
+	g, v := newShell(t)
+	g.key(ui.KeyF10, 0)
+	g.frame()
+	g.letter('V')
+	g.frames(2)
+	if _, ok := g.find(ui.RoleMenu, "View"); !ok {
+		t.Fatal("V on the bar did not open View")
+	}
+	g.key(ui.KeyEscape, 0) // back to the title
+	g.frames(2)
+	if g.c.FocusKey() != g.keyOf(ui.RoleMenuItem, "View") {
+		t.Fatal("Escape in the menu did not go back to its title")
+	}
+	g.key(ui.KeyLeft, 0)
+	g.key(ui.KeyDown, 0)
+	g.frames(2)
+	// File: New (N), Open… (O), Open Recent (R: O is taken), Save (S)
+	g.letter('R')
+	g.frames(2)
+	if _, ok := g.find(ui.RoleMenu, "Recent"); !ok {
+		t.Fatal("R did not open Open Recent")
+	}
+	// Recent: Recent One (R), Recent Two (T: R is taken)
+	g.altKey('T')
+	g.frames(3)
+	if !slices.Equal(v.cmds, []menu.ID{7}) {
+		t.Fatalf("Alt+T chose %v, want [7] (Recent Two)", v.cmds)
+	}
+}
+
+// Several items with one letter: the letter moves the focus between them and
+// chooses nothing; an asked-for mnemonic (menu.Command.Mnemonic) wins.
+func TestMenuMnemonicsShared(t *testing.T) {
+	m, err := menu.NewModel(
+		[]menu.Command{
+			{ID: 1, Title: "Paste"}, {ID: 2, Title: "Print"}, {ID: 3, Title: "Exit", Mnemonic: 'x'},
+		},
+		[]menu.Menu{{Title: "File", Items: []menu.Item{
+			{Kind: menu.ItemCommand, Command: 1}, {Kind: menu.ItemCommand, Command: 2}, {Kind: menu.ItemCommand, Command: 3},
+		}}},
+		[]int{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := &shell{}
+	g := newRig(t, 600, 500, v.build)
+	v.m = m
+	g.k.SetMenu(m)
+	g.frames(3)
+	var mns base.Mnemonics
+	for _, s := range []string{"Paste", "Print", "Exit"} {
+		mns.Add(s, 0)
+	}
+	mns.Resolve()
+	if l, _ := mns.At(1); l != 'R' {
+		t.Fatalf("Print's mnemonic is %q, want R (P is Paste's)", l)
+	}
+	g.altKey('F')
+	g.frames(2)
+	g.letter('X')
+	g.frames(3)
+	if !slices.Equal(v.cmds, []menu.ID{3}) {
+		t.Fatalf("X chose %v, want [3] (Exit, its asked-for letter)", v.cmds)
+	}
+}
+
+// The mnemonics are underlined while the keyboard drives the bar, off macOS,
+// and a frame of the open menu allocates nothing.
+func TestMenuBarMnemonicUnderlines(t *testing.T) {
+	g, _ := newShell(t)
+	under := func(role ui.Role, name string) bool {
+		b := g.must(role, name).Bounds
+		for _, q := range g.list.Quads {
+			r := q.Rect
+			if r[3]-r[1] <= 2 && r[2] > r[0] && r[0] >= b[0] && r[2] <= b[2] && r[1] >= (b[1]+b[3])/2 && r[3] <= b[3] {
+				return true
+			}
+		}
+		return false
+	}
+	if under(ui.RoleMenuItem, "File") {
+		t.Fatal("an underline shows before the keyboard reached the bar")
+	}
+	g.altKey('F')
+	g.frames(3)
+	if mac := runtime.GOOS == "darwin"; under(ui.RoleMenuItem, "File") == mac || under(ui.RoleMenuItem, "Save") == mac {
+		t.Fatalf("underlines of File and Save: %v, %v; want %v (macOS shows none)", under(ui.RoleMenuItem, "File"), under(ui.RoleMenuItem, "Save"), !mac)
+	}
+	if n := testing.AllocsPerRun(20, g.frame); n != 0 {
+		t.Fatalf("a frame with the menu open allocates %v times", n)
+	}
+}
+
+// A focused component that takes F10 or Alt+letter keeps it: the bar takes
+// them at the end of the frame, after the components.
+func TestMenuBarKeysGiveWayToTheFocusedComponent(t *testing.T) {
+	g, _ := newShell(t)
+	took := 0
+	build := g.build
+	g.build = func(k *Kit) {
+		build(k)
+		c := k.Context()
+		if c.TakeKey(ui.KeyF10, 0) || c.TakeKey('F', ui.ModAlt) {
+			took++
+		}
+	}
+	g.key(ui.KeyF10, 0)
+	g.altKey('F')
+	g.frames(2)
+	if took != 2 || g.k.MenuOpen() || g.c.FocusKey() == g.keyOf(ui.RoleMenuItem, "File") {
+		t.Fatalf("the component took %d of 2 keys; menu open %v", took, g.k.MenuOpen())
 	}
 }

@@ -6,7 +6,9 @@ package ui
 //
 //  1. The focused text field. At Begin, when the focused box is a text field
 //     that was built in the previous frame, the keys it handles are claimed
-//     for it: every key-down without the primary modifier except Tab
+//     for it: every key-down without the primary modifier except Tab, F10
+//     (with or without Shift: the drawn menu bar's and a context menu's) and,
+//     off macOS, Alt with a letter or digit (a drawn menu bar's mnemonic)
 //     (characters, caret moves, Enter and Escape, which the field reports),
 //     and with it A, C, X, V, Y (not on macOS), Z with or without Shift (undo,
 //     redo), and the primary caret moves and deletes. On macOS a chord with
@@ -67,6 +69,18 @@ func (c *Context) TakeKey(code KeyCode, mods Mods) bool {
 		}
 	}
 	return false
+}
+
+// TakeAltTap reports whether the Alt key was pressed and released on its own
+// since the last frame (Input.AltTap) and nobody took it yet this frame. The
+// drawn menu bar takes it to move the keyboard to its first title, as Windows
+// does.
+func (c *Context) TakeAltTap() bool {
+	if !c.in.AltTap || c.altTaken {
+		return false
+	}
+	c.altTaken = true
+	return true
 }
 
 // TextFieldFocused reports whether the focused box is a text field that
@@ -140,7 +154,15 @@ func fieldWants(e *KeyEvent) bool {
 		return false
 	}
 	if !editMods(e.Mods) {
-		return e.Code != KeyTab
+		switch {
+		case e.Code == KeyTab:
+			return false
+		case e.Code == KeyF10:
+			return false // the menu bar's key (and Shift+F10 a context menu's), as in Windows
+		case !macKeys && e.Mods&^ModShift == ModAlt && isAlnum(e.Code):
+			return false // Alt+letter types nothing in a field; it opens the drawn menu bar's menu
+		}
+		return true
 	}
 	switch e.Code {
 	case 'A', 'C', 'X', 'V':
@@ -157,6 +179,9 @@ func fieldWants(e *KeyEvent) bool {
 	}
 	return false
 }
+
+// isAlnum reports whether code is a letter or a digit key.
+func isAlnum(code KeyCode) bool { return code >= 'A' && code <= 'Z' || code >= '0' && code <= '9' }
 
 // FieldClaims reports whether the focused text field will claim key event e
 // when it arrives in the next frame, as that frame's Begin decides it (see

@@ -43,6 +43,9 @@ const (
 	wmImeSetContext = 0x0281
 	wmSysKeyDown    = 0x0104
 	wmSysKeyUp      = 0x0105
+	wmSysChar       = 0x0106
+	wmSysCommand    = 0x0112
+	scKeyMenu       = 0xF100
 	wmMouseMove     = 0x0200
 	wmLButtonDown   = 0x0201
 	wmLButtonUp     = 0x0202
@@ -795,35 +798,25 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return defProc(hwnd, m, wp, lp)
 
 	case wmKeyDown, wmKeyUp, wmSysKeyDown, wmSysKeyUp:
-		var f Flags
-		if m == wmKeyDown || m == wmSysKeyDown {
-			f = FlagDown
-			if lp&(1<<30) != 0 {
-				f |= FlagRepeat
-			}
-		}
-		code, k, ok := winKey(wp, lp)
-		if !ok {
-			return 0 // processed by an input method (VK_PROCESSKEY)
-		}
-		cur := currentMods()
-		if vkIsModifier(wp) { // a modifier on its own is EvModifiers, once per change
-			if cur != w.lastMods {
-				w.lastMods = cur
-				w.q.push(Event{Kind: EvModifiers, Mods: cur, Code: code, Time: Now()})
-			}
-		} else {
-			var mapped uint32
-			if winNeedsChar(wp) {
-				mapped = uint32(win32.Call(pMapVirtualKeyW, wp, 2 /* MAPVK_VK_TO_CHAR */))
-			}
-			w.q.push(Event{Kind: EvKey, Key: k, Char: winChar(wp, mapped), Code: code, Mods: cur, Flags: f, Time: Now()})
-			w.lastMods = cur // (EvModifiers reports changes against what the app last saw)
-		}
+		w.keyMessage(m, wp, lp)
 		if m == wmSysKeyDown || m == wmSysKeyUp {
 			return defProc(hwnd, m, wp, lp) // keeps Alt+F4 and Alt+Space working
 		}
 		return 0
+	case wmSysChar:
+		if wp == ' ' {
+			return defProc(hwnd, m, wp, lp) // Alt+Space: the system menu
+		}
+		return 0 // Alt and a letter is the app's (a drawn menu bar's mnemonic); no beep
+	case wmSysCommand:
+		if wp&0xFFF0 == scKeyMenu && lp != ' ' {
+			// F10 or Alt alone (lp 0) or Alt and a letter: Windows would
+			// enter the menu loop of a menu bar the window does not have
+			// (the system menu's, invisibly, which eats the keys that
+			// follow). The app has them as keys and an Alt tap instead.
+			return 0
+		}
+		return defProc(hwnd, m, wp, lp)
 
 	case wmChar:
 		w.onChar(uint16(wp))
@@ -989,4 +982,36 @@ func (w *Window) onChar(u uint16) {
 		n = 4
 	}
 	w.q.pushText(w.utf8[:n], Now())
+}
+
+// keyMessage queues the events of a key message (WM_KEYDOWN, WM_KEYUP,
+// WM_SYSKEYDOWN, WM_SYSKEYUP) sent to the window, or to a hosted control that
+// passes the system keys on (F10, Alt and Alt chords: the drawn menu bar's).
+func (w *Window) keyMessage(m, wp, lp uintptr) {
+	var f Flags
+	if m == wmKeyDown || m == wmSysKeyDown {
+		f = FlagDown
+		if lp&(1<<30) != 0 {
+			f |= FlagRepeat
+		}
+	}
+	code, k, ok := winKey(wp, lp)
+	if !ok {
+		return // processed by an input method (VK_PROCESSKEY)
+	}
+	cur := currentMods()
+	if vkIsModifier(wp) { // a modifier on its own is EvModifiers, once per change
+		if cur != w.lastMods {
+			w.lastMods = cur
+			w.q.push(Event{Kind: EvModifiers, Mods: cur, Code: code, Time: Now()})
+		}
+	} else {
+		var mapped uint32
+		if winNeedsChar(wp) {
+			mapped = uint32(win32.Call(pMapVirtualKeyW, wp, 2 /* MAPVK_VK_TO_CHAR */))
+		}
+		w.q.push(Event{Kind: EvKey, Key: k, Char: winChar(wp, mapped), Code: code, Mods: cur, Flags: f, Time: Now()})
+		w.lastMods = cur // (EvModifiers reports changes against what the app last saw)
+	}
+
 }

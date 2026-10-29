@@ -46,7 +46,11 @@ func OnContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (ite
 // are the ones build made on the click (base.Kit.MenuItems), shown until it
 // closes, so a submenu's slice must stay unchanged while it is open. It
 // shows check marks, key equivalents (as hints), disabled and destructive
-// items, separators and submenus; symbols are not drawn. A choice is reported
+// items, separators and submenus; symbols are not drawn. Each item has a
+// mnemonic (base.Mnemonics): its Key when it has no modifiers (Key 'N' shows
+// "N" and N chooses the item), else a free letter of its title; typing it, with
+// or without Alt, chooses the item while the menu is open, and it is
+// underlined when the keyboard opened the menu (off macOS). A choice is reported
 // in the frame it is made; a frame that does not call ContextMenu for the
 // open menu's component closes it.
 func ContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item int, ok bool) {
@@ -115,6 +119,11 @@ type contextMenu struct {
 	item   int  // the chosen item's ID
 }
 
+// labelBuf holds a drawn menu's key equivalent while it is measured and
+// drawn (main thread). A local array escaped to the heap through the text
+// system's interface, an allocation in every frame of an open menu.
+var labelBuf [48]byte
+
 // shortcutLabel is the key equivalent of it as text ("" for none), in buf.
 func shortcutLabel(buf []byte, it *ui.MenuItem) []byte {
 	if it.Key == 0 {
@@ -145,7 +154,7 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 	checkW, chevW = theme.Snap(checkW), theme.Snap(chevW)
 
 	// the widths: the widest title and the widest key equivalent
-	var buf [48]byte
+	buf := &labelBuf
 	var lw, sw float32
 	hasSub := false
 	for i := range items {
@@ -167,6 +176,26 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 	}
 	w := max(theme.Snap(rowW+2*pad), pt(sc, rc.MinW))
 	rowW = w - 2*pad
+
+	// the mnemonics: an item's Key without modifiers, else a letter of its title
+	var mns base.Mnemonics
+	for i := range items {
+		it := &items[i]
+		var want rune
+		if it.Key < 0x80 && it.Mods == 0 {
+			want = rune(it.Key)
+		}
+		if it.Separator {
+			mns.Add("", 0)
+		} else {
+			mns.Add(it.Title, want)
+		}
+	}
+	mns.Resolve()
+	if !k.Disabled() && pop.Hi[level] < 0 { // the innermost open menu takes its letters
+		m.letter(level, items, &mns, okey)
+	}
+	show := k.ShowMnemonics()
 
 	// the panel: a menu's raised surface
 	el := &r.Elevations[theme.ElevRaised]
@@ -273,6 +302,9 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 		c.NextFont(font)
 		c.NextTextColor(fg)
 		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(key, 2), base.StrBytes(it.Title))
+		if _, off := mns.At(i); show && off >= 0 && !disabled {
+			k.MnemonicUnderline(ui.KeyN(key, 7), font, it.Title, off, rowPad+checkW+gap, 0, rowH, fg)
+		}
 		if lab := shortcutLabel(buf[:], it); len(lab) > 0 {
 			c.NextSize(ui.Px(sw+2*gap), ui.Px(rowH))
 			c.NextFont(font)
@@ -352,6 +384,48 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 	c.EndOverlay()
 	if level == 0 && m.chosen >= 0 {
 		m.close()
+	}
+}
+
+// letter chooses the item of the open menu (items at level, overlay key okey)
+// whose mnemonic was typed this frame, with or without Alt: an item is
+// chosen, a submenu opens; when several items have the letter, the focus
+// moves to the next of them instead.
+func (m *contextMenu) letter(level int, items []ui.MenuItem, mns *base.Mnemonics, okey ui.Key) {
+	k := m.k
+	c := k.Context()
+	letter, at := base.TypedMnemonic(c, 0)
+	if at < 0 {
+		letter, at = base.TypedMnemonic(c, ui.ModAlt)
+	}
+	if at < 0 {
+		return
+	}
+	from := -1
+	for i := range items {
+		if c.FocusKey() == ui.KeyN(okey, uint64(i+2)) {
+			from = i
+		}
+	}
+	i, n := mns.Find(letter, from)
+	if i < 0 {
+		return
+	}
+	c.ClaimKey(at)
+	it := &items[i]
+	if it.Disabled {
+		return
+	}
+	key := ui.KeyN(okey, uint64(i+2))
+	c.SetFocus(key)
+	c.SetFocusVisible(true)
+	switch {
+	case n > 1:
+		c.RequestFrame()
+	case it.Sub != nil:
+		k.OpenSubmenu(level, i, key)
+	case m.chosen < 0:
+		m.chosen, m.item = level, it.ID
 	}
 }
 

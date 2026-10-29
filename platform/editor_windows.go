@@ -1219,6 +1219,14 @@ func editorWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		if m == wmKeyDown && e.key(wp) {
 			return 0
 		}
+		if m == wmSysKeyDown { // F10, Alt and Alt chords are the window's too (a drawn menu bar's)
+			e.w.keyMessage(m, wp, lp)
+		}
+		return e.forward(hwnd, m, wp, lp)
+	case wmSysChar:
+		if wp != ' ' {
+			return 0 // the window's mnemonic (keyMessage); no beep
+		}
 		return e.forward(hwnd, m, wp, lp)
 	case wmChar:
 		if e.nEat > 0 && uint16(wp) == e.eat[0] {
@@ -1251,6 +1259,9 @@ func editorWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		e.endComposition()
 		return 0
 	case wmImeNotify, wmImeRequest, wmImeChar, wmInputLangChange, wmKeyUp, wmSysKeyUp:
+		if m == wmSysKeyUp || m == wmKeyUp && vkIsModifier(wp) { // the Alt tap's release (keyMessage)
+			e.w.keyMessage(m, wp, lp)
+		}
 		return e.forward(hwnd, m, wp, lp)
 	case wmMouseWheel, wmMouseHWheel:
 		if e.send(uint32(m), wp, lp) == 0 && e.lres == 0 && int32(e.maxLines)*e.lineH < e.contentH {

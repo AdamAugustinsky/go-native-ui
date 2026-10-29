@@ -264,3 +264,52 @@ func TestKeysAndEditsKeepTheirOrderThroughTheTranslator(t *testing.T) {
 		t.Errorf("edits after %d and %d keys (%d edits, %d keys), want after 0 and 2", tr.in.EditAfter[0], tr.in.EditAfter[1], tr.in.NEdit, tr.in.NKeys)
 	}
 }
+
+// TestAltTap: Alt pressed and released on its own is ui.Input.AltTap for one
+// frame; another key, a click or the wheel in between, Alt with another
+// modifier (AltGr is Ctrl+Alt on Windows), and the Alt a window finds held
+// when it gains the focus (Alt+Tab: told without a key code) are not. A
+// key event carries the character it types (ui.KeyEvent.Char).
+func TestAltTap(t *testing.T) {
+	alt := func(down bool) *platform.Event {
+		return ev(platform.EvModifiers, func(e *platform.Event) {
+			e.Code = 0x38 // the key's code
+			if down {
+				e.Mods = platform.ModAlt
+			}
+		})
+	}
+	sync := func(m platform.Mods) *platform.Event {
+		return ev(platform.EvModifiers, func(e *platform.Event) { e.Mods = m })
+	}
+	cases := []struct {
+		name string
+		evs  []*platform.Event
+		tap  bool
+	}{
+		{"Alt alone", []*platform.Event{alt(true), alt(false)}, true},
+		{"Alt+F", []*platform.Event{alt(true), keyEv(platform.KeyA+'F'-'A', 'f', platform.ModAlt), alt(false)}, false},
+		{"Alt and a click", []*platform.Event{alt(true), press(1, 1, 0, platform.ButtonLeft), alt(false)}, false},
+		{"Alt and the wheel", []*platform.Event{alt(true), ev(platform.EvScroll, func(e *platform.Event) { e.DY = 1; e.Mods = platform.ModAlt }), alt(false)}, false},
+		{"Ctrl+Alt", []*platform.Event{sync(platform.ModCtrl), sync(platform.ModCtrl | platform.ModAlt), sync(platform.ModCtrl), sync(0)}, false},
+		{"Alt held at focus", []*platform.Event{ev(platform.EvFocus, func(e *platform.Event) { e.Flags = platform.FlagDown }), sync(platform.ModAlt), alt(false)}, false},
+	}
+	for _, c := range cases {
+		tr := newTranslator()
+		for _, e := range c.evs {
+			tr.event(e, nil)
+		}
+		if tr.in.AltTap != c.tap {
+			t.Errorf("%s: AltTap %v, want %v", c.name, tr.in.AltTap, c.tap)
+		}
+		tr.endFrame()
+		if tr.in.AltTap {
+			t.Errorf("%s: the tap outlived its frame", c.name)
+		}
+	}
+	tr := newTranslator()
+	tr.event(keyEv(platform.KeyA+'W'-'A', 'z', platform.ModAlt), nil)
+	if k := tr.in.Keys[0]; k.Char != 'z' || k.Code != 'W' {
+		t.Errorf("AZERTY Alt+Z: code %q char %q, want W and z", rune(k.Code), k.Char)
+	}
+}

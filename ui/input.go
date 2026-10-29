@@ -132,6 +132,13 @@ type KeyEvent struct {
 	Down bool
 	// Repeat is true for the auto-repeat of a held key.
 	Repeat bool
+	// Char is the character the key types on the user's layout, as
+	// platform.Event.Char gives it (printable ASCII, lower case, never the
+	// shifted one), whatever the modifiers; 0 when the key types none or
+	// the platform does not say. The drawn menus match their mnemonics by
+	// it (Alt+F where the user's layout has F), since Code is the physical
+	// key without Ctrl or Super.
+	Char rune
 }
 
 // EditAction is an edit command for the focused text field that does not come
@@ -271,6 +278,12 @@ type Input struct {
 	// is by now, and Context.Input().Text no longer contains it (see
 	// Context.Begin); the platform layer sets it.
 	CommitOff, CommitLen int
+	// AltTap is set for the frame after the Alt key was pressed and
+	// released on its own: no other key, button or wheel in between, and not
+	// the Alt held while the window came to the front (Alt+Tab). It is the
+	// Windows gesture that moves the keyboard to the menu bar; the drawn menu
+	// bar takes it (Context.TakeAltTap). The app's translator sets it.
+	AltTap bool
 	// Focused is true while the window has keyboard focus.
 	Focused bool
 	// FocusGained is true for the frame in which the window gained keyboard
@@ -602,7 +615,7 @@ func (in *Input) ClearFrame() {
 	clear(in.Paste)
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
-	in.FocusGained = false
+	in.FocusGained, in.AltTap = false, false
 	in.NEdit, in.NCommands, in.NActions, in.NGestures = 0, 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
 	in.HasMenuChoice, in.MenuOutcome = false, MenuPending
