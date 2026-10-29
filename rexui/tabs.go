@@ -329,6 +329,13 @@ func (b *TabBar) PillRect() [4]float32 { return b.pillRect }
 // Dragging reports whether a tab is being dragged.
 func (b *TabBar) Dragging() bool { return b.dragging }
 
+// Held is the id of the tab the left button went down on and still holds
+// (0 for none), as of the last Update: an app that takes a tab dragged out
+// of the strip (onto its content, to split it there) follows the pointer
+// while it is held, and acts on the release, when Held is still the tab's
+// before that frame's Update.
+func (b *TabBar) Held() uint64 { return b.press }
+
 // Update applies the frame's input to the bar before anything that depends
 // on the choice is built: presses, the close buttons, middle clicks, drags,
 // the scroll and the keys. sel is the chosen tab. Call it once per frame
