@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"gonativeui/internal/com"
+	"gonativeui/internal/testlock"
 	"gonativeui/internal/win32"
 )
 
@@ -175,18 +176,43 @@ func TestEditorEnterPolicies(t *testing.T) {
 	}
 }
 
+// The completion lasts while the editor has the focus: a window of another
+// test process that takes the foreground ends it (WM_KILLFOCUS), and the keys
+// that follow are plain keys ("completion commands []", 40805350430 and
+// 40816023392 on Windows amd64). The test holds the activation as the other
+// packages' tests that take the foreground do, and tries again, up to three
+// times, only when the editor did lose the focus meanwhile.
 func TestEditorCompletionAndHostCommands(t *testing.T) {
+	testlock.Hold(t, "activation")
 	w, e := newTestEditor(t, EditorOptions{})
 	typeText(e, "@al")
 	pumpSignals(w, e, time.Second, EditorChanged)
-	e.SetCompletionActive(true)
-	for _, vk := range []uintptr{vkDown, vkUp, vkTab, vkReturn, vkEscape} {
-		pressKey(e, vk)
-	}
-	pumpSignals(w, e, 500*time.Millisecond, 0)
 	var cmds []EditorCommand
-	for c := e.TakeCommand(); c != CmdNone; c = e.TakeCommand() {
-		cmds = append(cmds, c)
+	for try := 1; ; try++ {
+		w.Activate()
+		e.Focus()
+		settle(w)
+		e.TakeSignals()
+		e.SetCompletionActive(true)
+		for _, vk := range []uintptr{vkDown, vkUp, vkTab, vkReturn, vkEscape} {
+			pressKey(e, vk)
+		}
+		cmds = cmds[:0]
+		var got EditorSignals
+		for end := time.Now().Add(5 * time.Second); len(cmds) < 5 && time.Now().Before(end); {
+			Pump(int64(5 * time.Millisecond))
+			w.Events()
+			got |= e.TakeSignals()
+			for c := e.TakeCommand(); c != CmdNone; c = e.TakeCommand() {
+				cmds = append(cmds, c)
+			}
+		}
+		lost := got&EditorCancelled != 0 // what WM_KILLFOCUS reports for a completion it ends
+		if !lost || try == 3 {
+			break
+		}
+		t.Logf("try %d: the editor lost the focus to another window (commands %v); again", try, cmds)
+		e.SetCompletionActive(false)
 	}
 	if want := []EditorCommand{CmdDown, CmdUp, CmdTab, CmdAccept, CmdCancel}; len(cmds) != len(want) || cmds[0] != want[0] || cmds[1] != want[1] || cmds[2] != want[2] || cmds[3] != want[3] || cmds[4] != want[4] {
 		t.Errorf("completion commands %v, want %v", cmds, want)
@@ -380,19 +406,30 @@ func TestEditorDrawsColourEmoji(t *testing.T) {
 	w.Show()
 	e.SetText([]byte("😀"))
 	settle(w)
-	cw, ch, _ := w.Size()
-	px := clientPixels(t, w.hwnd, cw, ch)
+	// What DWM composes of the swap chain comes some time after the present:
+	// on a loaded runner more than settle's 300 ms (yellow 0 after 2 frames
+	// presented, 40806585827 on Windows arm64). The window is read again,
+	// pumping, until the emoji shows or 10 s have passed.
 	yellow := 0
-	for y := int32(20); y < min(220, ch); y++ {
-		for x := int32(20); x < min(380, cw); x++ {
-			c := px[y*cw+x]
-			r, g, b := c>>16&0xFF, c>>8&0xFF, c&0xFF
-			if r > 200 && g > 150 && b < 100 {
-				yellow++
+	start := time.Now()
+	for {
+		cw, ch, _ := w.Size()
+		px := clientPixels(t, w.hwnd, cw, ch)
+		for y := int32(20); y < min(220, ch); y++ {
+			for x := int32(20); x < min(380, cw); x++ {
+				c := px[y*cw+x]
+				r, g, b := c>>16&0xFF, c>>8&0xFF, c&0xFF
+				if r > 200 && g > 150 && b < 100 {
+					yellow++
+				}
 			}
 		}
+		if yellow > 0 || time.Since(start) > 10*time.Second {
+			break
+		}
+		pumpEvents([]*Window{w}, 100*time.Millisecond, func([][]Event) bool { return false })
 	}
-	t.Logf("yellow pixels: %d (frames presented %d)", yellow, e.surf.frames)
+	t.Logf("yellow pixels: %d after %v (frames presented %d)", yellow, time.Since(start).Round(time.Millisecond), e.surf.frames)
 	if e.surf.frames == 0 {
 		t.Error("the editor presented no frame")
 	}

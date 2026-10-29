@@ -304,15 +304,26 @@ func (s *sink) results() []Result {
 }
 
 // resultOf is the delivered result with ticket tk.
+//
+// It waits for it (dispatching, up to 10 s): the service delivers a post's
+// result after the system has the note, so a test that waited for the note
+// may look before the result is there (TestPostWithTableFullHasNoActions,
+// "no result for ticket", p8-webview2 40816023392 on Windows amd64).
 func (s *sink) resultOf(t *testing.T, tk Ticket) Result {
 	t.Helper()
-	for _, r := range s.results() {
-		if r.Ticket == tk {
-			return r
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		for _, r := range s.results() {
+			if r.Ticket == tk {
+				return r
+			}
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no result for ticket %d in 10 s (results %+v)", tk, s.results())
+		}
+		drain()
+		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("no result for ticket %d (results %+v)", tk, s.results())
-	return Result{}
 }
 
 // waitResult waits for the result with ticket tk.
