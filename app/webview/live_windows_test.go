@@ -230,10 +230,18 @@ func TestViewMatrix(t *testing.T) {
 	// ChildWindows (WebView2 presents with DirectComposition, not GDI)
 	h.navigate(v, p.url("/green"), "Green")
 	var px uint32
-	h.wait("the page on screen", 10*time.Second, func() bool {
-		px = webview.ScreenPixel(v)
-		return near(px, 0x00c000)
-	})
+	var covered string
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		h.Do(func(*app.App) { px, covered = webview.ScreenPixel(v) })
+		if near(px, 0x00c000) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the page on screen: %06x at the view's centre after 10s (want 00c000); covering window: %q", px, covered)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	t.Logf("hosting: the page's colour on screen at the view's centre is %06x (want 00c000)", px)
 
 	// hidden (its host not built): suspended within 1 s; shown: resumed
