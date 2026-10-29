@@ -41,6 +41,6 @@ func TestClickedIgnoresOtherEvents(t *testing.T) {
 func TestBalloonContract(t *testing.T) {
 	var it tray.Item
 	if err := it.Balloon("Recording saved", "Uploading…"); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("Balloon = %v, want unsupported (macOS has none; Windows until W5)", err)
+		t.Fatalf("Balloon = %v, want unsupported (macOS has none; on Windows an item never added has no icon)", err)
 	}
 }
