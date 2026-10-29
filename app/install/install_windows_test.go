@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -19,7 +20,33 @@ import (
 
 	"gonativeui/internal/win32"
 	"gonativeui/internal/winreg"
+	"gonativeui/internal/winres"
 )
+
+// libName is the stand-in for a nativeLibs DLL that the test app declares in
+// its version resource (winres.FilesKey), as gnui package writes it.
+const libName = "testinst-lib.dll"
+
+// buildTestApp builds internal/testinst at exe with a version resource that
+// declares libName as a file beside it.
+func buildTestApp(t *testing.T, exe string) {
+	t.Helper()
+	v := winres.Version{File: [4]uint16{1, 0, 0, 0}, Product: [4]uint16{1, 0, 0, 0},
+		Strings: []winres.KV{{Key: winres.FilesKey, Value: libName}}}
+	obj, err := winres.COFF(winres.MachineFor(runtime.GOARCH), []winres.Resource{
+		{Type: winres.TypeVersion, ID: 1, Lang: winres.LangEnUS, Data: v.Encode()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	syso := filepath.Join("internal", "testinst", "zz_gnui_rsrc_windows_"+runtime.GOARCH+".syso")
+	if err := os.WriteFile(syso, obj, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(syso)
+	if out, err := exec.Command("go", "build", "-o", exe, "./internal/testinst").CombinedOutput(); err != nil {
+		t.Fatalf("building the test app: %v\n%s", err, out)
+	}
+}
 
 type report struct {
 	Pid       int      `json:"pid"`
@@ -82,19 +109,19 @@ func shellOpen(url string) error {
 }
 
 // TestInstallRoundTrip runs a built app from a download folder: it installs
-// itself under a temporary %LOCALAPPDATA% and relaunches from there. The
-// test reads back the installed file, the shortcut and its AUMID, the
-// uninstall entry, the scheme's command and the AUMID key; opens a link of
-// the scheme, which starts the installed copy; then runs the uninstall
-// entry's command and checks that everything is gone.
+// itself under a temporary %LOCALAPPDATA% and relaunches from there. The app
+// declares a DLL beside it (a nativeLibs file): without the DLL the install
+// is refused; with it, it is installed beside the executable. The test reads
+// back the installed files, the shortcut and its AUMID, the uninstall entry,
+// the scheme's command and the AUMID key; opens a link of the scheme, which
+// starts the installed copy; then runs the uninstall entry's command and
+// checks that everything is gone, the DLL with it.
 func TestInstallRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	download := filepath.Join(root, "download")
 	os.MkdirAll(download, 0o755)
 	exe := filepath.Join(download, "testinst.exe")
-	if out, err := exec.Command("go", "build", "-o", exe, "./internal/testinst").CombinedOutput(); err != nil {
-		t.Fatalf("building the test app: %v\n%s", err, out)
-	}
+	buildTestApp(t, exe)
 
 	var rnd [4]byte
 	rand.Read(rnd[:])
@@ -118,6 +145,28 @@ func TestInstallRoundTrip(t *testing.T) {
 		winreg.DeleteTree(uninstallRoot + id)
 	})
 
+	// Without the DLL it declares, the app does not install.
+	if out, err := exec.Command(exe).CombinedOutput(); err != nil {
+		t.Fatalf("the downloaded app: %v\n%s", err, out)
+	}
+	m, _ := filepath.Glob(filepath.Join(reports, "*-installed.json"))
+	var refused report
+	if len(m) == 1 {
+		b, _ := os.ReadFile(m[0])
+		json.Unmarshal(b, &refused)
+		os.Remove(m[0])
+	}
+	if !strings.Contains(refused.Err, libName) {
+		t.Errorf("an install without %s: %+v", libName, refused)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the refused install made %s: %v", dir, err)
+	}
+	lib := []byte("a stand-in DLL")
+	if err := os.WriteFile(filepath.Join(download, libName), lib, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	if out, err := exec.Command(exe).CombinedOutput(); err != nil {
 		t.Fatalf("the downloaded app: %v\n%s", err, out)
 	}
@@ -132,6 +181,9 @@ func TestInstallRoundTrip(t *testing.T) {
 
 	if _, err := os.Stat(installed); err != nil {
 		t.Fatalf("the installed executable: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, libName)); err != nil || !bytes.Equal(b, lib) {
+		t.Errorf("the installed %s: %q, %v", libName, b, err)
 	}
 	b, err := os.ReadFile(lnk)
 	if err != nil {

@@ -20,7 +20,11 @@
 // administrator rights, no UAC prompt.
 //
 // What Install does on Windows:
-//   - copies the running executable into the install folder;
+//   - copies the running executable into the install folder, with the files
+//     its version resource declares beside it (the DLLs of gnui.json's
+//     nativeLibs and their licences, winres.FilesKey), which must be beside
+//     the running one (the unpacked zip of gnui package): Install refuses
+//     without them;
 //   - writes the Start-menu shortcut (IShellLinkW, with System.AppUserModel.ID
 //     set to Options.ID through IPropertyStore), so toasts carry the app's
 //     name and icon (app/notify on Windows, D71);
