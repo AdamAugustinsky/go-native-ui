@@ -377,9 +377,55 @@ jobs:
           if-no-files-found: ignore
 
 
+  libghostty-windows:
+    # The Windows DLLs of libghostty-vt (D74), cross-built by Zig on Linux
+    # (as tools/libghostty does from a Mac) and cached like the macOS one.
+    # The Windows jobs put them in .cache/libghostty-vt, where term's tests,
+    # the terminal's and `gnui package`'s nativeLibs find them.
+    name: libghostty-vt for Windows (Zig cross-build)
+    if: inputs.only == '' || inputs.only == 'windows'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: libghostty-vt cache (artifacts are built, never committed)
+        uses: actions/cache@v4
+        with:
+          path: .cache/libghostty-vt
+          key: libghostty-vt-${{ hashFiles('internal/ghosttyvt/ghosttyvt.go', 'tools/libghostty/*.go') }}-windows
+      - name: libghostty-vt (Zig 0.17.0 and Ghostty at the pinned commit)
+        run: |
+          if ! go run ./tools/libghostty -check -targets windows/amd64,windows/arm64; then
+            commit=$(go run ./tools/libghostty -print-commit)
+            curl -sSfL -o "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+            echo "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+            tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            git init -q "$RUNNER_TEMP/ghostty"
+            git -C "$RUNNER_TEMP/ghostty" fetch -q --depth 1 https://github.com/ghostty-org/ghostty "$commit"
+            git -C "$RUNNER_TEMP/ghostty" checkout -q FETCH_HEAD
+            # deps.files.ghostty.org has failed mid-download (the macOS job's note)
+            for try in 1 2 3; do
+              go run ./tools/libghostty -src "$RUNNER_TEMP/ghostty" -zig "$RUNNER_TEMP/zig-x86_64-linux-0.17.0/zig" -targets windows/amd64,windows/arm64 && break
+              [ "$try" = 3 ] && exit 1
+              echo "::warning::libghostty build failed (try $try of 3), trying again"
+              sleep 20
+            done
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libghostty-vt-windows
+          path: .cache/libghostty-vt
+          retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
+
   windows:
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
     if: inputs.only == '' || inputs.only == 'windows'
+    needs: libghostty-windows
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45 # W1 added two two-window benches
     strategy:
@@ -400,6 +446,14 @@ jobs:
         # cmd/gnui's tests build for darwin, which needs modules (purego) that no
         # test of this OS does; those tests read the module cache, never the network.
         run: go mod download
+      - uses: actions/download-artifact@v4
+        with:
+          name: libghostty-vt-windows
+          path: .cache/libghostty-vt
+      - name: libghostty-vt (the DLLs the libghostty-windows job built)
+        run: |
+          go run ./tools/libghostty -check -targets windows/${{ matrix.arch }}
+          echo "GNUI_REQUIRE_LIBGHOSTTY=1" >> "$GITHUB_ENV"
       # windows-11-arm starts with shell surfaces over the desktop (a
       # full-screen "Microsoft account" prompt, then Start and Search) that
       # cover our windows and take the foreground (docs/PHASE8-PLAN.md, W4's

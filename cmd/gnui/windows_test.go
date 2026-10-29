@@ -46,6 +46,25 @@ func fakeSign(path string) error {
 	return os.WriteFile(path, b, 0o755)
 }
 
+// standInDLL is the smallest PE32+ file our reader and the stand-in signer
+// take, for machine: what a nativeLibs DLL looks like to gnui package, which
+// copies, signs and zips it and checks its machine type.
+func standInDLL(machine uint16) []byte {
+	le := binary.LittleEndian
+	b := make([]byte, 64+24+240)
+	b[0], b[1] = 'M', 'Z'
+	le.PutUint32(b[0x3C:], 64)
+	copy(b[64:], "PE\x00\x00")
+	le.PutUint16(b[68:], machine)
+	le.PutUint16(b[64+20:], 240)    // SizeOfOptionalHeader
+	le.PutUint16(b[64+22:], 0x2022) // executable image, large addresses, DLL
+	opt := b[64+24:]
+	le.PutUint16(opt[0:], 0x20B)
+	le.PutUint16(opt[68:], 2) // GUI subsystem
+	le.PutUint32(opt[108:], 16)
+	return b
+}
+
 func readPE(t *testing.T, path string) *winres.File {
 	t.Helper()
 	f, err := os.Open(path)
@@ -104,11 +123,50 @@ func TestSplitCommand(t *testing.T) {
 	}
 }
 
+// winprobeWithLibs writes a gnui.json for the probe that adds a nativeLibs
+// directory of stand-in DLLs, one per Windows architecture, and a LICENSE;
+// it returns the config's path. The config sits beside the probe's (its
+// main package is the folder), and is removed after the test.
+func winprobeWithLibs(t *testing.T) string {
+	t.Helper()
+	libs := t.TempDir()
+	for arch, m := range map[string]uint16{"amd64": winres.MachineAMD64, "arm64": winres.MachineARM64} {
+		os.MkdirAll(filepath.Join(libs, "windows-"+arch), 0o755)
+		if err := os.WriteFile(filepath.Join(libs, "windows-"+arch, "probe-lib.dll"), standInDLL(m), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(libs, "LICENSE"), []byte("the stand-in library's licence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile("testdata/winprobe/gnui.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg["nativeLibs"] = []string{libs}
+	b, _ = json.Marshal(cfg)
+	f, err := os.CreateTemp("testdata/winprobe", "gnui-libs-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(f.Name()) })
+	f.Write(b)
+	f.Close()
+	return f.Name()
+}
+
 // TestPackageWindows builds the probe for both Windows architectures from
-// whatever OS runs the test, signed by the stand-in tool, and reads the
-// resources back from the files with our PE reader. On Windows it also runs
-// the build for the runner's architecture, which reports what the manifest
-// did to the process and what FindResourceW finds.
+// whatever OS runs the test, with a nativeLibs directory of stand-in DLLs,
+// signed by the stand-in tool, and reads the resources back from the files
+// with our PE reader; the DLL and its licence are beside the executable and
+// in the zip, declared in the version resource, and the DLL is signed too.
+// On Windows it also runs the build for the runner's architecture, which
+// reports what the manifest did to the process and what FindResourceW
+// finds.
 func TestPackageWindows(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds two executables")
@@ -119,8 +177,9 @@ func TestPackageWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(fakeSignEnv, "1")
+	cfg := winprobeWithLibs(t)
 	var stdout, stderr bytes.Buffer
-	args := []string{"package", "-c", "testdata/winprobe/gnui.json", "-o", out, "-target", "windows",
+	args := []string{"package", "-c", cfg, "-o", out, "-target", "windows",
 		"-win-sign", `"` + exe + `" {file}`}
 	if code := run(args, &stdout, &stderr); code != 0 {
 		t.Fatalf("gnui package exited %d:\n%s\n%s", code, stdout.String(), stderr.String())
@@ -146,6 +205,15 @@ func TestPackageWindows(t *testing.T) {
 			v.String("OriginalFilename") != "WinProbe.exe" || v.String("AppUserModelID") != "dev.gonativeui.test.winprobe" || v.String("ProductName") != "Win Probe" {
 			t.Errorf("%s: version %+v", arch, v)
 		}
+		if got := v.String(winres.FilesKey); got != "probe-lib.dll|probe-lib.LICENSE.txt" {
+			t.Errorf("%s: %s = %q", arch, winres.FilesKey, got)
+		}
+		if lib := readPE(t, filepath.Join(out, "windows-"+arch, "probe-lib.dll")); lib.Machine != machine || !lib.Signed {
+			t.Errorf("%s: the DLL beside the executable: machine %#x signed %v", arch, lib.Machine, lib.Signed)
+		}
+		if b, err := os.ReadFile(filepath.Join(out, "windows-"+arch, "probe-lib.LICENSE.txt")); err != nil || !bytes.Contains(b, []byte("licence")) {
+			t.Errorf("%s: the licence beside the executable: %q, %v", arch, b, err)
+		}
 		mr, ok := winres.Find(pf.Resources, winres.TypeManifest, 1)
 		if !ok || !bytes.Contains(mr.Data, []byte("PerMonitorV2")) || !bytes.Contains(mr.Data, []byte(`level="asInvoker"`)) {
 			t.Errorf("%s: manifest %q", arch, mr.Data)
@@ -170,10 +238,25 @@ func TestPackageWindows(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(zr.File) != 1 || zr.File[0].Name != "WinProbe.exe" {
-			t.Errorf("%s: the zip holds %v", arch, zr.File)
+		var names []string
+		for _, f := range zr.File {
+			names = append(names, f.Name)
+		}
+		if strings.Join(names, " ") != "WinProbe.exe probe-lib.dll probe-lib.LICENSE.txt" {
+			t.Errorf("%s: the zip holds %q", arch, names)
 		}
 		zr.Close()
+	}
+
+	// A DLL of the other architecture is refused.
+	var c struct{ NativeLibs []string }
+	b, _ := os.ReadFile(cfg)
+	json.Unmarshal(b, &c)
+	os.WriteFile(filepath.Join(c.NativeLibs[0], "windows-arm64", "probe-lib.dll"), standInDLL(winres.MachineAMD64), 0o644)
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"package", "-c", cfg, "-o", t.TempDir(), "-target", "windows/arm64", "-win-sign", ""}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "machine type") {
+		t.Errorf("an amd64 DLL for windows/arm64: exit %d\n%s", code, stderr.String())
 	}
 
 	if runtime.GOOS != "windows" {

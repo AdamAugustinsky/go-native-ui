@@ -221,8 +221,17 @@ func osInstall(o Options) error {
 	}
 	dst := filepath.Join(dir, exeName(exe))
 	if !samePath(exe, dst) {
+		files, err := companions(exe)
+		if err != nil {
+			return err
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("install: %w", err)
+		}
+		for _, f := range files { // before the executable, which needs them
+			if err := copyExe(f, filepath.Join(dir, filepath.Base(f))); err != nil {
+				return fmt.Errorf("install: copying %s: %w", filepath.Base(f), err)
+			}
 		}
 		if err := copyExe(exe, dst); err != nil {
 			return fmt.Errorf("install: copying the executable: %w", err)
@@ -246,7 +255,31 @@ func osInstall(o Options) error {
 	return nil
 }
 
-// copyExe copies the executable to dst through a new file. An installed copy
+// companions are the files beside the executable exe that its version
+// resource declares (winres.FilesKey: the DLLs of gnui.json's nativeLibs and
+// their licences), which install with it; each must be there.
+func companions(exe string) ([]string, error) {
+	v, ok := ownVersion()
+	if !ok {
+		return nil, nil
+	}
+	names, err := winres.Files(v)
+	if err != nil {
+		return nil, fmt.Errorf("install: %w", err)
+	}
+	paths := make([]string, len(names))
+	for i, n := range names {
+		p := filepath.Join(filepath.Dir(exe), n)
+		if st, err := os.Stat(p); err != nil || !st.Mode().IsRegular() {
+			return nil, fmt.Errorf("install: %s ships beside %s and is not there (unpack the whole zip gnui package wrote)", n, filepath.Base(exe))
+		}
+		paths[i] = p
+	}
+	return paths, nil
+}
+
+// copyExe copies the executable (or a file beside it) to dst through a new
+// file. An installed copy
 // that is running is renamed aside first (Windows lets a running image be
 // renamed, not replaced); copies set aside earlier are removed when they no
 // longer run.
@@ -314,8 +347,14 @@ func register(o Options, dir, exe string) error {
 	}
 	defer k.Close()
 	size := uint32(0)
-	if st, err := os.Stat(exe); err == nil {
-		size = uint32((st.Size() + 1023) / 1024)
+	if ents, err := os.ReadDir(dir); err == nil {
+		var n int64
+		for _, e := range ents {
+			if fi, err := e.Info(); err == nil && fi.Mode().IsRegular() {
+				n += fi.Size()
+			}
+		}
+		size = uint32((n + 1023) / 1024)
 	}
 	cmd := `"` + exe + `" ` + UninstallArg
 	for _, v := range []struct{ k, v string }{

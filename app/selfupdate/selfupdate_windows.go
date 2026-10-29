@@ -26,10 +26,13 @@ import (
 	"gonativeui/internal/winres"
 )
 
-// Windows (D76). The app is one executable: the update is a newer build of
-// it (the .exe, or the zip gnui package writes around it), staged in a
-// private folder on the executable's volume and swapped in by renames once
-// the app has exited.
+// Windows (D76). The app is one executable and the files it declares beside
+// it (winres.FilesKey: the DLLs of gnui.json's nativeLibs and their
+// licences). The update is a newer build: the .exe alone (for an app that
+// declares no files), or the zip gnui package writes, which holds the .exe
+// and exactly the files the new build declares, all at its top. It is
+// staged in a private folder on the executable's volume and swapped in, all
+// files together, by renames once the app has exited.
 
 // maxExe bounds the size of a staged executable.
 const maxExe = 1 << 30
@@ -47,7 +50,8 @@ func findSelf() (self, error) {
 type exeInfo struct {
 	id, version, build, display string
 	machine                     uint16
-	signed                      bool // it has a certificate table
+	signed                      bool     // it has a certificate table
+	files                       []string // the files it declares beside it (winres.FilesKey)
 }
 
 // readExe reads the machine type, the certificate table's presence and the
@@ -77,6 +81,9 @@ func readExe(f *os.File) (exeInfo, error) {
 	info.display = v.String("ProductVersion")
 	if info.display == "" {
 		info.display = info.version
+	}
+	if info.files, err = winres.Files(v); err != nil {
+		return info, err
 	}
 	return info, nil
 }
@@ -188,7 +195,7 @@ func prepare(s self, pub *publisher, sum *[32]byte, anyVersion bool, archive str
 			removeStaging(dir)
 		}
 	}()
-	staged, digest, err := stageExe(archive, dir, filepath.Base(s.exe))
+	staged, files, digest, err := stageUpdate(archive, dir, filepath.Base(s.exe))
 	if err != nil {
 		lg.Warn("selfupdate: archive refused", "archive", archive, "err", err)
 		return nil, err
@@ -199,6 +206,9 @@ func prepare(s self, pub *publisher, sum *[32]byte, anyVersion bool, archive str
 		return nil, err
 	}
 	info, err := verifyStaged(s, staged, pub, anyVersion)
+	if err == nil {
+		err = checkFiles(info, filepath.Dir(staged), files, pub)
+	}
 	if err != nil {
 		lg.Warn("selfupdate: staged update refused", "err", err)
 		return nil, err
@@ -207,11 +217,84 @@ func prepare(s self, pub *publisher, sum *[32]byte, anyVersion bool, archive str
 	if err != nil {
 		return nil, err
 	}
+	sums := make([]jobFile, len(files))
+	for i, n := range files {
+		d, err := sha256File(filepath.Join(filepath.Dir(staged), n))
+		if err != nil {
+			return nil, err
+		}
+		sums[i] = jobFile{Name: n, Digest: hex.EncodeToString(d[:])}
+	}
 	ok = true
-	lg.Info("selfupdate: staged and verified the update", "version", info.display, "path", staged)
+	lg.Info("selfupdate: staged and verified the update", "version", info.display, "path", staged, "files", len(files))
 	st := &Staged{dir: dir, app: staged, version: info.display, build: info.build, self: s, anyVer: anyVersion}
-	st.win = winStaged{lock: lock, exeSum: exeSum, pub: pub}
+	st.win = winStaged{lock: lock, exeSum: exeSum, pub: pub, files: sums}
 	return st, nil
+}
+
+// checkFiles checks the files staged beside the new executable in dir:
+// exactly the ones its version resource declares (info.files, compared
+// without case), each DLL for the executable's machine and, for a signed
+// app (pub), signed by the same publisher as the app.
+func checkFiles(info exeInfo, dir string, staged []string, pub *publisher) error {
+	want := make(map[string]bool, len(info.files))
+	for _, n := range info.files {
+		want[strings.ToLower(n)] = true
+	}
+	got := make(map[string]bool, len(staged))
+	for _, n := range staged {
+		if !want[strings.ToLower(n)] {
+			return fmt.Errorf("%w: the update holds %s, which the new version does not declare", ErrRejected, n)
+		}
+		got[strings.ToLower(n)] = true
+	}
+	for _, n := range info.files {
+		if !got[strings.ToLower(n)] {
+			return fmt.Errorf("%w: the new version needs %s beside it, and the update does not hold it", ErrRejected, n)
+		}
+	}
+	for _, n := range staged {
+		if !strings.HasSuffix(strings.ToLower(n), ".dll") {
+			continue // a licence: text, never loaded
+		}
+		p := filepath.Join(dir, n)
+		m, err := machineOf(p)
+		if err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrRejected, n, err)
+		}
+		if m != info.machine {
+			return fmt.Errorf("%w: %s is for machine type %#x, and the new version %#x", ErrRejected, n, m, info.machine)
+		}
+		if pub != nil {
+			sig, err := signerOf(p)
+			if err != nil {
+				return fmt.Errorf("%w: the signature of %s: %v", ErrRejected, n, err)
+			}
+			if !sig.same(pub) {
+				return fmt.Errorf("%w: %s is signed by %q (root %q), not by this app's publisher %q (root %q)",
+					ErrRejected, n, sig.subject, sig.root, pub.subject, pub.root)
+			}
+		}
+	}
+	return nil
+}
+
+// machineOf is the machine type of the PE file at path.
+func machineOf(path string) (uint16, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	pf, err := winres.Read(f, st.Size())
+	if err != nil {
+		return 0, err
+	}
+	return pf.Machine, nil
 }
 
 // verifyStaged checks that the executable at path is a build of the same
@@ -250,78 +333,108 @@ func verifyStaged(s self, path string, pub *publisher, anyVersion bool) (exeInfo
 	return info, nil
 }
 
-// stageExe copies the executable (or the one .exe in the zip at archive)
-// to dir\new\<name>, hashing the bytes it reads from archive. The copy
-// carries no Mark of the Web (it is a new file; its streams are not copied),
-// so SmartScreen does not prompt when it starts.
-func stageExe(archive, dir, name string) (string, [32]byte, error) {
+// stageUpdate copies the executable (or the one .exe in the zip at archive)
+// to dir\new\<name>, and the zip's other files (DLLs and .txt licences, all
+// at its top) beside it, hashing the bytes it reads from archive; it returns
+// the staged executable and the names of the files staged beside it. The
+// copies carry no Mark of the Web (they are new files; their streams are not
+// copied), so SmartScreen does not prompt when the update starts.
+func stageUpdate(archive, dir, name string) (string, []string, [32]byte, error) {
 	var sum [32]byte
 	in, err := os.Open(archive)
 	if err != nil {
-		return "", sum, err
+		return "", nil, sum, err
 	}
 	defer in.Close()
 	fi, err := in.Stat()
 	if err != nil {
-		return "", sum, err
+		return "", nil, sum, err
 	}
 	if !fi.Mode().IsRegular() || fi.Size() > maxExe {
-		return "", sum, fmt.Errorf("%w: %s is not a file of at most 1 GiB", ErrRejected, archive)
+		return "", nil, sum, fmt.Errorf("%w: %s is not a file of at most 1 GiB", ErrRejected, archive)
 	}
 	h := sha256.New()
 	src := io.TeeReader(in, h)
 	newDir := filepath.Join(dir, "new")
 	if err := os.Mkdir(newDir, 0o700); err != nil {
-		return "", sum, err
+		return "", nil, sum, err
 	}
 	out := filepath.Join(newDir, name)
 	var head [4]byte
 	if _, err := io.ReadFull(in, head[:]); err != nil {
-		return "", sum, fmt.Errorf("%w: %v", ErrRejected, err)
+		return "", nil, sum, fmt.Errorf("%w: %v", ErrRejected, err)
 	}
 	if _, err := in.Seek(0, io.SeekStart); err != nil {
-		return "", sum, err
+		return "", nil, sum, err
 	}
 	if string(head[:]) != "PK\x03\x04" {
 		if err := writeFrom(out, src, maxExe); err != nil {
-			return "", sum, err
+			return "", nil, sum, err
 		}
 		copy(sum[:], h.Sum(nil))
-		return out, sum, nil
+		return out, nil, sum, nil
 	}
 	// A zip: copied into the folder with the digest, then read from there.
 	zpath := filepath.Join(dir, "update.zip")
 	if err := writeFrom(zpath, src, maxExe); err != nil {
-		return "", sum, err
+		return "", nil, sum, err
 	}
 	copy(sum[:], h.Sum(nil))
 	zr, err := zip.OpenReader(zpath)
 	if err != nil {
-		return "", sum, fmt.Errorf("%w: %v", ErrRejected, err)
+		return "", nil, sum, fmt.Errorf("%w: %v", ErrRejected, err)
 	}
 	defer zr.Close()
 	var exe *zip.File
+	var others []*zip.File
+	seen := map[string]bool{}
+	var total uint64
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		if exe != nil || !strings.HasSuffix(strings.ToLower(f.Name), ".exe") || strings.ContainsAny(f.Name, `/\:`) || f.UncompressedSize64 > maxExe {
-			return "", sum, fmt.Errorf("%w: the zip must hold exactly one executable at its top (%q)", ErrRejected, f.Name)
+		n, k := f.Name, strings.ToLower(f.Name)
+		total += f.UncompressedSize64
+		switch {
+		case strings.ContainsAny(n, `/\:`) || f.UncompressedSize64 > maxExe || total > maxExe || seen[k]:
+			return "", nil, sum, fmt.Errorf("%w: the zip must hold one executable and the files beside it, each once, at its top (%q)", ErrRejected, n)
+		case strings.HasSuffix(k, ".exe"):
+			if exe != nil {
+				return "", nil, sum, fmt.Errorf("%w: the zip must hold exactly one executable at its top (%q)", ErrRejected, n)
+			}
+			exe = f
+		case winres.CheckFileName(n) == nil:
+			others = append(others, f)
+		default:
+			return "", nil, sum, fmt.Errorf("%w: the zip holds %q: only one .exe and the .dll and .txt files beside it", ErrRejected, n)
 		}
-		exe = f
+		seen[k] = true
 	}
 	if exe == nil {
-		return "", sum, fmt.Errorf("%w: the zip holds no executable", ErrRejected)
+		return "", nil, sum, fmt.Errorf("%w: the zip holds no executable", ErrRejected)
 	}
-	rc, err := exe.Open()
-	if err != nil {
-		return "", sum, fmt.Errorf("%w: %v", ErrRejected, err)
+	unzip := func(f *zip.File, dst string) error {
+		rc, err := f.Open()
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrRejected, err)
+		}
+		defer rc.Close()
+		if err := writeFrom(dst, rc, maxExe); err != nil {
+			return fmt.Errorf("%w: %v", ErrRejected, err)
+		}
+		return nil
 	}
-	defer rc.Close()
-	if err := writeFrom(out, rc, maxExe); err != nil {
-		return "", sum, fmt.Errorf("%w: %v", ErrRejected, err)
+	if err := unzip(exe, out); err != nil {
+		return "", nil, sum, err
 	}
-	return out, sum, nil
+	names := make([]string, len(others))
+	for i, f := range others {
+		if err := unzip(f, filepath.Join(newDir, f.Name)); err != nil {
+			return "", nil, sum, err
+		}
+		names[i] = f.Name
+	}
+	return out, names, sum, nil
 }
 
 func writeFrom(path string, r io.Reader, limit int64) error {
@@ -492,6 +605,14 @@ type winStaged struct {
 	lock   syscall.Handle
 	exeSum [32]byte   // the staged executable's SHA-256, which the helper checks again
 	pub    *publisher // nil for an unsigned app
+	files  []jobFile  // the files staged beside it, with their SHA-256
+}
+
+// jobFile is a file staged beside the new executable (in staging\new), with
+// its SHA-256 in hex, which the helper checks again.
+type jobFile struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
 }
 
 // job is what the app hands the helper, in the staging folder.
@@ -513,6 +634,7 @@ type job struct {
 	AnyVersion    bool          `json:"anyVersion"`
 	Digest        string        `json:"digest"` // hex SHA-256 of the staged executable, for an unsigned app
 	Signed        bool          `json:"signed"`
+	Files         []jobFile     `json:"files"` // the files staged beside the new executable
 }
 
 var pSetHandleInfo = syscall.NewLazyDLL("kernel32.dll").NewProc("SetHandleInformation")
@@ -581,6 +703,7 @@ func (s *Staged) InstallAndRelaunch(args []string) error {
 		Staging: s.dir, Staged: s.app, ID: cur.id, From: displayVersion(cur.exe, cur.version), To: s.version,
 		Args: append([]string(nil), args...), HealthTimeout: o.HealthTimeout, QuitTimeout: o.QuitTimeout,
 		Nonce: hex.EncodeToString(nonce), AnyVersion: s.anyVer, Digest: hex.EncodeToString(s.win.exeSum[:]), Signed: s.win.pub != nil,
+		Files: s.win.files,
 	}
 	jobPath := filepath.Join(s.dir, "job.json")
 	b, err := json.Marshal(j)
