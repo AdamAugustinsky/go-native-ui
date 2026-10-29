@@ -393,6 +393,14 @@ func fresh(t *testing.T, o Options) (*fakeCenter, *sink) {
 // start at 0. With manual set the launch's listing is left to the test.
 func relaunch(t *testing.T, o Options, manual bool) (*fakeCenter, *sink) {
 	t.Helper()
+	f := newFake(manual)
+	s := relaunchWith(t, o, f)
+	return f, s
+}
+
+// relaunchWith is relaunch over the backend b.
+func relaunchWith(t *testing.T, o Options, b backend) *sink {
+	t.Helper()
 	workers.Wait()
 	s := &sink{}
 	platform.SetAppSink(s)
@@ -417,9 +425,8 @@ func relaunch(t *testing.T, o Options, manual bool) (*fakeCenter, *sink) {
 	}
 	drain()
 	s.reset()
-	f := newFake(manual)
 	svc.setupMu.Lock()
-	svc.b = f
+	svc.b = b
 	svc.on.Store(false)
 	svc.setupMu.Unlock()
 	svc.catMu.Lock()
@@ -438,7 +445,7 @@ func relaunch(t *testing.T, o Options, manual bool) (*fakeCenter, *sink) {
 	if err := Setup(o); err != nil {
 		t.Fatal(err)
 	}
-	return f, s
+	return s
 }
 
 func mustPost(t *testing.T, n Note) PostResult {
