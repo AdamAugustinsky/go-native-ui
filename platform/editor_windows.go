@@ -205,7 +205,14 @@ type editorNative struct {
 	nEat    int
 	imeMsgs int           // WM_IME_* messages seen (tests)
 	imeLog  [8][4]uintptr // the first WM_IME_* messages: message, wParam, lParam, TxSendMessage's HRESULT (tests)
-	focused bool
+	// The composition the editor keeps in the text (windowless RichEdit
+	// inserts none): its start and length in UTF-16 units, the IME's strings
+	// read into imeBuf, and the candidate window's form.
+	compStart, compLen int
+	compEdited         bool // putComposition changed the text since compositionMoved
+	imeBuf             [256]uint16
+	cand               candidateForm
+	focused            bool
 	// The caret RichEdit asks for (TxCreateCaret, TxSetCaretPos,
 	// TxShowCaret), drawn by render; blinkOn is its blink phase.
 	caretX, caretY, caretW, caretH int32
@@ -697,30 +704,15 @@ func (e *Editor) readSelection() {
 	}
 }
 
-// readMarked reads the input method's composition: its string sits at the
-// caret, which is GCS_CURSORPOS units into it.
+// readMarked reads the marked text: the composition the editor keeps in
+// the text.
 func (e *Editor) readMarked() {
 	e.marked, e.mr = false, TextRange{}
-	if !e.ime {
-		return
-	}
-	himc := win32.Call(pImmGetContext, e.hwnd)
-	if himc == 0 {
-		return
-	}
-	n := int(int32(win32.Call(rich.pImmGetCompStr, himc, gcsCompStr, 0, 0))) / 2
-	cur := int(int32(win32.Call(rich.pImmGetCompStr, himc, gcsCursorPos, 0, 0)))
-	win32.Call(pImmReleaseContext, e.hwnd, himc)
-	if n <= 0 {
-		return
-	}
-	cur = min(max(cur, 0), n)
-	start := int(e.cr.min) - cur
-	if start < 0 || start+n > e.m.n16 {
+	if !e.ime || e.compLen <= 0 || e.compStart+e.compLen > e.m.n16 {
 		return
 	}
 	e.marked = true
-	e.mr = TextRange{e.m.toByte(e.text, start), e.m.toByte(e.text, start+n)}
+	e.mr = TextRange{e.m.toByte(e.text, e.compStart), e.m.toByte(e.text, e.compStart+e.compLen)}
 }
 
 // measureLine measures one line's height with an empty text.
@@ -834,7 +826,10 @@ func (e *Editor) cancelComposition() {
 		win32.Call(pImmNotifyIME, himc, niCompStr, cpsCancel, 0)
 		win32.Call(pImmReleaseContext, e.hwnd, himc)
 	}
-	e.ime, e.marked = false, false
+	if e.compLen > 0 {
+		e.putComposition(nil, false)
+	}
+	e.ime, e.marked, e.compLen = false, false, 0
 }
 
 // CommitComposition ends an input method's composition, keeping its text.
@@ -1244,18 +1239,17 @@ func editorWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		e.send(uint32(m), wp, lp)
 		return win32.Call(pDefWindowProcW, hwnd, m, wp, lp&^iscShowCompWindow)
 	case wmImeStartComp:
-		e.ime = true
-		return e.forward(hwnd, m, wp, lp)
+		e.logIME(m, wp, lp)
+		e.startComposition()
+		return 0
 	case wmImeComp:
-		e.ime = true
-		r := e.forward(hwnd, m, wp, lp)
-		e.compositionMoved()
-		return r
+		e.logIME(m, wp, lp)
+		e.composition(lp)
+		return 0
 	case wmImeEndComp:
-		r := e.forward(hwnd, m, wp, lp)
-		e.ime = false
-		e.compositionMoved()
-		return r
+		e.logIME(m, wp, lp)
+		e.endComposition()
+		return 0
 	case wmImeNotify, wmImeRequest, wmImeChar, wmInputLangChange, wmKeyUp, wmSysKeyUp:
 		return e.forward(hwnd, m, wp, lp)
 	case wmMouseWheel, wmMouseHWheel:
@@ -1280,11 +1274,8 @@ func editorWndProc(hwnd, m, wp, lp uintptr) uintptr {
 // they leave it (S_FALSE): an input method's UI, Alt+F4.
 func (e *Editor) forward(hwnd, m, wp, lp uintptr) uintptr {
 	hr := e.send(uint32(m), wp, lp)
-	if m >= wmImeStartComp && m <= wmImeComp || m >= 0x0281 && m <= 0x0291 {
-		if i := e.imeMsgs; i < len(e.imeLog) {
-			e.imeLog[i] = [4]uintptr{m, wp, lp, uintptr(uint32(hr))}
-		}
-		e.imeMsgs++
+	if m >= 0x0281 && m <= 0x0291 {
+		e.logIME(m, wp, uintptr(uint32(hr)))
 	}
 	if hr == 1 {
 		return win32.Call(pDefWindowProcW, hwnd, m, wp, lp)
@@ -1292,14 +1283,162 @@ func (e *Editor) forward(hwnd, m, wp, lp uintptr) uintptr {
 	return e.lres
 }
 
-// compositionMoved takes in a composition change RichEdit did not report as
-// a text change (the marked range moved, or the composition ended with the
-// text as it was).
+// logIME records an IME message for the tests' report.
+func (e *Editor) logIME(m, wp, lp uintptr) {
+	if i := e.imeMsgs; i < len(e.imeLog) {
+		e.imeLog[i] = [4]uintptr{m, wp, lp, 0}
+	}
+	e.imeMsgs++
+}
+
+// The composition (IMM): windowless RichEdit takes WM_IME_COMPOSITION but
+// puts no composition string in its text (seen on both runners), so the
+// editor does, as an editor that draws its own text does. The string sits
+// at the composition's start, underlined, written with the undo stack
+// suspended; the IME's result replaces it as one ordinary edit. A
+// selection is deleted when the composition starts, as typing would.
+
+// startComposition is WM_IME_STARTCOMPOSITION.
+func (e *Editor) startComposition() {
+	e.quiet++
+	e.send(emExGetSel, 0, uintptr(unsafe.Pointer(&e.cr)))
+	if e.cr.min != e.cr.max {
+		e.u16 = append(e.u16[:0], 0)
+		e.send(emReplaceSel, 1, uintptr(unsafe.Pointer(&e.u16[0])))
+		e.send(emExGetSel, 0, uintptr(unsafe.Pointer(&e.cr)))
+	}
+	e.quiet--
+	e.ime, e.compStart, e.compLen = true, int(e.cr.min), 0
+	if e.compl {
+		e.SetCompletionActive(false)
+		e.pend |= EditorCancelled
+		e.wake()
+	}
+}
+
+// imeString reads one of the IME's strings (GCS_COMPSTR, GCS_RESULTSTR)
+// into imeBuf.
+func (e *Editor) imeString(himc uintptr, which uintptr) []uint16 {
+	n := int(int32(win32.Call(rich.pImmGetCompStr, himc, which, uintptr(unsafe.Pointer(&e.imeBuf[0])), uintptr(2*(len(e.imeBuf)-1)))))
+	if n <= 0 {
+		return e.imeBuf[:0]
+	}
+	return e.imeBuf[:min(n/2, len(e.imeBuf)-1)]
+}
+
+// putComposition replaces the composition in the text with s, with the
+// undo stack suspended, underlined or not.
+func (e *Editor) putComposition(s []uint16, underline bool) {
+	e.quiet++
+	if e.doc != 0 {
+		win32.Com(e.doc, vtDocUndo, u32(tomSuspend), 0)
+	}
+	e.cr = chrRange{int32(e.compStart), int32(e.compStart + e.compLen)}
+	e.send(emExSetSel, 0, uintptr(unsafe.Pointer(&e.cr)))
+	e.u16 = append(append(e.u16[:0], s...), 0)
+	e.send(emReplaceSel, 0, uintptr(unsafe.Pointer(&e.u16[0])))
+	e.compEdited = e.compEdited || e.compLen > 0 || len(s) > 0
+	e.compLen = len(s)
+	if len(s) > 0 {
+		e.cr = chrRange{int32(e.compStart), int32(e.compStart + e.compLen)}
+		e.send(emExSetSel, 0, uintptr(unsafe.Pointer(&e.cr)))
+		e.spanCF = charFormat2{mask: cfmUnderline}
+		if underline {
+			e.spanCF.effects = 4 // CFE_UNDERLINE
+		}
+		e.spanCF.size = uint32(unsafe.Sizeof(e.spanCF))
+		e.send(emSetCharFormat, scfSelection, uintptr(unsafe.Pointer(&e.spanCF)))
+	}
+	if e.doc != 0 {
+		win32.Com(e.doc, vtDocUndo, u32(tomResume), 0)
+	}
+	e.quiet--
+}
+
+// composition is WM_IME_COMPOSITION: the result is committed, then the
+// composition string (what is still being composed) is shown.
+func (e *Editor) composition(flags uintptr) {
+	if !e.ime {
+		e.startComposition()
+	}
+	himc := win32.Call(pImmGetContext, e.hwnd)
+	if himc == 0 {
+		return
+	}
+	defer win32.Call(pImmReleaseContext, e.hwnd, himc)
+	if flags&gcsResultStr != 0 {
+		res := e.imeString(himc, gcsResultStr)
+		e.putComposition(nil, false)
+		if e.maxLen > 0 { // the result is cut to what MaxLen leaves
+			e.copyText()
+			room := e.maxLen - len(e.text)
+			for len(res) > 0 && len(appendText(nil, res)) > room {
+				res = res[:len(res)-1]
+				if len(res) > 0 && utf16.IsSurrogate(rune(res[len(res)-1])) {
+					res = res[:len(res)-1]
+				}
+			}
+		}
+		if len(res) > 0 {
+			e.cr = chrRange{int32(e.compStart), int32(e.compStart)}
+			e.quiet++
+			e.send(emExSetSel, 0, uintptr(unsafe.Pointer(&e.cr)))
+			e.spanCF = charFormat2{mask: cfmUnderline}
+			e.spanCF.size = uint32(unsafe.Sizeof(e.spanCF))
+			e.send(emSetCharFormat, scfSelection, uintptr(unsafe.Pointer(&e.spanCF))) // the typing format: not underlined
+			e.quiet--
+			e.u16 = append(append(e.u16[:0], res...), 0)
+			e.send(emStopGroupTyping, 0, 0)
+			e.send(emReplaceSel, 1, uintptr(unsafe.Pointer(&e.u16[0]))) // an ordinary edit: EditorChanged
+			e.send(emStopGroupTyping, 0, 0)
+			e.compStart += len(res)
+		}
+	}
+	if flags&gcsCompStr != 0 {
+		comp := e.imeString(himc, gcsCompStr)
+		e.putComposition(comp, true)
+		cur := len(comp)
+		if flags&gcsCursorPos != 0 {
+			cur = min(max(int(int32(win32.Call(rich.pImmGetCompStr, himc, gcsCursorPos, 0, 0))), 0), len(comp))
+		}
+		e.quiet++
+		e.send(emSetSel, uintptr(e.compStart+cur), uintptr(e.compStart+cur))
+		e.quiet--
+		e.placeCandidates(himc, e.compStart+cur)
+	}
+	e.compositionMoved()
+}
+
+// endComposition is WM_IME_ENDCOMPOSITION: a composition still in the text
+// (cancelled) is taken out.
+func (e *Editor) endComposition() {
+	if e.compLen > 0 {
+		e.putComposition(nil, false)
+		e.quiet++
+		e.send(emSetSel, uintptr(e.compStart), uintptr(e.compStart))
+		e.quiet--
+	}
+	e.ime, e.compLen = false, 0
+	e.compositionMoved()
+}
+
+// placeCandidates puts the IME's candidate window under the caret at unit
+// cp.
+func (e *Editor) placeCandidates(himc uintptr, cp int) {
+	e.pt = point{}
+	win32.Com(e.ts, vtTSSendMessage, emPosFromChar, uintptr(unsafe.Pointer(&e.pt)), uintptr(cp), uintptr(unsafe.Pointer(&e.lres)))
+	e.cand = candidateForm{style: cfsCandidatePos, pt: point{e.pt.x, e.pt.y + e.lineH}}
+	win32.Call(pImmSetCandWindow, himc, uintptr(unsafe.Pointer(&e.cand)))
+}
+
+// compositionMoved signals a change putComposition made (quietly, as it is
+// not an edit for the undo stack): EditorChanged, with EditorComposing while
+// a composition remains.
 func (e *Editor) compositionMoved() {
-	wasMarked, wasMR := e.marked, e.mr
-	e.readSelection()
-	e.readMarked()
-	if e.quiet > 0 || wasMarked == e.marked && wasMR == e.mr {
+	edited := e.compEdited
+	e.compEdited = false
+	e.copyText()
+	if e.quiet > 0 || !edited {
 		return
 	}
 	e.pend |= EditorChanged
