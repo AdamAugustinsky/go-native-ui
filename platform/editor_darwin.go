@@ -411,6 +411,11 @@ func (e *Editor) SetOptions(o EditorOptions) {
 	}
 }
 
+// SetColors does nothing on macOS: the text view is transparent over the
+// app's box and draws in the system's text colour (EditorOptions.TextColor
+// and Background are Windows'). A widget can call it every frame.
+func (e *Editor) SetColors(text, background uint32) {}
+
 // SetPlaceholder changes the placeholder ("" none): SetOptions with only the
 // placeholder changed.
 func (e *Editor) SetPlaceholder(s string) {
@@ -932,16 +937,6 @@ func (e *Editor) atEdge(up bool) bool {
 		return e.lineRng[0] == 0
 	}
 	return !nl && int(e.lineRng[0]+e.lineRng[1]) >= glyphs
-}
-
-// editorLines is the most and the fewest lines of options o, defaults
-// applied: MaxLines 6, MinLines 1, MinLines at most MaxLines.
-func editorLines(o EditorOptions) (maxL, minL int) {
-	maxL, minL = o.MaxLines, o.MinLines
-	if maxL <= 0 {
-		maxL = 6
-	}
-	return maxL, min(max(minL, 1), maxL)
 }
 
 // sends reports whether Enter with modifiers m submits.
