@@ -1,5 +1,3 @@
-//go:build windows
-
 package testlock
 
 import (
@@ -8,29 +6,29 @@ import (
 	"unsafe"
 )
 
-// On Windows the lock is LockFileEx's exclusive lock on the file's first
-// byte: the foreground window and the keyboard are the session's, and a test
-// that types or activates windows (app/hotkey's, the panels') would reach
-// another test process's windows.
+// Windows: LockFileEx on the file's first byte, exclusive, waiting.
 
 var (
-	kernel32    = syscall.NewLazyDLL("kernel32.dll")
-	pLockFileEx = kernel32.NewProc("LockFileEx")
-	pUnlockFile = kernel32.NewProc("UnlockFileEx")
-	lockExcl    = uintptr(2) // LOCKFILE_EXCLUSIVE_LOCK
+	kernel32       = syscall.NewLazyDLL("kernel32.dll")
+	procLockFileEx = kernel32.NewProc("LockFileEx")
+	procUnlockFile = kernel32.NewProc("UnlockFileEx")
 )
 
+const lockfileExclusiveLock = 0x2
+
 func lock(f *os.File) error {
-	var ol syscall.Overlapped
-	if r, _, err := pLockFileEx.Call(f.Fd(), lockExcl, 0, 1, 0, uintptr(unsafe.Pointer(&ol))); r == 0 {
+	ol := new(syscall.Overlapped)
+	r, _, err := procLockFileEx.Call(f.Fd(), lockfileExclusiveLock, 0, 1, 0, uintptr(unsafe.Pointer(ol)))
+	if r == 0 {
 		return err
 	}
 	return nil
 }
 
 func unlock(f *os.File) error {
-	var ol syscall.Overlapped
-	if r, _, err := pUnlockFile.Call(f.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&ol))); r == 0 {
+	ol := new(syscall.Overlapped)
+	r, _, err := procUnlockFile.Call(f.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(ol)))
+	if r == 0 {
 		return err
 	}
 	return nil
