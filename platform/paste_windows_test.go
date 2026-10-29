@@ -776,32 +776,34 @@ var (
 )
 
 // clipHolders says which window has the clipboard open and which owns it,
-// and whose they are (this process, or another program by its image name),
-// so that a failure tells a busy clipboard of another program from a slow
-// one of ours.
+// and whose they are (windowOwner), so that a failure tells a busy clipboard
+// of another program from a slow one of ours.
 func clipHolders() string {
-	who := func(hwnd uintptr) string {
-		if hwnd == 0 {
-			return "none"
-		}
-		var pid uint32 // syscall.SyscallN, unlike win32.Call, keeps a local the call writes valid
-		syscall.SyscallN(pGetWindowThreadProcessW, hwnd, uintptr(unsafe.Pointer(&pid)))
-		if int(pid) == os.Getpid() {
-			return fmt.Sprintf("%#x of this process", hwnd)
-		}
-		name := "?"
-		const queryLimited = 0x1000
-		if h := win32.Call(pOpenProcessT, queryLimited, 0, uintptr(pid)); h != 0 {
-			buf := make([]uint16, 512)
-			n := uint32(len(buf))
-			if r, _, _ := syscall.SyscallN(pQueryFullProcessImageW, h, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n))); win32.Bool(r) {
-				name = filepath.Base(syscall.UTF16ToString(buf[:n]))
-			}
-			win32.Call(pCloseHandleT, h)
-		}
-		return fmt.Sprintf("%#x of process %d (%s)", hwnd, pid, name)
+	return fmt.Sprintf("open by %s, owned by %s", windowOwner(win32.Call(pGetOpenClipboardWindow)), windowOwner(win32.Call(pGetClipboardOwner)))
+}
+
+// windowOwner names a window and its process: this one, or another program
+// by its image name.
+func windowOwner(hwnd uintptr) string {
+	if hwnd == 0 {
+		return "none"
 	}
-	return fmt.Sprintf("open by %s, owned by %s", who(win32.Call(pGetOpenClipboardWindow)), who(win32.Call(pGetClipboardOwner)))
+	var pid uint32 // syscall.SyscallN, unlike win32.Call, keeps a local the call writes valid
+	syscall.SyscallN(pGetWindowThreadProcessW, hwnd, uintptr(unsafe.Pointer(&pid)))
+	if int(pid) == os.Getpid() {
+		return fmt.Sprintf("%#x of this process", hwnd)
+	}
+	name := "?"
+	const queryLimited = 0x1000
+	if h := win32.Call(pOpenProcessT, queryLimited, 0, uintptr(pid)); h != 0 {
+		buf := make([]uint16, 512)
+		n := uint32(len(buf))
+		if r, _, _ := syscall.SyscallN(pQueryFullProcessImageW, h, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n))); win32.Bool(r) {
+			name = filepath.Base(syscall.UTF16ToString(buf[:n]))
+		}
+		win32.Call(pCloseHandleT, h)
+	}
+	return fmt.Sprintf("%#x of process %d (%s)", hwnd, pid, name)
 }
 
 // What a copy puts on the clipboard is owned by a window of the worker's

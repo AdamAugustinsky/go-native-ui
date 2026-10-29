@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"os"
 	"syscall"
 	"testing"
 	"time"
@@ -172,10 +173,29 @@ func TestPanelHideOnDeactivate(t *testing.T) {
 	if vis == nil || vis.Flags&FlagDown != 0 {
 		t.Errorf("no EvVisible (hidden) for the deactivation: %+v", got[0])
 	}
-	p.Show()
-	settle(main, p)
-	if !p.Visible() || !p.KeyWindow() {
-		t.Errorf("shown again: visible %v, key %v", p.Visible(), p.KeyWindow())
+	// Shown again, it must come back visible and key. On arm64 it was hidden
+	// again at once ("shown again: visible false, key false", p8-win-gaps
+	// 40825237562, p8-windows-flakes 40831554416): a window of another
+	// process taking the foreground deactivates it, which the activation lock
+	// does not keep away (the runner's shell, a test that does not hold it).
+	// A show undone that way, by another process's foreground window, is
+	// tried again, up to three times; any other way fails.
+	for try := 1; ; try++ {
+		hidden := p.DebugPanelState().HiddenByDeact
+		p.Show()
+		pumpEvents([]*Window{main, p}, 2*time.Second, func([][]Event) bool { return p.Visible() && p.KeyWindow() })
+		if p.Visible() && p.KeyWindow() {
+			break
+		}
+		fg := win32.Call(pGetForegroundWindow)
+		var pid uint32
+		syscall.SyscallN(pGetWindowThreadProcessW, fg, uintptr(unsafe.Pointer(&pid)))
+		outside := p.DebugPanelState().HiddenByDeact > hidden && fg != 0 && int(pid) != os.Getpid()
+		if !outside || try == 3 {
+			t.Errorf("shown again: visible %v, key %v; hidden by deactivation %d more times; the foreground is %s", p.Visible(), p.KeyWindow(), p.DebugPanelState().HiddenByDeact-hidden, windowOwner(fg))
+			break
+		}
+		t.Logf("try %d: shown again, then deactivated by %s; again", try, windowOwner(fg))
 	}
 }
 
