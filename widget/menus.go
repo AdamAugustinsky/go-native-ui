@@ -320,7 +320,7 @@ func (k *Kit) menuLetter(level int, mn *menu.Menu, mns *base.Mnemonics, okey ui.
 	if i < 0 {
 		return
 	}
-	c.ClaimKey(at)
+	base.ClaimMnemonic(c, at)
 	it := mn.Items[i]
 	key := ui.KeyN(okey, uint64(i+1))
 	_, cmd := k.itemTitle(it)
@@ -406,7 +406,7 @@ func (k *Kit) MenuBar() Signal {
 		switch letter, at := base.TypedMnemonic(c, 0); {
 		case at >= 0:
 			if bi, _ := mns.Find(letter, -1); bi >= 0 {
-				c.ClaimKey(at)
+				base.ClaimMnemonic(c, at)
 				want = bi
 			}
 		case k.bar.mode && c.TakeKey(ui.KeyEscape, 0):
@@ -564,7 +564,7 @@ func (k *Kit) menuBarKeys() {
 	if bi < 0 {
 		return
 	}
-	c.ClaimKey(at)
+	base.ClaimMnemonic(c, at)
 	if !k.bar.mode {
 		k.bar.prev = c.FocusKey()
 		if barOpen {

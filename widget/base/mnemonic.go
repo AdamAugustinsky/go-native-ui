@@ -136,6 +136,21 @@ func TypedMnemonic(c *ui.Context, mods ui.Mods) (letter byte, at int) {
 	return 0, -1
 }
 
+// ClaimMnemonic claims key event at (from TypedMnemonic) for a drawn menu
+// that acts on it; a letter typed without Alt also types a character, which
+// is kept out of the text fields (ui.Context.DropTyped).
+func ClaimMnemonic(c *ui.Context, at int) {
+	e, _ := c.KeyAt(at)
+	c.ClaimKey(at)
+	if e.Mods&ui.ModAlt == 0 {
+		r := e.Char
+		if r == 0 {
+			r = rune(KeyMnemonic(e))
+		}
+		c.DropTyped(r)
+	}
+}
+
 // KeyMnemonic is the mnemonic letter key event e types (upper case), 0 for
 // none: the character on the user's layout when the platform tells it, else
 // the key.

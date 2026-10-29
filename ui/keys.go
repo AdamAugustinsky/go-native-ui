@@ -83,6 +83,42 @@ func (c *Context) TakeAltTap() bool {
 	return true
 }
 
+// DropTyped keeps the character a key typed out of the text fields: a drawn
+// menu that chose an item by the key's letter (a mnemonic) calls it after
+// claiming the key, so that the letter does not land in the field the focus
+// goes back to. It removes the first r of this frame's typed text (ASCII, any
+// case), or, when the platform delivers the character after the key, of the
+// next frame's.
+func (c *Context) DropTyped(r rune) {
+	if !c.dropTypedIn(r) {
+		c.dropNext = r
+	}
+}
+
+// dropTypedIn removes the first r (ASCII, any case) from this frame's typed
+// text and reports whether there was one.
+func (c *Context) dropTypedIn(r rune) bool {
+	if r <= 0 || r >= 0x80 {
+		return false
+	}
+	in := &c.in
+	lo := func(b byte) byte {
+		if b >= 'A' && b <= 'Z' {
+			return b + 'a' - 'A'
+		}
+		return b
+	}
+	for i := 0; i < in.NText; i++ {
+		if lo(in.Text[i]) == lo(byte(r)) {
+			copy(in.Text[i:], in.Text[i+1:in.NText])
+			in.NText--
+			in.Text[in.NText] = 0
+			return true
+		}
+	}
+	return false
+}
+
 // TextFieldFocused reports whether the focused box is a text field that
 // takes keys (it was built in the previous frame and is not disabled) in a
 // window that has keyboard focus.

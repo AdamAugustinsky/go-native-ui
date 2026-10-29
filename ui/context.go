@@ -305,6 +305,7 @@ type Context struct {
 	// key claiming and edit actions (keys.go)
 	claimed    uint16         // bit i: key event i is handled
 	altTaken   bool           // TakeAltTap reported this frame's Input.AltTap
+	dropNext   rune           // DropTyped: the character to drop from the next frame's typed text
 	fieldKeys  uint16         // bit i: key event i was claimed for the focused text field
 	nextEscClr bool           // the next TextField clears itself on Escape (NextEscapeClears)
 	nextStill  bool           // the next TextField does not animate hover (NextFieldNoHover)
@@ -494,6 +495,10 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.animating, c.scrollSet = c.nHeld > 0, false // (held input needs the next frame)
 	c.wakeNs, c.imeOK, c.imeCancel, c.secureOn = 0, false, false, false
 	c.takeCommit()
+	if r := c.dropNext; r != 0 {
+		c.dropNext = 0
+		c.dropTypedIn(r)
+	}
 	c.rich, c.richSpans, c.richStyles = c.rich[:0], c.richSpans[:0], c.richStyles[:0]
 	c.ovPrev, c.nOvPrev = c.ovs, c.nOvs
 	c.nOvs, c.nOvOpen, c.parentless = 0, 0, false

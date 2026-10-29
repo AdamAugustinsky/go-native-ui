@@ -411,7 +411,7 @@ func (m *contextMenu) letter(level int, items []ui.MenuItem, mns *base.Mnemonics
 	if i < 0 {
 		return
 	}
-	c.ClaimKey(at)
+	base.ClaimMnemonic(c, at)
 	it := &items[i]
 	if it.Disabled {
 		return

@@ -423,9 +423,11 @@ func (g *rig) altKey(letter byte) {
 	g.frame()
 }
 
-// letter types a letter key alone (the key press; the text is not needed).
+// letter types a letter key alone: the key press and its character, in one
+// frame.
 func (g *rig) letter(letter byte) {
 	g.in.PushKey(ui.KeyEvent{Code: ui.KeyCode(letter), Down: true, Char: rune(letter) + 'a' - 'A'})
+	g.in.AppendText(string(rune(letter) + 'a' - 'A'))
 	g.frame()
 }
 
@@ -502,7 +504,10 @@ func TestMenuBarAltMnemonicOpensAndLetterChooses(t *testing.T) {
 	if g.c.FocusKey() != g.keyOf(ui.RoleMenuItem, "New") {
 		t.Fatal("the first item does not have the focus")
 	}
-	g.letter('S')
+	// the key, then its character in the next frame (as WM_CHAR may come)
+	g.in.PushKey(ui.KeyEvent{Code: 'S', Down: true, Char: 's'})
+	g.frame()
+	g.typ("s")
 	g.frames(3)
 	if g.k.MenuOpen() {
 		t.Fatal("S left the menu open")
