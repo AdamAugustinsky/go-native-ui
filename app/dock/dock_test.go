@@ -2,6 +2,7 @@ package dock_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"gonativeui/app/dock"
@@ -22,6 +23,17 @@ func TestPolicyRefusesProhibited(t *testing.T) {
 	// Not the app's choice to make at run time: refused before the OS is asked.
 	if err := dock.SetPolicy(2); !errors.Is(err, dock.ErrPolicy) {
 		t.Fatalf("SetPolicy(PolicyProhibited) = %v, want ErrPolicy", err)
+	}
+}
+
+func TestProgressRefusesNaNAndNegatives(t *testing.T) {
+	for _, f := range []float64{math.NaN(), -0.5, -3} {
+		if err := dock.SetProgress(f); !errors.Is(err, dock.ErrProgress) {
+			t.Errorf("SetProgress(%v) = %v, want ErrProgress", f, err)
+		}
+	}
+	if dock.Progress() != dock.NoProgress {
+		t.Errorf("Progress before any = %v, want NoProgress", dock.Progress())
 	}
 }
 

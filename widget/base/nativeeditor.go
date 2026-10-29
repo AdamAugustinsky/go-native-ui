@@ -33,9 +33,11 @@ import (
 // input method starts composing; Replace is refused while it composes
 // (platform.ErrComposing).
 //
-// On Windows and Linux there is no native editor yet: NewNativeEditor returns
-// an error (errors.Is(err, errors.ErrUnsupported)) and the app uses the drawn
-// text field.
+// On Windows the editor is a windowless RichEdit in a child window, drawn
+// with Direct2D (platform's W4): the same contract, plus SetColors for the
+// fill of its box. On Linux there is no native editor yet: NewNativeEditor
+// returns an error (errors.Is(err, errors.ErrUnsupported)) and the app uses
+// the drawn text field.
 type NativeEditor struct {
 	// Editor is the native editor (nil for an offscreen window, where
 	// Kit.NativeEditor reserves a one-line box with no view).

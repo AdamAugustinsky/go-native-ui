@@ -24,8 +24,8 @@ func TestOptionsChecked(t *testing.T) {
 	}
 }
 
-// TestContract is the wave-0 behaviour: ErrNotNeeded on macOS,
-// ErrUnsupported elsewhere until W10.
+// TestContract: ErrNotNeeded on macOS, nil on Windows, ErrUnsupported on
+// Linux; a test binary is never installed.
 func TestContract(t *testing.T) {
 	err := install.Supported()
 	switch runtime.GOOS {

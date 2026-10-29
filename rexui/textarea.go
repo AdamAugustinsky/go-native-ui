@@ -247,6 +247,7 @@ func TextArea(k *base.Kit, label string, st *TextAreaState, o TextAreaOpts) Text
 		}
 		c.Pop()
 	default:
+		st.ed.SetColors(Of(theme.ControlText).RGBA(r), rc.Fill.RGBA(r)) // Windows: the editor's window fills its box
 		ns := k.NativeEditor(st.ed, label)
 		sig.Editor, sig.Key = ns.ID, c.KeyOf(ns.ID)
 		sig.Focused, sig.Changed = ns.Focused, ns.Changed

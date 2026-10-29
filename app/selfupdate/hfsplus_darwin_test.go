@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gonativeui/internal/testlock"
 )
 
 // hfsVolume mounts a small HFS+ disk image (no root: hdiutil attaches an image
@@ -20,6 +22,9 @@ import (
 // restricted; the volume is detached when the test ends.
 func hfsVolume(t *testing.T) string {
 	t.Helper()
+	// The disk image service is the system's: cmd/gnui's tests (another
+	// process) make and verify images; held until the volume is detached.
+	testlock.Hold(t, "diskimage")
 	dir := realTemp(t)
 	img, mnt := filepath.Join(dir, "hfs.dmg"), filepath.Join(dir, "mnt")
 	if err := os.Mkdir(mnt, 0o755); err != nil {

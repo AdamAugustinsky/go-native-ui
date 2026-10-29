@@ -60,8 +60,13 @@ func settleCopy(w *Window) {
 }
 
 // paste requests a paste and waits for its answer.
+//
+// It waits at least 5 s, whatever wait says: an answer is looked for until
+// then, and a loaded arm64 runner gave none within 1 s
+// (TestSetClipboardTextAndRequestPaste, main 40832829558).
 func pasteOf(t *testing.T, w *Window, tag uint64, wait time.Duration) (Event, string) {
 	t.Helper()
+	wait = max(wait, 5*time.Second)
 	w.RequestPaste(tag)
 	end := time.Now().Add(wait)
 	for {
@@ -216,22 +221,28 @@ func TestRequestPasteWaitsForABusyClipboard(t *testing.T) {
 		}
 	}
 	// Released after 30 ms: a Wait with no other reason to return answers.
+	// The Waits run up to 5 s; a Wait the answer did not wake would sleep
+	// all of it, past the paste's own limit (clipTimeoutNs). The answer used
+	// to be looked for in 1 s, which a loaded runner's worker missed (no
+	// answer at all, 40811975293 arm64 and 40816023392 amd64).
 	time.AfterFunc(30*time.Millisecond, release)
 	start := time.Now()
 	var got Event
-	for end := start.Add(time.Second); got.Kind != EvPaste && time.Now().Before(end); {
+	for end := start.Add(5 * time.Second); got.Kind != EvPaste && time.Now().Before(end); {
 		for _, e := range w.Wait(int64(time.Until(end))) {
 			if e.Kind == EvPaste {
 				got = e
 			}
 		}
 	}
+	d := time.Since(start)
 	if got.Kind != EvPaste || got.Flags != 0 || string(w.Text(got.Text)) != "after the wait" || got.Tag != 3 {
-		t.Fatalf("answer %+v %q", got, w.Text(got.Text))
+		t.Fatalf("answer %+v %q after %v; the clipboard: %s", got, w.Text(got.Text), d, clipHolders())
 	}
-	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Errorf("the answer took %v after the release", d)
+	if limit := time.Duration(clipTimeoutNs + clipGraceNs); d > limit {
+		t.Errorf("the answer took %v after the release, past the paste's limit %v: the Wait was not woken", d, limit)
 	}
+	t.Logf("answered %v after the release", d.Round(time.Millisecond))
 }
 
 func TestRequestPasteFailsWhenTheClipboardStaysBusy(t *testing.T) {
@@ -242,10 +253,10 @@ func TestRequestPasteFailsWhenTheClipboardStaysBusy(t *testing.T) {
 	defer release()
 	start := time.Now()
 	w.RequestPaste(4)
-	got := waitPaste(w, 2*time.Second)
+	got := waitPaste(w, 5*time.Second)
 	d := time.Since(start)
 	if got.Kind != EvPaste || got.Flags&FlagFailed == 0 || got.Tag != 4 {
-		t.Fatalf("answer %+v", got)
+		t.Fatalf("answer %+v after %v; the clipboard: %s", got, d, clipHolders())
 	}
 	if d < timeout/2 || d > timeout+clipGraceNs+500*time.Millisecond {
 		t.Errorf("gave up after %v, want about %v", d, timeout)
@@ -257,9 +268,13 @@ func TestRequestPasteFailsWhenTheClipboardStaysBusy(t *testing.T) {
 	// thread fails the paste clipGraceNs later, and judges a worker that is only
 	// late to return then (a loaded runner) as stuck until it returns. It must
 	// return, though the clipboard is still busy.
-	if ok, _, _ := pumpUntil(w, time.Second, func() bool { return !w.clip.stuck() }); !ok {
-		t.Error("the worker is stuck after a clipboard that was only busy")
+	// How soon is the scheduler's: it was not within 1 s on a loaded arm64
+	// runner (40811975293), so it gets 10 s, and the time is logged.
+	freed := time.Now()
+	if ok, pumps, longest := pumpUntil(w, 10*time.Second, func() bool { return !w.clip.stuck() }); !ok {
+		t.Errorf("the worker is stuck 10 s after a clipboard that was only busy (%d pumps, the longest %v); the clipboard: %s", pumps, longest, clipHolders())
 	}
+	t.Logf("the worker returned %v after the failure", time.Since(freed).Round(time.Millisecond))
 }
 
 // A copy made while the clipboard is busy lands when it is free again, and
@@ -273,9 +288,12 @@ func TestSetClipboardTextWaitsForABusyClipboard(t *testing.T) {
 	SetClipboardText([]byte("new"))
 	w.RequestPaste(5)
 	time.AfterFunc(30*time.Millisecond, release)
-	got := waitPaste(w, 2*time.Second)
+	// The copy and then the paste each have clipTimeoutNs; 5 s covers both
+	// on a loaded runner (no answer in 2 s on arm64, 40805350430).
+	start := time.Now()
+	got := waitPaste(w, 5*time.Second)
 	if got.Kind != EvPaste || got.Tag != 5 || string(w.Text(got.Text)) != "new" {
-		t.Errorf("pasted %q (flags %v), want the copy made while the clipboard was busy", w.Text(got.Text), got.Flags)
+		t.Errorf("pasted %q (flags %v) after %v, want the copy made while the clipboard was busy; the clipboard: %s", w.Text(got.Text), got.Flags, time.Since(start), clipHolders())
 	}
 }
 
@@ -754,9 +772,44 @@ func TestCancelledCopyLeavesTheClipboardAlone(t *testing.T) {
 
 var (
 	pGetClipboardOwner       = win32.Proc(user32, "GetClipboardOwner")
+	pGetOpenClipboardWindow  = win32.Proc(user32, "GetOpenClipboardWindow")
 	pGetWindowThreadProcessW = win32.Proc(user32, "GetWindowThreadProcessId")
 	pGetCurrentThreadId      = win32.Proc(kernel32, "GetCurrentThreadId")
+	pOpenProcessT            = win32.Proc(kernel32, "OpenProcess")
+	pQueryFullProcessImageW  = win32.Proc(kernel32, "QueryFullProcessImageNameW")
+	pCloseHandleT            = win32.Proc(kernel32, "CloseHandle")
 )
+
+// clipHolders says which window has the clipboard open and which owns it,
+// and whose they are (windowOwner), so that a failure tells a busy clipboard
+// of another program from a slow one of ours.
+func clipHolders() string {
+	return fmt.Sprintf("open by %s, owned by %s", windowOwner(win32.Call(pGetOpenClipboardWindow)), windowOwner(win32.Call(pGetClipboardOwner)))
+}
+
+// windowOwner names a window and its process: this one, or another program
+// by its image name.
+func windowOwner(hwnd uintptr) string {
+	if hwnd == 0 {
+		return "none"
+	}
+	var pid uint32 // syscall.SyscallN, unlike win32.Call, keeps a local the call writes valid
+	syscall.SyscallN(pGetWindowThreadProcessW, hwnd, uintptr(unsafe.Pointer(&pid)))
+	if int(pid) == os.Getpid() {
+		return fmt.Sprintf("%#x of this process", hwnd)
+	}
+	name := "?"
+	const queryLimited = 0x1000
+	if h := win32.Call(pOpenProcessT, queryLimited, 0, uintptr(pid)); h != 0 {
+		buf := make([]uint16, 512)
+		n := uint32(len(buf))
+		if r, _, _ := syscall.SyscallN(pQueryFullProcessImageW, h, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n))); win32.Bool(r) {
+			name = filepath.Base(syscall.UTF16ToString(buf[:n]))
+		}
+		win32.Call(pCloseHandleT, h)
+	}
+	return fmt.Sprintf("%#x of process %d (%s)", hwnd, pid, name)
+}
 
 // What a copy puts on the clipboard is owned by a window of the worker's
 // thread, not by the app's window. The system frees the process's clipboard

@@ -153,3 +153,26 @@ func osOpenSettings() error {
 	cf.Msg(fr, cls, cf.Sel(fr, "openSystemSettingsLoginItems"))
 	return nil
 }
+
+// A RunValue is Windows' kind of login item.
+
+func osStatusItem(i Item) (State, error) {
+	if i.run != "" {
+		return NotFound, ErrUnsupported
+	}
+	return osStatus(i.agent)
+}
+
+func osEnableItem(i Item) (State, error) {
+	if i.run != "" {
+		return NotFound, ErrUnsupported
+	}
+	return osEnable(i.agent)
+}
+
+func osDisableItem(i Item) (State, error) {
+	if i.run != "" {
+		return NotFound, ErrUnsupported
+	}
+	return osDisable(i.agent)
+}

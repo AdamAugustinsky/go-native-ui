@@ -96,6 +96,8 @@ var (
 	rsReplace      = objc.Sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:")
 	rsGetBytes     = objc.Sel("getBytes:bytesPerRow:fromRegion:mipmapLevel:")
 	rsLocalizedErr = objc.Sel("localizedDescription")
+	rsCBError      = objc.Sel("error")
+	rsCode         = objc.Sel("code")
 	rsNewQueue     = objc.Sel("newCommandQueue")
 	rsBlitEncoder  = objc.Sel("blitCommandEncoder")
 	rsCopyBufTex   = objc.Sel("copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:")
@@ -177,6 +179,7 @@ type stagedCopy struct {
 type retiredTex struct {
 	tex    objc.ID
 	serial uint64 // the last frame encoded when it was freed
+	bytes  int64  // its memory, for TextureBytes (a YUV texture's on its first plane)
 }
 
 // Renderer draws DrawLists with Metal. All methods share objc.F, so they
@@ -184,6 +187,8 @@ type retiredTex struct {
 // to its OS thread (runtime.LockOSThread): Encode and RenderToRGBA push and
 // pop an autorelease pool, and pools are per OS thread.
 type Renderer struct {
+	lossState // DeviceLost, Epoch: see devloss.go
+
 	device, queue     objc.ID
 	ownsDevice        bool
 	pipeline, sampler objc.ID
@@ -194,6 +199,7 @@ type Renderer struct {
 	ids               texTable
 	textures          []objc.ID     // by index
 	kinds             []TextureKind // by index
+	texW, texH        []int         // by index: the size of a texture made by NewTexture
 	lastUse           []uint64      // by index: serial of the last frame that bound it (0 = none)
 	xtex              []xtex        // by index: a YUV texture's planes (external_darwin.go)
 	ext               extKit        // pixel-buffer imports
@@ -226,19 +232,35 @@ func NewRenderer(device, queue uintptr) (*Renderer, error) {
 	r.ids = newTexTable()
 	r.textures = make([]objc.ID, 0, initialTextures)
 	r.kinds = make([]TextureKind, 0, initialTextures)
+	r.texW = make([]int, 0, initialTextures)
+	r.texH = make([]int, 0, initialTextures)
 	r.lastUse = make([]uint64, 0, initialTextures)
 	r.xtex = make([]xtex, 0, initialTextures)
+	if err := r.build(); err != nil {
+		return nil, err
+	}
 
+	// Texture 0: 1×1 white RGBA texel that shape quads bind.
+	t0 := r.NewTexture(TexRGBA8, 1, 1)
+	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
+	return r, nil
+}
+
+// build creates what the device holds besides the textures: the quad
+// pipeline, the sampler, the render pass descriptor and the texture a freed
+// id samples. The caller has an autorelease pool.
+func (r *Renderer) build() error {
+	F := objc.F
 	// the quad pipeline: Prewarm's, or built here
 	if r.pipeline = warmPipeline(r.device); r.pipeline == 0 {
 		var fail buildFail
 		switch r.pipeline, fail = quadPipeline(F, r.device, &nsErrorOut); fail {
 		case buildCompile:
-			return nil, fmt.Errorf("gpu: compiling shaders: %s", nsErrorText())
+			return fmt.Errorf("gpu: compiling shaders: %s", nsErrorText())
 		case buildEntry:
-			return nil, errors.New("gpu: shader entry points missing")
+			return errors.New("gpu: shader entry points missing")
 		case buildPipeline:
-			return nil, fmt.Errorf("gpu: creating pipeline: %s", nsErrorText())
+			return fmt.Errorf("gpu: creating pipeline: %s", nsErrorText())
 		}
 	}
 
@@ -255,14 +277,11 @@ func NewRenderer(device, queue uintptr) (*Renderer, error) {
 	objc.Send1(r.color0, rsSetLoad, 2)  // Clear
 	objc.Send1(r.color0, rsSetStore, 1) // Store
 
-	// Texture 0: 1×1 white RGBA texel that shape quads bind.
-	t0 := r.NewTexture(TexRGBA8, 1, 1)
-	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
 	// The texture a quad naming a freed texture samples: one transparent texel.
 	r.empty = r.newMTLTexture(TexRGBA8, 1, 1)
 	argRegion(objc.F.Reset().Arg(uintptr(r.empty)).Arg(uintptr(rsReplace)), 0, 0, 1, 1).
 		Arg(0).Arg(uintptr(unsafe.Pointer(&emptyTexel[0]))).Arg(4).Call(objc.MsgSend)
-	return r, nil
+	return nil
 }
 
 // emptyTexel is the content of Renderer.empty (a global: C reads it).
@@ -309,7 +328,9 @@ const (
 // once, so creating textures in the frame path allocates on the Go heap only
 // then (Metal allocates its own memory).
 func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
-	_, id := r.addTexture(r.newMTLTexture(kind, w, h), kind)
+	i, id := r.addTexture(r.newMTLTexture(kind, w, h), kind)
+	r.texW[i], r.texH[i] = w, h
+	r.ids.addBytes(i, texBytes(kind, w, h))
 	return id
 }
 
@@ -343,14 +364,13 @@ func (r *Renderer) FreeTexture(t TextureID) {
 	if !ok || i == 0 || (r.kinds[i] == texYUV && !r.xtex[i].owned) { // an import is the renderer's to end
 		return
 	}
-	r.retiring = append(r.retiring, retiredTex{r.textures[i], r.serial})
+	r.retiring = append(r.retiring, retiredTex{r.textures[i], r.serial, r.ids.remove(i)})
 	for _, p := range r.xtex[i].planes {
 		if p != 0 {
-			r.retiring = append(r.retiring, retiredTex{p, r.serial})
+			r.retiring = append(r.retiring, retiredTex{p, r.serial, 0})
 		}
 	}
 	r.textures[i], r.xtex[i] = 0, xtex{}
-	r.ids.remove(i)
 	r.collect()
 }
 
@@ -358,6 +378,19 @@ func (r *Renderer) FreeTexture(t TextureID) {
 // ones whose release still waits for the GPU.
 func (r *Renderer) TextureCounts() (live, retiring int) {
 	return r.ids.n - r.ext.reserved, len(r.retiring)
+}
+
+// TextureBytes reports the memory of the renderer's textures: the live ones
+// (atlas pages and standalone textures) and the freed ones that wait for the
+// GPU, as width × height × bytes per texel (no mip levels, no driver padding).
+// Texture 0 (4 bytes) is counted; the renderer's own targets and a pixel-buffer
+// import's memory are not.
+func (r *Renderer) TextureBytes() int64 {
+	n := r.ids.used
+	for _, x := range r.retiring {
+		n += x.bytes
+	}
+	return n
 }
 
 // collect retires the ring slots whose command buffers have completed,
@@ -369,11 +402,13 @@ func (r *Renderer) collect() {
 	for i := range r.slots {
 		s := &r.slots[i]
 		if s.ucb != 0 && objc.Send(s.ucb, rsStatus) >= 4 { // Completed, Error
+			r.noteCompleted(s.ucb)
 			objc.Release(s.ucb)
 			s.ucb = 0
 			s.stageLen = 0
 		}
 		if s.cb != 0 && objc.Send(s.cb, rsStatus) >= 4 {
+			r.noteCompleted(s.cb)
 			objc.Release(s.cb)
 			s.cb = 0
 			r.releaseLeases(s)
@@ -397,6 +432,21 @@ func (r *Renderer) collect() {
 	}
 	clear(r.retiring[n:])
 	r.retiring = r.retiring[:n]
+}
+
+// mtlErrorDeviceRemoved is MTLCommandBufferErrorDeviceRemoved: the GPU was
+// removed while the command buffer ran.
+const mtlErrorDeviceRemoved = 11
+
+// noteCompleted reads the outcome of a finished command buffer: one that
+// failed because the device was removed makes the renderer lost.
+func (r *Renderer) noteCompleted(cb objc.ID) {
+	if objc.Send(cb, rsStatus) != 5 { // Error
+		return
+	}
+	if e := objc.Send(cb, rsCBError); e != 0 && objc.Send(e, rsCode) == mtlErrorDeviceRemoved {
+		r.lost = true
+	}
 }
 
 // Collect releases, without waiting, what finished frames held: the leases
@@ -703,6 +753,7 @@ func (r *Renderer) retire(s *ringSlot) {
 		if st := objc.Send(s.cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
 			objc.Send(s.cb, rsWait)
 		}
+		r.noteCompleted(s.cb)
 		objc.Release(s.cb)
 		s.cb = 0
 	}
@@ -946,6 +997,141 @@ func (r *Renderer) newTarget(w, h int) {
 	if r.offscreen == 0 {
 		panic("gpu: offscreen target creation failed")
 	}
+}
+
+// DropDevice does nothing on this OS: the old device's objects are released by
+// Rebuild. (Direct3D 11 needs it before Surface.Recover.)
+func (r *Renderer) DropDevice() {}
+
+// Rebuild makes the renderer work again after its device was lost
+// (DeviceLost): device and queue are the new id<MTLDevice> and
+// id<MTLCommandQueue> (Surface.Device and Surface.Queue after
+// Surface.Recover), which the caller keeps owning. A renderer made by
+// NewOffscreenRenderer creates a device of its own again and ignores them
+// (pass 0).
+//
+// It waits for the frames in flight, releases what the renderer made on the
+// old device and builds the pipeline on the new one. Every live texture is
+// created again under the same id, size and kind, empty except for texture 0
+// (a YUV texture of NewYUVTexture too: StageYUV it again): the owners of the
+// others upload them again when Epoch changes (see devloss.go). Pixel-buffer
+// imports of the frame being built are dropped. On an error the renderer stays
+// lost and Rebuild may be tried again.
+func (r *Renderer) Rebuild(device, queue uintptr) error {
+	if r.destroyed {
+		return errors.New("gpu: Rebuild: the renderer is destroyed")
+	}
+	if err := loadMetal(); err != nil {
+		return err
+	}
+	F := objc.F
+	pool := F.Call0(objc.PoolPush)
+	err := r.rebuild(device, queue)
+	F.Call1(objc.PoolPop, pool)
+	r.lost = err != nil
+	if err == nil {
+		r.epoch++
+	}
+	return err
+}
+
+func (r *Renderer) rebuild(device, queue uintptr) error {
+	for i := range r.slots {
+		s := &r.slots[i]
+		s.stageShrink = 0
+		r.retire(s)
+		if s.buf != 0 {
+			objc.Release(s.buf)
+		}
+		if s.stage != 0 {
+			objc.Release(s.stage)
+		}
+		*s = ringSlot{uses: s.uses[:0], copies: s.copies[:0]}
+	}
+	if r.waker != 0 {
+		objc.Send(r.waker, rsWait)
+		objc.Release(r.waker)
+		r.waker = 0
+	}
+	r.dropPending()
+	if r.ext.cache != 0 {
+		objc.F.Call1(cv.cfRelease, r.ext.cache)
+		r.ext.cache = 0
+	}
+	for i := range r.textures {
+		if !r.ids.live[i] {
+			continue
+		}
+		x := &r.xtex[i]
+		if r.kinds[i] == texYUV && !x.owned { // an import index: nothing of ours
+			continue
+		}
+		for _, p := range x.planes {
+			if p != 0 {
+				objc.Release(p)
+			}
+		}
+		x.planes = [2]objc.ID{}
+		if r.textures[i] != 0 {
+			objc.Release(r.textures[i])
+			r.textures[i] = 0
+		}
+	}
+	for _, x := range r.retiring {
+		objc.Release(x.tex)
+	}
+	clear(r.retiring)
+	r.retiring = r.retiring[:0]
+	clear(r.lastUse)
+	r.destroyBackdrops()
+	r.bd = backdropKit{}
+	for _, o := range []objc.ID{r.offscreen, r.pipeline, r.sampler, r.rpd, r.empty} {
+		if o != 0 {
+			objc.Release(o)
+		}
+	}
+	r.offscreen, r.pipeline, r.sampler, r.rpd, r.empty, r.offW, r.offH = 0, 0, 0, 0, 0, 0, 0
+	if r.ownsDevice {
+		objc.Release(r.queue)
+		objc.Release(r.device)
+		r.queue, r.device = 0, 0
+		dev := objc.F.Call0(createDevice)
+		if dev == 0 {
+			return ErrNoDevice
+		}
+		r.device = objc.ID(dev)
+		r.queue = objc.Send(r.device, rsNewQueue)
+	} else {
+		if device == 0 || queue == 0 {
+			return ErrNoDevice
+		}
+		r.device, r.queue = objc.ID(device), objc.ID(queue)
+	}
+	if err := r.build(); err != nil {
+		return err
+	}
+	if r.ext.reserved > 0 { // imports were used: a texture cache on the new device
+		cv.out = 0
+		if st := int32(objc.F.Call5(cv.cacheCreate, 0, 0, uintptr(r.device), 0, uintptr(unsafe.Pointer(&cv.out)))); st != 0 || cv.out == 0 {
+			return errors.New("gpu: CVMetalTextureCacheCreate failed")
+		}
+		r.ext.cache = cv.out
+	}
+	for i := range r.textures {
+		if !r.ids.live[i] {
+			continue
+		}
+		switch x := &r.xtex[i]; {
+		case r.kinds[i] == texYUV && !x.owned:
+		case r.kinds[i] == texYUV:
+			r.textures[i] = r.newPlane(mtlR8Unorm, int(x.w), int(x.h))
+			r.newChromaPlanes(x)
+		default:
+			r.textures[i] = r.newMTLTexture(r.kinds[i], r.texW[i], r.texH[i])
+		}
+	}
+	r.Upload(0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
+	return nil
 }
 
 // Destroy waits for in-flight frames and releases everything the renderer

@@ -6,7 +6,9 @@ package ui
 //
 //  1. The focused text field. At Begin, when the focused box is a text field
 //     that was built in the previous frame, the keys it handles are claimed
-//     for it: every key-down without the primary modifier except Tab
+//     for it: every key-down without the primary modifier except Tab, F10
+//     (with or without Shift: the drawn menu bar's and a context menu's) and,
+//     off macOS, Alt with a letter or digit (a drawn menu bar's mnemonic)
 //     (characters, caret moves, Enter and Escape, which the field reports),
 //     and with it A, C, X, V, Y (not on macOS), Z with or without Shift (undo,
 //     redo), and the primary caret moves and deletes. On macOS a chord with
@@ -63,6 +65,54 @@ func (c *Context) TakeKey(code KeyCode, mods Mods) bool {
 		e := &c.in.Keys[i]
 		if e.Down && e.Code == code && e.Mods == mods && c.claimed&(1<<uint(i)) == 0 {
 			c.claimed |= 1 << uint(i)
+			return true
+		}
+	}
+	return false
+}
+
+// TakeAltTap reports whether the Alt key was pressed and released on its own
+// since the last frame (Input.AltTap) and nobody took it yet this frame. The
+// drawn menu bar takes it to move the keyboard to its first title, as Windows
+// does.
+func (c *Context) TakeAltTap() bool {
+	if !c.in.AltTap || c.altTaken {
+		return false
+	}
+	c.altTaken = true
+	return true
+}
+
+// DropTyped keeps the character a key typed out of the text fields: a drawn
+// menu that chose an item by the key's letter (a mnemonic) calls it after
+// claiming the key, so that the letter does not land in the field the focus
+// goes back to. It removes the first r of this frame's typed text (ASCII, any
+// case), or, when the platform delivers the character after the key, of the
+// next frame's.
+func (c *Context) DropTyped(r rune) {
+	if !c.dropTypedIn(r) {
+		c.dropNext = r
+	}
+}
+
+// dropTypedIn removes the first r (ASCII, any case) from this frame's typed
+// text and reports whether there was one.
+func (c *Context) dropTypedIn(r rune) bool {
+	if r <= 0 || r >= 0x80 {
+		return false
+	}
+	in := &c.in
+	lo := func(b byte) byte {
+		if b >= 'A' && b <= 'Z' {
+			return b + 'a' - 'A'
+		}
+		return b
+	}
+	for i := 0; i < in.NText; i++ {
+		if lo(in.Text[i]) == lo(byte(r)) {
+			copy(in.Text[i:], in.Text[i+1:in.NText])
+			in.NText--
+			in.Text[in.NText] = 0
 			return true
 		}
 	}
@@ -140,7 +190,15 @@ func fieldWants(e *KeyEvent) bool {
 		return false
 	}
 	if !editMods(e.Mods) {
-		return e.Code != KeyTab
+		switch {
+		case e.Code == KeyTab:
+			return false
+		case e.Code == KeyF10:
+			return false // the menu bar's key (and Shift+F10 a context menu's), as in Windows
+		case !macKeys && e.Mods&^ModShift == ModAlt && isAlnum(e.Code):
+			return false // Alt+letter types nothing in a field; it opens the drawn menu bar's menu
+		}
+		return true
 	}
 	switch e.Code {
 	case 'A', 'C', 'X', 'V':
@@ -157,6 +215,9 @@ func fieldWants(e *KeyEvent) bool {
 	}
 	return false
 }
+
+// isAlnum reports whether code is a letter or a digit key.
+func isAlnum(code KeyCode) bool { return code >= 'A' && code <= 'Z' || code >= '0' && code <= '9' }
 
 // FieldClaims reports whether the focused text field will claim key event e
 // when it arrives in the next frame, as that frame's Begin decides it (see

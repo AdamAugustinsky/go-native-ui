@@ -131,6 +131,10 @@ type overlay struct {
 	opened bool // it was not built in the previous frame
 	anchor [4]float32
 	opts   OverlayOpts
+	// avoided: AvoidHosts left it out of this frame, because it lay over the
+	// host whose clipped rectangle is avoidedHost.
+	avoided     bool
+	avoidedHost [4]float32
 }
 
 var overlayBase = HashString(0, "ui:overlay")
@@ -369,7 +373,10 @@ func (c *Context) placeOverlay(b *box) {
 
 // avoidHosts hides, in the finished layout, the AvoidHosts overlays that lie
 // over a host (End, after layout, before the hidden marks are spread to the
-// descendants).
+// descendants). Another frame is asked for only when the overlap is new: an
+// overlay already left out for the same host rectangle in the previous frame
+// is one whose owner cannot place it clear, and asking again would draw
+// forever.
 func (c *Context) avoidHosts() {
 	if c.shell.frame != c.frame || c.shell.nHosts == 0 {
 		return
@@ -388,11 +395,25 @@ func (c *Context) avoidHosts() {
 			}
 			if !empty(intersect(b.rect, c.clippedRect(h))) {
 				c.hide(b, b.origin[0], b.origin[1])
-				c.animating = true
+				ov.avoided, ov.avoidedHost = true, c.clippedRect(h)
+				if !c.avoidedBefore(ov) {
+					c.animating = true
+				}
 				break
 			}
 		}
 	}
+}
+
+// avoidedBefore reports whether the overlay ov, with the same key, was left
+// out over the same host rectangle in the previous frame.
+func (c *Context) avoidedBefore(ov *overlay) bool {
+	for i := 0; i < c.nOvPrev; i++ {
+		if p := &c.ovPrev[i]; p.key == ov.key {
+			return p.avoided && p.avoidedHost == ov.avoidedHost
+		}
+	}
+	return false
 }
 
 // overlayFocus moves the focus for the overlays that closed and opened in this

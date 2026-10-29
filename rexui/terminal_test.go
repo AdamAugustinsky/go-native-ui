@@ -178,6 +178,9 @@ func TestTerminalViewSelectionAndScroll(t *testing.T) {
 	g.frame()
 	g.in.AddScroll(0, -1, false)
 	g.frame()
+	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
+		return // no mouse reporting on windows/arm64 (term, D74)
+	}
 	if got := string(s.TakeInput(nil)); len(got) < 6 || got[:4] != "\x1b[<6" {
 		t.Errorf("wheel in mouse mode sent %q", got)
 	}

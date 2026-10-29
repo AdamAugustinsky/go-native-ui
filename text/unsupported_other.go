@@ -42,6 +42,9 @@ func (s *System) PageInfo(int) (w, h int, color bool) { return 0, 0, false }
 // ClearDirty does nothing on this OS.
 func (s *System) ClearDirty(int) {}
 
+// DirtyAll does nothing on this OS.
+func (s *System) DirtyAll() {}
+
 // Close does nothing on this OS.
 func (s *System) Close() {}
 

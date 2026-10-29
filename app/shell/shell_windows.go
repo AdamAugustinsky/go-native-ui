@@ -207,14 +207,35 @@ var (
 	_ [56 - unsafe.Sizeof(shFileOp{})]struct{}
 )
 
-// trash moves p to the Recycle Bin with SHFileOperationW. It does not pass
-// FOF_NOCONFIRMATION: when the bin cannot take the file (too big, bin turned
-// off for the drive) the shell would otherwise delete it for good without
-// asking; with FOF_WANTNUKEWARNING it asks, and a refusal is an error.
+// trash moves p to the Recycle Bin, checking first what it is and afterwards
+// what went (trashbind_windows.go).
 func (osSystem) trash(p string) error {
 	if err := ready(); err != nil {
 		return err
 	}
+	h, err := openHandle(p, true)
+	if err != nil {
+		return &os.PathError{Op: "trash", Path: p, Err: err}
+	}
+	defer h.close()
+	if h.protected() {
+		return &os.PathError{Op: "trash", Path: p, Err: ErrInvalid}
+	}
+	beforeMove()
+	if err := recycle(h.path); err != nil {
+		return &os.PathError{Op: "trash", Path: p, Err: err}
+	}
+	if known, in := h.inBin(); known && !in {
+		return &os.PathError{Op: "trash", Path: p, Err: errors.New("the path was changed while it was moved, and another file went to the Recycle Bin; restore it from there")}
+	}
+	return nil
+}
+
+// recycle moves p to the Recycle Bin with SHFileOperationW. It does not pass
+// FOF_NOCONFIRMATION: when the bin cannot take the file (too big, bin turned
+// off for the drive) the shell would otherwise delete it for good without
+// asking; with FOF_WANTNUKEWARNING it asks, and a refusal is an error.
+func recycle(p string) error {
 	from, err := syscall.UTF16FromString(p)
 	if err != nil {
 		return ErrInvalid
@@ -229,9 +250,9 @@ func (osSystem) trash(p string) error {
 	runtime.KeepAlive(from)
 	switch {
 	case uint32(r) != 0: // an int result: only the low 32 bits are defined
-		return &os.PathError{Op: "trash", Path: p, Err: fmt.Errorf("the shell refused (error %#x)", uint32(r))}
+		return fmt.Errorf("the shell refused (error %#x)", uint32(r))
 	case op.AnyOperationsAborted != 0:
-		return &os.PathError{Op: "trash", Path: p, Err: errors.New("canceled")}
+		return errors.New("canceled")
 	}
 	return nil
 }

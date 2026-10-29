@@ -105,3 +105,217 @@ func TestOnContextMenu(t *testing.T) {
 		t.Error("a menu was requested without native menus")
 	}
 }
+
+// Without native menus ContextMenu draws the menu: a right-click opens it at
+// the pointer with the items built for that click, a click on an item reports
+// it once and closes the menu, a disabled item does nothing, a submenu opens
+// under the pointer, Escape and a frame that does not build it close it, and
+// Shift+F10 opens it from the keyboard with the first item focused.
+func TestContextMenuDrawn(t *testing.T) {
+	var built, item int
+	var chosen, show bool
+	show = true
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		if !show {
+			return
+		}
+		s := rexui.ChatListRow(g.k, "r1", "Ada", "Lunch?", "10:42", rexui.ChatRowOpts{})
+		if i, ok := rexui.ContextMenu(g.k, s.ID, func(m *[]ui.MenuItem) {
+			built++
+			*m = append(*m,
+				ui.MenuItem{ID: cmArchive, Title: "Archive", Key: 'e', Mods: ui.ModCtrl},
+				ui.MenuItem{ID: 3, Title: "Mute", Disabled: true},
+				ui.MenuSeparator,
+				ui.MenuItem{Title: "Labels", Sub: []ui.MenuItem{{ID: 100, Title: "Family", Mark: ui.MarkOn}, {ID: cmLabelWork, Title: "Work"}}},
+				ui.MenuItem{ID: 9, Title: "Delete", Destructive: true})
+		}); ok {
+			item, chosen = i, true
+		}
+	}))
+	has := func(role ui.Role, name string) (ui.SemNode, bool) {
+		g.c.Semantics(&g.sem)
+		for _, n := range g.sem.Nodes {
+			if n.Role == role && string(g.sem.Text(n.Name)) == name {
+				return n, true
+			}
+		}
+		return ui.SemNode{}, false
+	}
+	row := g.node(ui.RoleListItem, "Ada")
+	x, y := centre(row)
+	rightClick := func() {
+		g.in.MouseX, g.in.MouseY = x, y
+		g.frame()
+		g.in.SetButton(ui.ButtonRight, true, 1)
+		g.frame()
+		g.in.SetButton(ui.ButtonRight, false, 0)
+		g.frame()
+		g.frame()
+	}
+
+	rightClick()
+	if built != 1 {
+		t.Fatalf("items built %d times, want once", built)
+	}
+	if _, ok := g.c.TakeMenuRequest(); ok {
+		t.Error("a native menu was requested without native menus")
+	}
+	arch, ok := has(ui.RoleMenuItem, "Archive")
+	if !ok {
+		t.Fatal("the drawn menu did not open")
+	}
+	if arch.Bounds[0] < x-1 || arch.Bounds[1] < y-1 {
+		t.Errorf("the menu's first item at %v, want it below and right of the click (%v, %v)", arch.Bounds, x, y)
+	}
+	if n, _ := has(ui.RoleMenuItemCheckbox, "Family"); n.Role != 0 {
+		t.Error("the submenu is open before it was asked for")
+	}
+
+	// a disabled item: nothing
+	mute, _ := has(ui.RoleMenuItem, "Mute")
+	g.click(centre(mute))
+	if chosen {
+		t.Fatal("a disabled item was chosen")
+	}
+	if _, ok := has(ui.RoleMenuItem, "Archive"); !ok {
+		t.Fatal("a click on a disabled item closed the menu")
+	}
+
+	// the submenu opens under the pointer; its item is chosen
+	labels, _ := has(ui.RoleMenuItem, "Labels")
+	g.in.MouseX, g.in.MouseY = centre(labels)
+	g.frames(3)
+	work, ok := has(ui.RoleMenuItem, "Work")
+	if !ok {
+		t.Fatal("hovering Labels did not open its submenu")
+	}
+	if fam, ok := has(ui.RoleMenuItemCheckbox, "Family"); !ok || fam.State&ui.SemChecked == 0 {
+		t.Errorf("Family is %+v (%v), want a checked item", fam, ok)
+	}
+	wx, wy := centre(work)
+	g.in.MouseX = wx // along the row first, as a pointer does
+	g.frame()
+	g.click(wx, wy)
+	if !chosen || item != cmLabelWork {
+		t.Fatalf("chosen %v item %d, want %d", chosen, item, cmLabelWork)
+	}
+	chosen = false
+	g.frames(2)
+	if chosen {
+		t.Error("the choice was delivered twice")
+	}
+	if _, ok := has(ui.RoleMenuItem, "Archive"); ok {
+		t.Error("the menu stayed open after a choice")
+	}
+
+	// Escape closes it with no choice
+	rightClick()
+	g.key(ui.KeyEscape, 0)
+	g.frame()
+	if _, ok := has(ui.RoleMenuItem, "Archive"); ok || chosen {
+		t.Errorf("after Escape: open %v, chosen %v", ok, chosen)
+	}
+
+	// a frame that does not build it closes it
+	rightClick()
+	show = false
+	g.frames(2)
+	show = true
+	g.frames(2)
+	if _, ok := has(ui.RoleMenuItem, "Archive"); ok {
+		t.Error("the menu came back after its row was gone for a frame")
+	}
+
+	// the keyboard: Shift+F10 on the focused row opens it with the first
+	// item focused; Down skips the disabled item and the separator, Enter
+	// opens the submenu, Right as well with its first item focused
+	g.click(x, y) // focus the row
+	g.key(ui.KeyF10, ui.ModShift)
+	g.frame()
+	if _, ok := has(ui.RoleMenuItem, "Archive"); !ok {
+		t.Fatal("Shift+F10 did not open the menu")
+	}
+	g.key(ui.KeyDown, 0)
+	g.frame()
+	g.key(ui.KeyRight, 0)
+	g.frames(2)
+	g.key(ui.KeyDown, 0)
+	g.frame()
+	g.key(ui.KeyEnter, 0)
+	g.frame()
+	if !chosen || item != cmLabelWork {
+		t.Fatalf("by keyboard: chosen %v item %d, want %d", chosen, item, cmLabelWork)
+	}
+
+	// idle, closed: nothing allocated
+	g.frames(3)
+	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
+		t.Errorf("an idle frame allocates %v times", n)
+	}
+}
+
+// The drawn menu's mnemonics: an item's Key without modifiers is its letter
+// (Novo (N)), the others get a free letter of their titles; typing one, with
+// or without Alt, chooses the item (or opens the submenu, whose letters then
+// work), and a disabled item's letter does nothing. Apps need no letter
+// handling of their own.
+func TestContextMenuMnemonics(t *testing.T) {
+	var item int
+	var chosen bool
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		s := rexui.ChatListRow(g.k, "r1", "Ada", "Lunch?", "10:42", rexui.ChatRowOpts{})
+		if i, ok := rexui.ContextMenu(g.k, s.ID, func(m *[]ui.MenuItem) {
+			*m = append(*m,
+				ui.MenuItem{ID: 1, Title: "Novo", Key: 'N'},
+				ui.MenuItem{ID: 2, Title: "Limpar a tela", Key: 'l'},
+				ui.MenuItem{ID: 3, Title: "Arquivar", Key: 'e', Mods: ui.ModCtrl},
+				ui.MenuItem{ID: 4, Title: "Mudo", Disabled: true},
+				ui.MenuSeparator,
+				ui.MenuItem{Title: "Etiquetas", Sub: []ui.MenuItem{{ID: 100, Title: "Família"}, {ID: 101, Title: "Trabalho"}}})
+		}); ok {
+			item, chosen = i, true
+		}
+	}))
+	row := g.node(ui.RoleListItem, "Ada")
+	x, y := centre(row)
+	open := func() {
+		g.click(x, y)
+		g.key(ui.KeyF10, ui.ModShift)
+		g.frame()
+	}
+	letter := func(l byte, mods ui.Mods) {
+		g.in.PushKey(ui.KeyEvent{Code: ui.KeyCode(l), Mods: mods, Down: true, Char: rune(l) + 'a' - 'A'})
+		g.frame()
+	}
+	for _, c := range []struct {
+		keys string
+		mods ui.Mods
+		want int
+	}{
+		{"L", 0, 2},         // its Key
+		{"N", ui.ModAlt, 1}, // with Alt
+		{"A", 0, 3},         // a Key with a modifier is a shortcut's hint: A, its title's first letter
+		{"ET", 0, 101},      // the submenu, then its item
+	} {
+		open()
+		chosen = false
+		for i := range c.keys {
+			letter(c.keys[i], c.mods)
+			g.frame()
+		}
+		if !chosen || item != c.want {
+			t.Errorf("%q with mods %v: chosen %v item %d, want %d", c.keys, c.mods, chosen, item, c.want)
+		}
+		g.frames(2)
+	}
+	open()
+	chosen = false
+	letter('M', 0) // disabled
+	g.frames(2)
+	if chosen {
+		t.Errorf("a disabled item's letter chose %d", item)
+	}
+	if n := testing.AllocsPerRun(20, g.frame); n != 0 {
+		t.Errorf("a frame of the open menu allocates %v times", n)
+	}
+}

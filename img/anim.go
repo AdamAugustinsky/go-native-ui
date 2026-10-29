@@ -6,8 +6,8 @@ import (
 
 // # Animated images (C6)
 //
-// A Key with the Animate flag names an animated image (a GIF, an APNG, and
-// on macOS an animated HEIC, HEICS or WebP). The first request decodes the
+// A Key with the Animate flag names an animated image (a GIF, an APNG, an
+// animated WebP, and on macOS an animated HEIC or HEICS). The first request decodes the
 // first frame like any image, and builds the animation's decoder on the
 // worker: the file is indexed, no other frame is decoded. After that the
 // cache decodes frames only while the image is drawn in view, a few ahead of
@@ -54,7 +54,11 @@ import (
 // allocated per frame. In memory it holds at most Options.AnimRing decoded
 // frames (default 3, the one showing and two ahead), counted in
 // Stats.CPUBytes and never trimmed, however many frames the file has. The
-// encoded file is held for the animation's life. An animation whose canvas
+// encoded file is held for the animation's life. Over the CPU budget, an
+// animation that the app builds but UseAnimated reports not shown (clipped
+// in a list that is not virtualised) gives back its waiting frames and its
+// decoder's canvases, least recently used first; it rebuilds them, replaying
+// from the first frame, when it is shown again. An animation whose canvas
 // has more than 25 megapixels, or whose canvas times its frames would
 // decode to more than 2 GiB over one play, is refused (ErrTooLarge): a frame
 // is composited at the canvas size, with one more canvas to restore, so the
@@ -252,6 +256,8 @@ type anim struct {
 	tw, th, pad int32   // the display size every frame is decoded at
 	bytes       int64   // one decoded frame, with its border
 	mem         int64   // what the decoder keeps between frames: counted in the cache's CPU bytes
+	fullMem     int64   // mem when the decoder has its canvases (mem is less while it is trimmed)
+	trimmed     bool    // the decoder's canvases were freed (trimAnim); the next frame job builds them
 
 	ring  [maxRing]ringSlot // decoded frames not yet shown, in order of seq
 	nring int
@@ -270,6 +276,7 @@ type anim struct {
 	lastWake int64 // what it asked to be woken in
 
 	lastTick uint64 // the cache frame of the last UseAnimated while shown
+	hidden   bool   // the last UseAnimated said the image is not shown (Present.Visible false)
 	inflight bool   // a frame job is out
 	started  bool   // due is valid
 	stalled  bool   // a frame is due and not decoded: the next one to arrive starts its time then
@@ -341,6 +348,9 @@ func (c *Cache) dropRing(a *anim) {
 func (c *Cache) UseAnimated(h Handle, p Present) (tex gpu.TextureID, uv [4]float32, st State, wake int64) {
 	tex, uv, st = c.Use(h)
 	a := c.animOf(h)
+	if a != nil {
+		a.hidden = !p.Visible // (a drawn-in-view animation is shown; a built one that is clipped is only in use)
+	}
 	if a == nil || st != Ready {
 		return tex, uv, st, 0
 	}
@@ -459,6 +469,10 @@ func (c *Cache) animSubmit(i int32, a *anim) {
 	}
 	a.inflight, a.putsAtSubmit = true, putsAt
 	a.next++
+	if a.trimmed { // the job builds the canvases again
+		c.cpuUsed += a.fullMem - a.mem
+		a.mem, a.trimmed = a.fullMem, false
+	}
 }
 
 // pollFrames takes the frame decodes the workers have finished.
@@ -523,14 +537,45 @@ func (c *Cache) reclaimHidden(keep *anim) (n int) {
 			continue
 		}
 		n += b.nring
-		b.next = b.ring[0].seq // (a frame in flight is of the epoch before: stale)
-		b.epoch++
-		c.dropRing(b)
-		if b.blocked {
-			c.unblock(b)
-		}
+		c.releaseRing(b)
 	}
 	return n
+}
+
+// releaseRing gives back the frames waiting in the ring of animation b, which
+// is decoded again from the first of them when it is shown.
+func (c *Cache) releaseRing(b *anim) {
+	b.next = b.ring[0].seq // (a frame in flight is of the epoch before: stale)
+	b.epoch++
+	c.dropRing(b)
+	if b.blocked {
+		c.unblock(b)
+	}
+}
+
+// trimAnim frees the canvases of the decoder of animation a, which is not
+// shown, and counts only the file it keeps; animSubmit counts them again when
+// a frame is asked for. It reports the bytes freed.
+func (c *Cache) trimAnim(a *anim) int64 {
+	if a.trimmed || a.inflight {
+		return 0
+	}
+	kept := a.dec.trim(c.fr)
+	freed := a.mem - kept
+	a.mem, a.trimmed = kept, true
+	c.cpuUsed -= freed
+	return freed
+}
+
+// trimHidden frees the waiting frames and the canvases of animation a, which
+// is built but not shown, and reports whether that brought the CPU bytes under
+// the budget.
+func (c *Cache) trimHidden(a *anim) bool {
+	if a.nring > 0 {
+		c.releaseRing(a)
+	}
+	c.trimAnim(a)
+	return c.cpuUsed <= c.cpuBudget
 }
 
 // block makes a wait for the next buffer returned to the cache.

@@ -27,6 +27,10 @@ import (
 // true here.
 const NativeDialogs = true
 
+// NativeFilePanels reports whether OpenPanel and SavePanel are native: true
+// here.
+const NativeFilePanels = true
+
 // maxDialogs bounds the dialogs open at once, one per window at most.
 const maxDialogs = 8
 

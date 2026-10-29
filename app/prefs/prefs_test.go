@@ -93,9 +93,20 @@ func TestWriteAtomicReadersNeverSeeAPartialFile(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Windows: an open file blocks the rename, so readers must leave
+			// gaps, and WriteAtomic gives up after about 0.8 s of refusals.
+			// A fixed 100 µs gap was not enough where a read itself is slow:
+			// three readers kept the file open all the time and the rename
+			// was refused throughout ("Access is denied", p8-windows-flakes
+			// 40835121441 on arm64). Each reader waits three times as long as
+			// its last read took, so it holds the file a quarter of the time
+			// at most, whatever the runner's speed.
+			gap := 100 * time.Microsecond
 			for !stop.Load() {
-				time.Sleep(100 * time.Microsecond) // Windows: an open file blocks the rename, so readers must leave gaps
+				time.Sleep(gap)
+				t0 := time.Now()
 				got, err := os.ReadFile(p)
+				gap = 3*time.Since(t0) + time.Millisecond
 				if err != nil {
 					continue // Windows may refuse an open during a rename
 				}
@@ -458,6 +469,35 @@ func TestAfterCloseChangesStayInMemory(t *testing.T) {
 	}
 	if s.Get().Theme != "late" {
 		t.Error("value lost")
+	}
+}
+
+// Close can be called again, and at the same time from several goroutines: each
+// returns after the first one's save is done, with its result.
+func TestCloseIsIdempotent(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.json")
+	s, _ := Open(p, defaults, Options{Debounce: time.Hour})
+	s.Set(settings{Theme: "closed"})
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = s.Close()
+			if b, err := os.ReadFile(p); err != nil || !strings.Contains(string(b), `"closed"`) {
+				t.Errorf("Close %d returned before the pending change was written: %q, %v", i, b, err)
+			}
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("Close %d: %v", i, err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Errorf("a later Close: %v", err)
 	}
 }
 

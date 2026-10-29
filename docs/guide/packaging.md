@@ -1,7 +1,9 @@
 # Packaging
 
-On Windows and Linux a program is a binary: the guide's section 12 has the
-cross-compile commands and the release flags. On macOS it is a **bundle**, a
+On Linux a program is a binary: the guide's section 12 has the cross-compile
+commands and the release flags. On Windows it is one executable that installs
+itself (`app/install`), and `gnui package -target windows` builds it from any
+host with its icon, manifest and version resource (section 6). On macOS it is a **bundle**, a
 `.app` with an `Info.plist`, an icon, resources and a code signature, and several
 things the [services](services.md) do (notifications, login items) work only from
 one. `gnui` makes it. It is pure Go, with no third-party code, and shells out
@@ -17,7 +19,7 @@ Four commands, one file:
 |---|---|
 | `gnui doctor` | checks the toolchain, `gnui.json`, the `gnui-dev` identity and release identities |
 | `gnui run` | a development bundle, signed with the stable `gnui-dev` identity, launched, its output streamed |
-| `gnui package` | a release bundle: arm64, hardened, signed; optionally notarized, stapled and a `.dmg` |
+| `gnui package` | a release bundle: arm64, hardened, signed; optionally notarized, stapled and a `.dmg`; or, with `-target windows`, Windows executables and zips |
 | `gnui sign` | signs a bundle that already exists, nested code first |
 
 The blocks that are JSON are excerpts of the examples' own `gnui.json`, checked by
@@ -62,7 +64,7 @@ version, a minimum system and a login agent.
 | `icon` | a square PNG, 1024 px recommended, made into an `.icns` | none |
 | `minimumSystem` | `LSMinimumSystemVersion` | `14.0` |
 | `resources`, `frameworks` | files copied into `Contents/Resources` and `Contents/Frameworks` (and signed, nested items first) | none |
-| `nativeLibs` | per-platform library directories (`<dir>/darwin-arm64/*.dylib`, as `tools/libghostty` lays them out): copied into `Contents/Frameworks`, signed with the app, licence into `Contents/Resources/Licenses` | none |
+| `nativeLibs` | per-platform library directories (`<dir>/<goos>-<goarch>/`, as `tools/libghostty` lays them out). macOS: the `darwin-arm64/*.dylib` files are copied into `Contents/Frameworks`, signed with the app, the licence into `Contents/Resources/Licenses`. Windows: the `windows-<arch>/*.dll` files (for that machine type) go beside the executable, signed with it, the licence as `<library>.LICENSE.txt` (§6) | none |
 | `urlSchemes`, `documentTypes`, `exportedTypes` | the URLs and documents the app opens, which arrive as `EvOpenURLs` and `EvOpenFiles` | none |
 | `usage` | the `NS…UsageDescription` texts that the system shows when asking for the camera, microphone, location… | none |
 | `entitlements` | written to a generated entitlements plist and applied to the main bundle | none |
@@ -244,12 +246,114 @@ xcrun notarytool store-credentials <profile> --apple-id <you> --team-id <TEAMID>
 go run ../../cmd/gnui package -identity "Developer ID Application: Name (TEAMID)" -notarize -notary-profile <profile> -dmg
 ```
 
-## 6. What gnui does not do
+## 6. Windows executables
+
+`gnui package -target` takes `darwin/arm64` (the default), `windows/amd64`,
+`windows/arm64`, or `windows` for both, comma-separated. The Windows builds need
+no Windows machine and no Windows SDK: `gnui` writes the resource object itself
+(D77).
+
+```sh
+cd examples/services && go run ../../cmd/gnui package -target windows
+```
+
+```text
+packaging Pings 0.1.0 (dev.gonativeui.services) for windows/amd64 -> dist/windows-amd64/Pings.exe
+zip: dist/Pings-0.1.0-windows-amd64.zip
+packaging Pings 0.1.0 (dev.gonativeui.services) for windows/arm64 -> dist/windows-arm64/Pings.exe
+zip: dist/Pings-0.1.0-windows-arm64.zip
+
+note: the Windows executables are unsigned: SmartScreen warns on a first download, and app/selfupdate needs Options.Unsigned with a verified digest. Configure windows.sign (or -win-sign) to sign them.
+```
+
+Each executable is a release build (`-trimpath`, `-s -w`, `gnui_release`, as on
+macOS) linked with `-H windowsgui`, so it opens no console window, and with these
+resources:
+
+- **The icon:** `icon`, downscaled to 16, 20, 24, 32, 40, 48, 64 and 256 px (DIBs
+  below 256, a PNG at 256), as the executable's first icon group.
+- **The manifest:** Per-Monitor v2 DPI awareness, Windows 10 and 11 as supported
+  systems, UTF-8 as the process code page, long paths, Common Controls 6, and
+  `asInvoker`, so it never asks for elevation.
+- **`VERSIONINFO`:** the file version is `version` with `build` as its fourth part
+  (`0.1.0` and `1` make `0.1.0.1`; each part at most 65535), `ProductVersion` is
+  `version`, `ProductName` the display name, `OriginalFilename` the executable's
+  name, and `AppUserModelID` the `id` (or `windows.aumid`). `app/install` and
+  `app/selfupdate` read these: the installed copy keeps `OriginalFilename` even if
+  the browser renamed the download, an empty `install.Options` field takes its
+  value from here, and an update must carry the same `AppUserModelID` and a
+  higher file version.
+
+The `.syso` is written into the main package's folder for the build and removed
+after it (`go build -overlay` does not carry `.syso` files); a main package with a
+`.syso` of its own is refused, since its resources would collide.
+
+**Native libraries.** Each `nativeLibs` directory gives the `.dll` files of its
+`windows-<arch>` folder (at least one; `gnui` checks each is for the target's
+machine type) and, when the directory has a `LICENSE`, that file as
+`<library>.LICENSE.txt` (`ghostty-vt.dll` brings `ghostty-vt.LICENSE.txt`). They
+are copied beside the executable in `dist/windows-<arch>/`, signed with the same
+command as the executable, and named in its version resource as `GnuiFiles`
+(`ghostty-vt.dll|ghostty-vt.LICENSE.txt`). That list is the contract with the
+runtime: `app/install` copies exactly these files with the executable and refuses
+to install without them, `app/selfupdate` requires exactly these beside the new
+executable in an update (each DLL for the same machine and, for a signed app,
+signed by the same publisher) and swaps and rolls them back with it, and
+`term` loads `ghostty-vt.dll` from beside the executable first. The list lives in
+the executable rather than in a file beside it, so it is covered by the
+executable's signature, and a stray DLL in the download folder is never installed.
+
+The zip holds the executable and those files at its top, the form
+`selfupdate.Prepare` takes besides a bare `.exe` (which updates only an app that
+declares no files). The optional `windows` object of `gnui.json` (here the packaging
+test's) holds `publisher`, `aumid`, `description`, `copyright` and `sign`:
+
+```json cmd/gnui/testdata/winprobe/gnui.json
+"windows": {"publisher": "Go Native UI tests", "copyright": "none"}
+```
+
+A release configuration with Azure Trusted Signing through jsign would add:
+
+```text
+"sign": "jsign --storetype TRUSTEDSIGNING --keystore weu.codesigning.azure.net --storepass ${AZURE_TOKEN} --alias account/profile --tsaurl http://timestamp.acs.microsoft.com --tsmode RFC3161 {file}"
+```
+
+**Signing** runs a command of your choice on each executable: `windows.sign`,
+`-win-sign`, or `$GNUI_WINDOWS_SIGN`. The command is split into words (quotes
+group, backslashes are plain); `{file}` becomes the executable's path and `$NAME`
+or `${NAME}` an environment variable, so secrets stay out of `gnui.json`. Without
+one the executables are unsigned, the default until the Windows certificate
+exists. The tools that fit:
+
+- **jsign** (any host, Java): `--storetype TRUSTEDSIGNING` signs with Azure
+  Trusted Signing, the token from `az account get-access-token --resource
+  https://codesigning.azure.net`.
+- **signtool** (Windows): `signtool sign /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib Azure.CodeSigning.Dlib.dll /dmdf metadata.json {file}`
+  with the Trusted Signing client, or `/f cert.pfx /p ${PFX_PASS}` with a file.
+- **osslsigncode** (macOS, Linux) writes a new file: give it `-in {file} -out {file}.signed`
+  and `gnui` moves the signed copy over the executable.
+
+Always ask for an RFC 3161 timestamp: Trusted Signing's certificates last three
+days, and a timestamped signature stays valid after its certificate expires.
+After the command `gnui` checks that the executable now has a certificate table;
+whether the signature is valid is Windows' verdict (`signtool verify /pa`, or
+`Get-AuthenticodeSignature`). A signed app updates only to builds of the same
+publisher (`app/selfupdate`, D76).
+
+**Tested:** the resources, the machine type, the GUI subsystem and the
+certificate table read back from both executables on every OS, by `go test
+./cmd/gnui` with a stand-in signing tool; on the Windows runners the build for the
+runner's architecture is run, and reports Per-Monitor v2 awareness, code page
+65001, and the resources found with `FindResourceW`. **Not tested:** a real
+signature (no Windows certificate yet), and the icon's look in Explorer.
+
+## 7. What gnui does not do
 
 - **No Mac App Store** packaging, no provisioning profiles, and no sandbox container
   setup. The entitlements that you list are written as they are.
-- **Only macOS.** For Windows and Linux there is `go build` (the guide's section 12),
-  with no installer, icon resource or package format made for you.
+- **No Windows installer package** (MSI, MSIX): the executable installs itself per
+  user (`app/install`, D76). **No Linux packaging:** `go build` (the guide's
+  section 12).
 - **No Intel Macs** (D55).
 
 To check a bundle yourself, without `gnui`:

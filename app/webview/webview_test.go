@@ -23,8 +23,14 @@ func TestNewContract(t *testing.T) {
 		return // H1: a view needs a real window (live_darwin_test.go)
 	}
 	_, err := webview.New(&platform.Window{}, webview.Options{Profile: "a3-browser"})
+	if runtime.GOOS == "windows" { // H2: no window, or no runtime
+		if !errors.Is(err, webview.ErrNoWindow) && !errors.Is(err, webview.ErrUnavailable) {
+			t.Fatalf("New without a window = %v", err)
+		}
+		return
+	}
 	if !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("New = %v, want unsupported until H2 (Windows), and on Linux", err)
+		t.Fatalf("New = %v, want unsupported on Linux", err)
 	}
 }
 

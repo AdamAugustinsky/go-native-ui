@@ -78,10 +78,12 @@
 //
 // # The helper
 //
-// InstallAndRelaunch copies the running executable into the staging folder,
-// under its own name, and starts the copy with a private argument, then
-// returns so that the app can quit. The copy, outside the bundle it replaces,
-// is the helper. It
+// InstallAndRelaunch copies the running bundle whole into the staging folder
+// (helper/<Name>.app: an APFS clone, without extended attributes, so without
+// quarantine), starts the copy's executable with a private argument, waits
+// for it to take the job (an error when it does not, say because the system
+// stopped it at launch), then returns so that the app can quit. That process,
+// outside the bundle it replaces, is the helper. It
 //
 //  1. waits for the app to exit (Options.QuitTimeout, default 60 s);
 //  2. checks that the bundle is still the one the app ran from, and verifies
@@ -112,9 +114,12 @@
 // lock or set up the app's log first. It is not wired into app.Run, which
 // starts after the app's own setup.
 //
-// Because the helper is the main executable run from outside its bundle, an
-// app whose entitlements need an embedded provisioning profile cannot use it
-// (the system refuses to start the copy). The framework's apps need none.
+// The helper runs from a whole copy of the bundle, not from a copy of the
+// executable alone: a Developer ID signature binds the bundle's Info.plist,
+// and macOS kills an executable copied out of its bundle at exec ("invalid
+// Info.plist"; an ad hoc signature does not show it). The copy validates as
+// the bundle does, and has the app's identifier and team, which App
+// Management requires of a process that modifies the bundle.
 //
 // # Started and LastResult
 //
@@ -127,9 +132,58 @@
 // The record is kept in the app's data folder (app/paths.Data), in
 // "selfupdate".
 //
+// # Windows
+//
+// A Windows app is one executable, built by gnui package -target windows
+// (D77), whose version resource names the app (AppUserModelID) and its
+// version (the four-part file version: gnui.json's version, then its build).
+// Supported says why it cannot replace itself: no such version resource
+// (ErrNotBundled), a go run or go test binary (ErrDevBundle), installed for
+// all users under Program Files or its folder not writable (ErrNotWritable),
+// or no valid Authenticode signature while Options.Unsigned is not set
+// (ErrNotSigned).
+//
+// Prepare takes the new .exe, or the zip gnui package writes, and copies the
+// executable into a private folder on the running executable's volume
+// ("selfupdate" in app/paths.Cache, or a hidden folder next to the
+// executable): a new file, so it carries no Mark of the Web and SmartScreen
+// does not stop it. The zip holds, at its top and nothing else, one .exe and
+// the files its version resource declares beside it (winres.FilesKey: the
+// .dll files of gnui.json's nativeLibs and their .txt licences), which are
+// staged with it; a bare .exe is an update only for a build that declares
+// no files. Every declared file must be there and nothing else, each DLL
+// for the same machine type and, when the app is signed, signed by the same
+// publisher as the executable. An unsigned app's digest (PrepareSHA256) is
+// the zip's, so it covers every file. The staged executable must be for this
+// machine type, name the same AppUserModelID, be newer (the file version's
+// first three parts, then the fourth; Options.AllowDowngrade as on macOS)
+// and, when the running app is signed, pass WinVerifyTrust with the same
+// publisher: the same leaf subject and a chain to the same root, so a
+// renewed certificate (Azure Trusted Signing's last three days) still
+// updates. An unsigned app sets Options.Unsigned and calls PrepareSHA256
+// with the digest from its manifest; Prepare refuses it with ErrNotSigned.
+//
+// The helper is the running executable copied into the staging folder and
+// started with a private argument and two inherited handles: the app's
+// process, which it waits on, and the staging folder's lock. Once the app
+// has exited it checks the executable is the one that staged the update,
+// verifies the staged files again (the signatures, and each file's digest
+// taken at Prepare), renames the old executable and the files beside it that
+// the old version declares or the update brings into the staging folder
+// (old), renames the new files and then the new executable into place,
+// starts it with the arguments InstallAndRelaunch was given, and waits for
+// Started (Options.HealthTimeout). On a timeout, or when the new version
+// exits first, it ends the new version (TerminateProcess, after checking
+// that the process runs the installed executable), undoes every rename (the
+// old executable and its files back together) and starts it, and LastResult
+// reports RolledBack. A rename that fails during the swap undoes the ones
+// before it in the same way. The
+// helper's own copy cannot be deleted while it runs: the next run's Started
+// or LastResult, or the next Prepare, removes it.
+//
 // # Other systems
 //
-// On Windows and Linux every call returns ErrUnsupported (errors.Is
+// On Linux every call returns ErrUnsupported (errors.Is
 // errors.ErrUnsupported); RunHelperIfAsked and Started do nothing, and
 // LastResult reports None.
 package selfupdate
@@ -150,7 +204,9 @@ var (
 	// ErrUnsupported: this system cannot update an app in place yet. It
 	// matches errors.ErrUnsupported.
 	ErrUnsupported = fmt.Errorf("selfupdate: %w", errors.ErrUnsupported)
-	// ErrNotBundled: the app is not running from an .app bundle of its own.
+	// ErrNotBundled: the app is not running from an .app bundle of its own
+	// (on Windows: its executable has no version resource naming the app,
+	// which gnui package writes).
 	ErrNotBundled = errors.New("selfupdate: the app is not running from an application bundle")
 	// ErrTranslocated: macOS runs the app from a temporary read-only copy
 	// (App Translocation). Moving the app to Applications ends it.
@@ -164,7 +220,9 @@ var (
 	// ErrDevBundle: a development bundle (gnui run), updated by rebuilding.
 	ErrDevBundle = errors.New("selfupdate: a development bundle is not updated in place")
 	// ErrNotSigned: the app is signed ad hoc or not at all, so its designated
-	// requirement names this one build and no update can satisfy it.
+	// requirement names this one build and no update can satisfy it (on
+	// Windows: it has no valid Authenticode signature, and Options.Unsigned
+	// is not set or Prepare was called instead of PrepareSHA256).
 	ErrNotSigned = errors.New("selfupdate: the app has no publisher signature, so no update can be verified against it")
 	// ErrRejected: Prepare (or the helper, before the swap) refused the
 	// archive or the bundle in it.
@@ -184,6 +242,15 @@ type Options struct {
 	// pkg.test, internal/launchguard). Anywhere else it is ignored, with one
 	// warning in the log, and the app's own designated requirement applies.
 	Requirement string
+	// Unsigned lets an app without an Authenticode signature update itself on
+	// Windows (a3-kb until its signing certificate exists), through
+	// PrepareSHA256 only: the update must have the SHA-256 the app read from
+	// a manifest it trusts (fetched over HTTPS from its own server, say).
+	// That digest is then all that stands between the download and the
+	// user's machine: anyone who can change the manifest can ship code.
+	// Signing is the fix; a signed app ignores this option. It does nothing
+	// on macOS, where a bundle must be signed by a Developer ID.
+	Unsigned bool
 	// AllowDowngrade lets Prepare stage, and the helper install, a bundle that
 	// is not newer than the running app (a rollback the user asked for). The
 	// signature rules still apply.
@@ -299,6 +366,7 @@ type Staged struct {
 	self    self
 	lock    *os.File // holds the staging folder's lock until the helper has it
 	anyVer  bool     // staged with Options.AllowDowngrade
+	win     winStaged
 }
 
 // Path is the staged bundle.

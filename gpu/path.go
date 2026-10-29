@@ -268,23 +268,30 @@ type PathUploader interface {
 // texture (the old one is freed: frames in flight still sample it). Keep one
 // PathMask per shape (per size and scale).
 type PathMask struct {
-	up   PathUploader
-	tex  TextureID
-	sum  uint64
-	w, h int
-	r    pathRaster
-	pix  []byte
+	up    PathUploader
+	tex   TextureID
+	sum   uint64
+	epoch uint32 // the uploader's Epoch when tex was filled
+	w, h  int
+	r     pathRaster
+	pix   []byte
 }
 
 // Mask returns the texture of p filled, w×h texels, made on u: the one it
 // returned last time when p and u are the same. An empty path (or one of no
-// area) has texture 0.
+// area) has texture 0. If u is a Renderer that was rebuilt after a lost
+// device since (its Epoch changed), the texture is filled again from the
+// pixels kept.
 func (m *PathMask) Mask(u PathUploader, p *Path) (tex TextureID, w, h int) {
 	if u == nil || p.Empty() {
 		return 0, 0, 0
 	}
 	sum := p.hash()
 	if m.tex != 0 && m.up == u && m.sum == sum {
+		if ep, ok := u.(interface{ Epoch() uint32 }); ok && ep.Epoch() != m.epoch {
+			u.Upload(m.tex, 0, 0, m.w, m.h, m.pix, m.w)
+			m.epoch = ep.Epoch()
+		}
 		return m.tex, m.w, m.h
 	}
 	m.Release()
@@ -300,6 +307,9 @@ func (m *PathMask) Mask(u PathUploader, p *Path) (tex TextureID, w, h int) {
 	m.tex = u.NewTexture(TexR8, w, h)
 	u.Upload(m.tex, 0, 0, w, h, m.pix, w)
 	m.up, m.sum, m.w, m.h = u, sum, w, h
+	if ep, ok := u.(interface{ Epoch() uint32 }); ok {
+		m.epoch = ep.Epoch()
+	}
 	return m.tex, w, h
 }
 

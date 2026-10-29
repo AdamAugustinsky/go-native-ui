@@ -27,3 +27,16 @@ func ExampleItem_Enable() {
 		login.OpenSettings() // Login Items: the user switches the app on
 	}
 }
+
+// On Windows the login item is a Run value. An app that had one keeps its
+// name, so the user's choice in Task Manager carries over.
+func ExampleRunValue() {
+	st, err := login.RunValue("HyperPedia", login.StartHiddenArg).Enable()
+	if err != nil {
+		log.Print(err) // login.ErrUnsupported off Windows
+		return
+	}
+	if st == login.RequiresApproval {
+		login.OpenSettings() // Settings → Apps → Startup: the user switched it off
+	}
+}

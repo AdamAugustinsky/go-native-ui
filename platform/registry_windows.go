@@ -77,6 +77,8 @@ type appWindow struct {
 	oleThread      uint32 // the thread OleInitialize succeeded on (0: none)
 	got            bool   // it handled something the app's loop must see: the pump returns
 	modal          int    // native modal loops running now (enterModal)
+	menuLoop       bool   // a menu the app window owns is tracking (a tray menu, W5)
+	started        bool   // StartApp ran (AppStarted)
 	pumps, wakes   uint64 // PumpStats
 	wc             wndClassEx
 	reasonText     []uint16 // the shutdown block reason, NUL-terminated (kept for the call)
@@ -362,6 +364,18 @@ func appWndProc(hwnd, m, wp, lp uintptr) uintptr {
 			win32.Call(pDestroyWindow, hwnd)
 		}
 		return 0
+	case wmEnterMenuLoop: // a menu the app window owns (a tray icon's, W5)
+		if !reg.app.menuLoop {
+			reg.app.menuLoop = true
+			enterModal()
+		}
+		return defProc(hwnd, m, wp, lp)
+	case wmExitMenuLoop:
+		if reg.app.menuLoop {
+			reg.app.menuLoop = false
+			leaveModal()
+		}
+		return defProc(hwnd, m, wp, lp)
 	case wmQueryEndSess:
 		return queryEndSession(lp)
 	case wmEndSession:
@@ -489,6 +503,7 @@ func pump(timeoutNs int64) bool {
 		var due int64 // the soonest clipboard time limit of any window
 		queued := false
 		for _, w := range openWindows() {
+			w.reapDrags()
 			if w.clipDue != 0 && now >= w.clipDue {
 				w.clipStep()
 			}
@@ -565,9 +580,13 @@ var pumpMsg msg
 // window's procedure (wndProc routes by HWND).
 func dispatchMessages() {
 	for win32.Bool(win32.Call(pPeekMessageW, uintptr(unsafe.Pointer(&pumpMsg)), 0, 0, 0, pmRemove)) {
+		if hostKey(&pumpMsg) { // Tab, Escape, Enter a hosted control hands back (host_windows.go)
+			continue
+		}
 		win32.Call(pTranslateMessage, uintptr(unsafe.Pointer(&pumpMsg)))
 		win32.Call(pDispatchMessageW, uintptr(unsafe.Pointer(&pumpMsg)))
 	}
+	syncHostFocus()
 }
 
 func anyQueued() bool {
@@ -633,6 +652,7 @@ func modalTick() {
 	now := nanotime()
 	for i := 0; i < reg.n; i++ {
 		w := reg.open[i]
+		w.reapDrags()
 		if w.clipDue != 0 && now >= w.clipDue {
 			w.clipStep()
 		}

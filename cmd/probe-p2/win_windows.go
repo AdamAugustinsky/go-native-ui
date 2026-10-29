@@ -63,6 +63,8 @@ const (
 	wsExTopmost    = 0x00000008
 	wsExToolWindow = 0x00000080
 
+	wsExNoRedirectionBitmap = 0x00200000
+
 	wmEraseBkgnd = 0x0014
 	pmRemove     = 0x0001
 	swShow       = 5
@@ -189,7 +191,11 @@ func makeWindows() error {
 	if err := register(wins.childName, call(pCreateSolidBrush, colorGreen)); err != nil {
 		return err
 	}
-	wins.top = createWindow(wsExTopmost|wsExToolWindow, wsPopup|wsClipChildren, wins.topName, 100, 100, topW, topH, 0)
+	ex := uintptr(wsExTopmost | wsExToolWindow)
+	if *noRedirect {
+		ex |= wsExNoRedirectionBitmap
+	}
+	wins.top = createWindow(ex, wsPopup|wsClipChildren, wins.topName, 100, 100, topW, topH, 0)
 	if wins.top == 0 {
 		return errors.New("CreateWindowExW (top-level) failed")
 	}

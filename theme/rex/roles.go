@@ -24,5 +24,10 @@ var roles = func() [2]theme.Colors {
 	l[theme.GlassTint], d[theme.GlassTint] = theme.ColA(0xFFFFFF, fillAlpha), theme.ColA(darkGlass, darkAlpha)
 	l[theme.Shadow], d[theme.Shadow] = light.Shadow, dark.Shadow
 	l[theme.Scrim], d[theme.Scrim] = light.Scrim, dark.Scrim
+	// The borderless icon button of Rex's pane headers (rexui.IconBorderless):
+	// a quiet grey that darkens under the pointer, and the chip behind it.
+	l[theme.PaneButton], d[theme.PaneButton] = theme.Col(0x96999B), theme.Col(0x8A8EA1)
+	l[theme.PaneButtonHover], d[theme.PaneButtonHover] = theme.Col(0x3F4246), theme.Col(0xECEDF3)
+	l[theme.PaneButtonChip], d[theme.PaneButtonChip] = theme.Col(0x2A2030), theme.Col(0xFFFFFF)
 	return r
 }()

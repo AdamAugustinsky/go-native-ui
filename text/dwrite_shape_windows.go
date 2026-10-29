@@ -257,6 +257,7 @@ func b2u(b bool) uintptr {
 // s.gbuf/xbuf/fbuf; it returns the line's advance.
 func (s *System) shapeLine(fe *fontEnt) float32 {
 	n := len(s.u16)
+	s.tabular = fe.desc.TabularDigits
 	if cap(s.levels) < n {
 		s.levels = make([]uint8, n, n+n/2)
 	}
@@ -477,12 +478,19 @@ func (s *System) shapeItem(p, q int, face FaceID, level uint8, sa scriptAnalysis
 	maxG := 3*length/2 + 16
 	text := uintptr(unsafe.Pointer(&s.u16[p]))
 	loc := uintptr(unsafe.Pointer(&s.locale[0]))
+	// The tabular-figures feature over the whole item: the features, the
+	// length of each range and the number of ranges.
+	var feats, featLens, featRanges uintptr
+	if s.tabular {
+		s.tnumLen[0] = uint32(length)
+		feats, featLens, featRanges = uintptr(unsafe.Pointer(&s.tnumPtr[0])), uintptr(unsafe.Pointer(&s.tnumLen[0])), 1
+	}
 	for attempt := 0; ; attempt++ {
 		s.shapeScratch(length, maxG)
 		s.n1 = 0
 		hr := win32.HR(com.Call(s.analyzer, vtAnalyzerGetGlyphs,
 			text, uintptr(length), fc.face, 0, b2u(rtl), uintptr(unsafe.Pointer(&s.sa)), loc, 0,
-			0, 0, 0, uintptr(maxG),
+			feats, featLens, featRanges, uintptr(maxG),
 			uintptr(unsafe.Pointer(&s.cmap[0])), uintptr(unsafe.Pointer(&s.tprops[0])),
 			uintptr(unsafe.Pointer(&s.gidx[0])), uintptr(unsafe.Pointer(&s.gprop[0])), uintptr(unsafe.Pointer(&s.n1))))
 		if uint32(hr) == hresultNotSufficient && attempt < 4 {
@@ -506,7 +514,7 @@ func (s *System) shapeItem(p, q int, face FaceID, level uint8, sa scriptAnalysis
 		text, uintptr(unsafe.Pointer(&s.cmap[0])), uintptr(unsafe.Pointer(&s.tprops[0])), uintptr(length),
 		uintptr(unsafe.Pointer(&s.gidx[0])), uintptr(unsafe.Pointer(&s.gprop[0])), uintptr(n),
 		fc.face, uintptr(math.Float32bits(fc.sizePx)), 0, b2u(rtl), uintptr(unsafe.Pointer(&s.sa)), loc,
-		0, 0, 0,
+		feats, featLens, featRanges,
 		uintptr(unsafe.Pointer(&s.gadv[0])), uintptr(unsafe.Pointer(&s.goff[0]))))
 	if hr < 0 {
 		return

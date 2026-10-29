@@ -191,6 +191,14 @@ type ToolbarRecipe struct {
 	// TitleTextX is how far into the title's text field (_NSToolbarTitleField,
 	// at the title's place) its text starts: an NSTextField's 2.
 	TitleTextX float32
+	// TitleMinW is the narrowest the title is shown, in points: the room the
+	// items leave it is its to shrink into (the text fades out at its end),
+	// and under this it is hidden, before any item goes into the overflow
+	// menu. NSToolbar truncates, then hides, the title before it moves an
+	// item (issue #16); the width is a guess of a few letters and the
+	// ellipsis, not yet measured against AppKit (tools/appkitscenes at
+	// narrow widths), which needs an unlocked screen.
+	TitleMinW float32
 	// RexGlyph, RexGlyphHover and RexFill are the Rex band's borderless
 	// items (rexlook's ⌘ and +), RexHit their side, RexRadius their corner.
 	RexGlyph, RexGlyphHover, RexFill Pair
@@ -221,7 +229,7 @@ var ToolbarLook = ToolbarRecipe{
 	SegmentW: 39, GroupPad: [2]float32{4.215, 6.215}, EdgePad: [2]float32{4, 1}, MenuGap: 8.5,
 	SearchGap: [2]float32{10, 8}, SearchW: 167,
 	SidebarGap: [2]float32{14.5, 0}, SharedGap: 2, FlexAfter: [2]float32{3.5, 0},
-	EdgeFill: Solid(0xFAFAFA, 0x414141), EdgeFillInactive: Solid(0xF0F0F0, 0x3A3A3A), TitleTextX: 2, InspectorEdge: 0.5,
+	EdgeFill: Solid(0xFAFAFA, 0x414141), EdgeFillInactive: Solid(0xF0F0F0, 0x3A3A3A), TitleTextX: 2, TitleMinW: 48, InspectorEdge: 0.5,
 	RexGlyph: Solid(0x5F5D62, 0xA3A7B8), RexGlyphHover: Solid(0x1E2227, 0xECEDF3), RexFill: PairA(0x2A2030, 0xFFFFFF, 0.08, 0.08),
 	RexHit: 28, RexRadius: 12,
 	Traffic:         [3]Pair{Solid(0xF87B72, 0xF35C52), Solid(0xFDC734, 0xFDBF00), Solid(0x7FD457, 0x2CC000)},
@@ -395,17 +403,26 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	if o.Traffic {
 		tb.trafficLights()
 	}
+	CaptionButtons(k) // Windows' minimise, maximise and close, when the band is the app's there
 
 	// the first pane starts after the traffic lights: FirstGap after the
 	// zoom button (the system's, when it is further right than the style's)
 	sp := r.Window.TrafficSpacing
 	zoom := tb.spec.Traffic[0] + 2*sp + r.Window.TrafficD/2
-	if sb := c.SystemButtons(); sb[2] > zoom {
-		zoom = sb[2]
-	}
+	sb := c.SystemButtons()
 	first := tb.spec.FirstGap
 	if first == 0 {
 		first = r.Window.Capsule.WideGap
+	}
+	if c.Decorations().Caption {
+		// Windows: no buttons on the left; the items end WideGap before the
+		// caption buttons at the band's right end
+		zoom = 0
+		if sb[2] > sb[0] {
+			tb.w = theme.Snap(sb[0] - r.Window.Capsule.WideGap)
+		}
+	} else if sb[2] > zoom {
+		zoom = sb[2]
 	}
 	tb.beginPane(0, theme.Snap(zoom+first), 0)
 	return tb
@@ -1092,7 +1109,9 @@ func (tb *Toolbar) searchGapW() float32 {
 
 // Search builds an expanded search item: a search field (Escape and the clear
 // button empty it) in a glass capsule of the toolbar's height, widthPt wide
-// (0: the recipe's 166).
+// (0: the recipe's 166). When it does not fit it is listed in the overflow
+// menu, and choosing it there shows the field in a popover under the »
+// button, with the focus in it; the popover's field is the same buffer.
 func (tb *Toolbar) Search(label string, buf *ui.TextBuffer, placeholder string, widthPt float32) base.FieldSignal {
 	k := tb.k
 	c := k.Context()
@@ -1101,8 +1120,8 @@ func (tb *Toolbar) Search(label string, buf *ui.TextBuffer, placeholder string, 
 	}
 	h := tb.capsuleH()
 	w := theme.Snap(k.Pt(widthPt))
-	if hidden, _ := tb.overflows(tbCapsule, w+tb.searchGapW()-tb.gapW(tbCapsule), label); hidden {
-		return base.FieldSignal{}
+	if hidden, picked := tb.overflows(tbCapsule, w+tb.searchGapW()-tb.gapW(tbCapsule), label); hidden {
+		return tb.overflowedSearch(label, buf, placeholder, widthPt, picked)
 	}
 	tb.searchGap()
 	tb.prev = tbCapsule
@@ -1121,10 +1140,46 @@ func (tb *Toolbar) Search(label string, buf *ui.TextBuffer, placeholder string, 
 	return res
 }
 
+// overflowedSearch is a search item that did not fit, once the overflow menu
+// has chosen it: the search field in a popover under the » button, focused,
+// as NSToolbar shows an overflowed search field. The popover is built on
+// every frame the item stays in the overflow after that, until it is
+// dismissed (Escape, a press elsewhere, the » button); picked is the menu's
+// choice of this frame.
+func (tb *Toolbar) overflowedSearch(label string, buf *ui.TextBuffer, placeholder string, widthPt float32, picked bool) base.FieldSignal {
+	k := tb.k
+	c := k.Context()
+	if widthPt <= 0 {
+		widthPt = tb.rc.SearchW
+	}
+	open := ui.KeyN(ui.HashString(tb.key, label), 7000) // whether it was shown last frame
+	was := c.KeepValue(open, 0, 0) != 0
+	if !was && !picked {
+		return base.FieldSignal{}
+	}
+	c.KeepValue(open, 0, 1)
+	anchor := c.RectOf(tb.ovKey)
+	p := BeginPopover(k, label, anchor, PopoverOpts{Width: widthPt + 2*PopoverLook.Pad})
+	k.NextWidth(ui.Pct(1))
+	res := SearchField(k, label, buf, placeholder, FieldOpts{})
+	if picked {
+		c.SetFocus(res.Key)
+	}
+	EndPopover(k, &p)
+	if p.Dismissed {
+		c.KeepValue(open, 0, 0)
+	}
+	return res
+}
+
 // Title places the window's title (ToolbarOpts.Title, and Subtitle below it)
 // here: TitleGap after the capsule before it, or TitleInset into the pane.
 // It takes the room the items leave (an NSToolbar's title view), so a
-// Flexible after it in the same pane is the minimum space.
+// Flexible after it in the same pane is the minimum space. The items keep
+// their room over the title's: as the pane narrows the title is truncated
+// (its text fades at the end), then hidden once it has less than
+// ToolbarRecipe.TitleMinW, and only when the items alone do not fit do they
+// move into the overflow menu.
 func (tb *Toolbar) Title() {
 	k := tb.k
 	c, r := k.Context(), k.Theme()
@@ -1153,7 +1208,23 @@ func (tb *Toolbar) Title() {
 	c.NextSize(ui.Pct(1), ui.Px(h))
 	tb.n++
 	box := c.BoxKeyed(ui.Clip, ui.KeyN(tb.key, 4000+tb.n), nil)
+	// the room the items left it, as the last frame laid it out: it shows
+	// the text only if it has the title's minimum (or all of it, for a short
+	// title)
+	room := c.Rect(box)
+	shown := true
+	switch {
+	case room[3] <= room[1]:
+		c.RequestFrame() // not laid out yet (a title squeezed to nothing is as high as the band)
+	default:
+		need := min(theme.Snap(k.Pt(tb.rc.TitleMinW)), theme.Snap(k.TextWidth(st.Font, tb.o.Title)+k.Pt(tb.rc.TitleTextX)))
+		shown = room[2]-room[0] >= need-0.5
+	}
 	c.Push(box)
+	if !shown {
+		c.Pop()
+		return
+	}
 	lines := st.Line
 	var sub *theme.StyleFont
 	if tb.o.Subtitle != "" {

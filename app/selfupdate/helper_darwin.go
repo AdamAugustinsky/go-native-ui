@@ -263,8 +263,12 @@ func loadJob(jobPath string) (job, error) {
 	if err != nil {
 		return j, err
 	}
+	// exe is staging/helper/X.app/Contents/MacOS/x: the copy of the bundle
+	// InstallAndRelaunch made.
+	helperApp := filepath.Dir(filepath.Dir(filepath.Dir(exe)))
 	switch {
-	case filepath.Dir(filepath.Dir(exe)) != j.Staging || filepath.Base(filepath.Dir(exe)) != "helper" ||
+	case filepath.Dir(filepath.Dir(helperApp)) != j.Staging || filepath.Base(filepath.Dir(helperApp)) != "helper" ||
+		!strings.HasSuffix(helperApp, ".app") || filepath.Base(filepath.Dir(exe)) != "MacOS" ||
 		jdir != j.Staging || !isStaging(j.Staging):
 		return j, errors.New("the job is not in this helper's staging folder")
 	case filepath.Dir(filepath.Dir(j.Staged)) != j.Staging || filepath.Base(filepath.Dir(j.Staged)) != "new" ||
@@ -303,27 +307,56 @@ type helper struct {
 	exe    string // the bundle's executable, once the staged copy is verified
 }
 
-// takeLock adopts the staging folder's lock, which the app passed as fd 3
-// with its flock held: it must be that folder's lock file, and no process the
-// helper starts may inherit it.
+// takeLock opens the staging folder's lock file and takes a shared lock on
+// it, beside the app's, which the app keeps until signalReady: the folder is
+// never without a holder. It opens the file itself rather than inheriting a
+// descriptor from the app, which macOS may revoke while it checks the new
+// process. The descriptor is close-on-exec, so no process the helper starts
+// inherits it.
 func takeLock(staging string) (*os.File, error) {
-	var fd, lk syscall.Stat_t
-	if err := syscall.Fstat(3, &fd); err != nil {
-		return nil, fmt.Errorf("no lock from the app: %w", err)
+	path := filepath.Join(staging, "lock")
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open the staging folder's lock: %w", err)
 	}
-	if err := syscall.Lstat(filepath.Join(staging, "lock"), &lk); err != nil {
+	var fd, lk syscall.Stat_t
+	if err := syscall.Fstat(int(f.Fd()), &fd); err != nil {
+		f.Close()
 		return nil, err
 	}
-	if fd.Dev != lk.Dev || fd.Ino != lk.Ino {
-		return nil, errors.New("fd 3 is not the staging folder's lock")
+	if err := syscall.Lstat(path, &lk); err != nil {
+		f.Close()
+		return nil, err
 	}
-	syscall.CloseOnExec(3)
-	// Locking again through the same open file is a no-op for its holder and
-	// fails for anyone else.
-	if err := syscall.Flock(3, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return nil, fmt.Errorf("the staging folder is locked by another process: %w", err)
+	if fd.Mode&syscall.S_IFMT != syscall.S_IFREG || fd.Dev != lk.Dev || fd.Ino != lk.Ino || int(fd.Uid) != os.Getuid() {
+		f.Close()
+		return nil, errors.New("the staging folder's lock is not a file of ours")
 	}
-	return os.NewFile(3, "lock"), nil
+	// Only a stagingInUse probe takes the lock exclusively, and then only for
+	// an instant, and only if nothing holds it: retry briefly.
+	for i := 0; ; i++ {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) || i == 40 {
+			f.Close()
+			return nil, fmt.Errorf("cannot lock the staging folder: %w", err)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// signalReady tells InstallAndRelaunch that the helper took the job and holds
+// the lock: one byte on readyFD, which it then closes, so that no process it
+// starts inherits it. A descriptor that is not a pipe is left alone.
+func signalReady() {
+	var st syscall.Stat_t
+	if syscall.Fstat(readyFD, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFIFO {
+		return
+	}
+	syscall.Write(readyFD, []byte{1})
+	syscall.Close(readyFD)
 }
 
 func (h *helper) run() {
@@ -334,6 +367,7 @@ func (h *helper) run() {
 		return
 	}
 	defer lock.Close()
+	signalReady()
 	h.rec = record{Bundle: j.Bundle, Dev: j.Dev, OldIno: j.Ino, From: j.From, To: j.To, Nonce: j.Nonce, Staging: j.Staging}
 
 	h.lg.Info("selfupdate helper: waiting for the app to quit", "pid", j.Parent, "from", j.From, "to", j.To)
