@@ -280,6 +280,7 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		in.PushKey(ui.KeyEvent{
 			Code: code, Physical: phys, Mods: in.Mods,
 			Down: e.Flags&platform.FlagDown != 0, Repeat: e.Flags&platform.FlagRepeat != 0,
+			Time: e.Time,
 		})
 	case platform.EvModifiers:
 		m := mods(e.Mods)

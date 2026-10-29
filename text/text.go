@@ -62,12 +62,17 @@ type FaceID uint16
 // is in pixels, at SizePt*Scale pixels per em. On macOS the optical size and
 // the tracking are those of SizePt, as in AppKit, whatever the Scale.
 type FontDesc struct {
-	Family string  // "" = system UI font (SF Pro on macOS)
-	Mono   bool    // system monospace font when Family == ""
-	SizePt float32 // points
-	Weight int     // CSS-like: 400 regular, 500 medium, 600 semibold, 700 bold
-	Italic bool    // the family's italic (oblique) face; upright when it has none
-	Scale  float32 // pixels per point (2 on Retina)
+	Family string // "" = system UI font (SF Pro on macOS)
+	Mono   bool   // system monospace font when Family == ""
+	// Tabular sets the figures at one width (OpenType tnum: macOS's
+	// monospaced numbers), for times, counts and sizes that sit in columns or
+	// tick over, in the UI face rather than a monospaced one. On macOS only;
+	// elsewhere the face is unchanged.
+	Tabular bool
+	SizePt  float32 // points
+	Weight  int     // CSS-like: 400 regular, 500 medium, 600 semibold, 700 bold
+	Italic  bool    // the family's italic (oblique) face; upright when it has none
+	Scale   float32 // pixels per point (2 on Retina)
 }
 
 // Metrics are font metrics in pixels.

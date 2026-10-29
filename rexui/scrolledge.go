@@ -149,6 +149,46 @@ func scrollEdge(k *base.Kit, v *base.ScrollView, line bool, under *[3]float32) {
 	}
 }
 
+// SoftScrollEdge is macOS 26's soft scroll edge, for a pane whose title row
+// floats over its content (a Rex pane's, which draws no band): the box being
+// built gets, from its top, a strip top px high and fade px more, w wide.
+// While content is under the strip (under), it is the titlebar pocket's blur
+// of what is drawn under it (Hard: enough of the tint over the blur that a
+// title reads over a dark picture; build it after the content, before the
+// row), its tint tint where that is not 0 (the pane's colour, so the pocket
+// reads as the pane's), and over the last fade px it eases off to the sharp
+// content
+// (gpu.Backdrop.Fade): no bar, no hairline, no edge. At rest it is nothing,
+// the pane's own surface showing. Under Reduce Transparency it is the film's
+// pocket's opaque colour over the strip alone.
+func SoftScrollEdge(k *base.Kit, key ui.Key, w, top, fade float32, tint uint32, under bool) {
+	if !under || w <= 0 || top <= 0 {
+		return
+	}
+	c, r := k.Context(), k.Theme()
+	fill := scrollEdgeUnder(k, top, nil)
+	if tint&0xFF != 0 {
+		fill = tint | 0xFF
+	}
+	if r.Settings.ReduceTransparency {
+		theme.At(c, 0, 0, w, top)
+		c.NextBG(fill)
+		c.NextAuditExempt(ui.AuditCovered.Mask()) // the content scrolls under it on purpose
+		c.BoxKeyed(ui.DrawBackground|base.Floating, key, nil)
+		return
+	}
+	blur := scrollEdgeBlur(k, true)
+	if tint&0xFF != 0 {
+		blur.Tint = tint
+	}
+	blur.Fade, blur.FadeEdge = max(fade, 0), gpu.FadeBottom
+	theme.At(c, 0, 0, w, top+max(fade, 0))
+	c.NextBackdrop(blur)
+	c.NextBG(fill)
+	c.NextAuditExempt(ui.AuditCovered.Mask())
+	c.BoxKeyed(ui.DrawBackground|base.Floating, key, nil)
+}
+
 // scrollEdgeBlur is the scroll edge's blur in k's window: Hard (a table's,
 // hard) or Thin (a plain scroll view's), key or inactive.
 func scrollEdgeBlur(k *base.Kit, hard bool) gpu.Backdrop {

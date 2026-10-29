@@ -23,6 +23,7 @@ var sy struct {
 	cfRelease, cfRetain                         uintptr
 	cfStringCreateWithBytes, cfStringGetCString uintptr
 	cfDictionaryCreate, cfDictionaryGetValue    uintptr
+	cfArrayCreate, arrayCallBacks               uintptr
 	cfAttributedStringCreate                    uintptr
 	cfAttrCreateMutable, cfAttrReplaceString    uintptr
 	cfAttrSetAttributes, cfAttrSetAttribute     uintptr
@@ -65,6 +66,7 @@ var sy struct {
 	// constant CFStringRefs (values of the exported globals)
 	kFontAttribute, kTraitsAttribute, kWeightTrait, kFamilyAttribute uintptr
 	kDesignTrait, kDesignMonospaced                                  uintptr
+	kFeatureSettings, kFeatureType, kFeatureSelector                 uintptr
 	kParagraphStyle                                                  uintptr
 }
 
@@ -185,6 +187,9 @@ func loadSyms() error {
 		sy.kFontAttribute, sy.kTraitsAttribute = global(ct, "kCTFontAttributeName"), global(ct, "kCTFontTraitsAttribute")
 		sy.kWeightTrait, sy.kFamilyAttribute = global(ct, "kCTFontWeightTrait"), global(ct, "kCTFontFamilyNameAttribute")
 		sy.kDesignTrait, sy.kDesignMonospaced = global(ct, "kCTFontUIFontDesignTrait"), global(ct, "kCTFontUIFontDesignMonospaced")
+		sy.kFeatureSettings = global(ct, "kCTFontFeatureSettingsAttribute")
+		sy.kFeatureType, sy.kFeatureSelector = global(ct, "kCTFontFeatureTypeIdentifierKey"), global(ct, "kCTFontFeatureSelectorIdentifierKey")
+		sy.cfArrayCreate, sy.arrayCallBacks = sym(cf, "CFArrayCreate"), sym(cf, "kCFTypeArrayCallBacks")
 		sy.kParagraphStyle = global(ct, "kCTParagraphStyleAttributeName")
 	})
 	return loadErr
@@ -258,6 +263,7 @@ type System struct {
 	san   []byte    // the source with every invalid byte replaced by U+FFFD
 	keys  [2]uintptr
 	vals  [2]uintptr
+	arr   [1]uintptr
 	num   [1]float64
 	gid   [1]uint16
 	pt    [2]float64
@@ -362,8 +368,9 @@ func cssWeightToCT(w int) float64 {
 }
 
 // traitsAttrs returns the attributes dictionary {traits: {weight, design}}
-// (+1). mono selects the system monospaced design.
-func (s *System) traitsAttrs(weight int, mono bool) uintptr {
+// (+1), with {features: [{number spacing: monospaced}]} when tabular. mono
+// selects the system monospaced design.
+func (s *System) traitsAttrs(weight int, mono, tabular bool) uintptr {
 	n := s.number(cssWeightToCT(weight))
 	s.keys[0], s.vals[0] = sy.kWeightTrait, n
 	cnt := 1
@@ -373,8 +380,26 @@ func (s *System) traitsAttrs(weight int, mono bool) uintptr {
 	}
 	traits := s.dictN(cnt)
 	s.release(n)
-	attrs := s.dict1(sy.kTraitsAttribute, traits)
+	if !tabular {
+		attrs := s.dict1(sy.kTraitsAttribute, traits)
+		s.release(traits)
+		return attrs
+	}
+	// kNumberSpacingType (6), kMonospacedNumbersSelector (0)
+	typ, sel := s.number(6), s.number(0)
+	s.keys[0], s.vals[0] = sy.kFeatureType, typ
+	s.keys[1], s.vals[1] = sy.kFeatureSelector, sel
+	feature := s.dictN(2)
+	s.release(typ)
+	s.release(sel)
+	s.arr[0] = feature
+	features := s.fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&s.arr[0])).Arg(1).Arg(sy.arrayCallBacks).Call(sy.cfArrayCreate).R0()
+	s.release(feature)
+	s.keys[0], s.vals[0] = sy.kTraitsAttribute, traits
+	s.keys[1], s.vals[1] = sy.kFeatureSettings, features
+	attrs := s.dictN(2)
 	s.release(traits)
+	s.release(features)
 	return attrs
 }
 
@@ -520,12 +545,13 @@ func (s *System) createFont(d FontDesc, pt float64) uintptr {
 		return f
 	}
 	base := s.fr.Reset().Arg32(uiFontSystem).ArgF64(pt).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
-	if base == 0 || (d.Weight == 400 && !d.Mono) {
+	if base == 0 || (d.Weight == 400 && !d.Mono && !d.Tabular) {
 		return base
 	}
-	// Derive the weight / monospaced design from the system font's descriptor.
+	// Derive the weight, the monospaced design and the tabular figures from
+	// the system font's descriptor.
 	baseDesc := s.fr.Call1(sy.ctFontCopyFontDescriptor, base)
-	attrs := s.traitsAttrs(d.Weight, d.Mono)
+	attrs := s.traitsAttrs(d.Weight, d.Mono, d.Tabular)
 	desc := s.fr.Reset().Arg(baseDesc).Arg(attrs).Call(sy.ctFontDescriptorCreateCopyWithAttributes).R0()
 	s.release(attrs)
 	s.release(baseDesc)
