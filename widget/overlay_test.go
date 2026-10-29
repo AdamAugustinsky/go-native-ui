@@ -616,9 +616,10 @@ func TestMenuBarMnemonicUnderlines(t *testing.T) {
 }
 
 // A focused component that takes F10 or Alt+letter keeps it: the bar takes
-// them at the end of the frame, after the components.
+// them at the end of the frame, after the components. A dialog keeps the bar
+// from the keyboard.
 func TestMenuBarKeysGiveWayToTheFocusedComponent(t *testing.T) {
-	g, _ := newShell(t)
+	g, v := newShell(t)
 	took := 0
 	build := g.build
 	g.build = func(k *Kit) {
@@ -629,6 +630,13 @@ func TestMenuBarKeysGiveWayToTheFocusedComponent(t *testing.T) {
 		}
 	}
 	g.key(ui.KeyF10, 0)
+	g.altKey('F')
+	g.frames(2)
+	g.build = build
+	v.dlg = true // nor does the bar behind a dialog
+	g.frames(3)
+	g.key(ui.KeyF10, 0)
+	g.altTap()
 	g.altKey('F')
 	g.frames(2)
 	if took != 2 || g.k.MenuOpen() || g.c.FocusKey() == g.keyOf(ui.RoleMenuItem, "File") {

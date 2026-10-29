@@ -409,7 +409,7 @@ func (k *Kit) MenuBar() Signal {
 				c.ClaimKey(at)
 				want = bi
 			}
-		case c.TakeKey(ui.KeyEscape, 0):
+		case k.bar.mode && c.TakeKey(ui.KeyEscape, 0):
 			k.leaveBar()
 		}
 	}
@@ -530,6 +530,9 @@ func (k *Kit) menuBarKeys() {
 	}
 	k.bar.built = false
 	c := k.c
+	if c.ModalOpen() {
+		return // the bar is behind the dialog, as the app's commands are
+	}
 	bar := k.Menu().Bar()
 	onBar := false
 	for bi := range bar {
