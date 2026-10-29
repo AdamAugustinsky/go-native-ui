@@ -24,8 +24,12 @@
 //     that created it, so a rebuilt, re-signed program may be asked by the user
 //     (sign development builds with a stable identity: gnui run does).
 //   - Windows: Credential Manager, generic credentials named "service/account"
-//     (CredWriteW, CredReadW, CredDeleteW), persisted for this machine. One
-//     secret is at most 2560 bytes (CRED_MAX_CREDENTIAL_BLOB_SIZE).
+//     (CredWriteW, CredReadW, CredDeleteW), persisted for this machine. A
+//     credential holds at most 2560 bytes (CRED_MAX_CREDENTIAL_BLOB_SIZE); a
+//     larger secret is sealed for the current user with CryptProtectData and
+//     kept in a file under the app's data folder (paths.Data(service), which
+//     the service must then be able to name), and its credential holds the
+//     file's name. Get, Set and Delete treat both kinds alike.
 //   - Linux and other Unix systems: the freedesktop.org Secret Service over the
 //     session D-Bus (GNOME Keyring, KWallet, KeePassXC), in the default
 //     collection, with the attributes service and account. Without a session

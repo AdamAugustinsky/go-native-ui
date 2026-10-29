@@ -775,6 +775,52 @@ func TestUpdateIsInstalledAndKept(t *testing.T) {
 	}
 }
 
+// The helper must not depend on a descriptor it inherited to the lock file.
+// In the field, syspolicyd scanned the helper's copy of the bundle as it was
+// launched and revoked access to the lock file (the kernel logs "syspolicyd
+// revoked access to .../lock"); the helper's fd 3 was dead (EBADF), it
+// refused the job, and InstallAndRelaunch failed. The test app revokes its
+// inherited file descriptors the same way before the helper runs.
+func TestUpdateWhenTheInheritedLockIsRevoked(t *testing.T) {
+	w := newWorld(t, 20*time.Second)
+	zip := zipApp(t, makeBundle(t, filepath.Join(w.root, "build"), testID, "2.0", "healthy", true), filepath.Join(w.root, "u.zip"))
+	w.env = append(w.env, "SUTEST_REVOKE_INHERITED=1")
+	helper, _ := w.update(t, zip)
+	w.wait(t, 20*time.Second, "the new version starting", func(r report) bool { return r.Version == "2.0" && r.Event == "started" })
+	waitGone(t, helper, 20*time.Second)
+	if v := w.installed(t); v != "2.0" {
+		w.dump(t)
+		t.Fatalf("installed version %q, want 2.0", v)
+	}
+}
+
+// While the helper holds the staging folder, a later Prepare does not take it
+// for a stale one.
+func TestStagingHeldFromPrepareToTheHelper(t *testing.T) {
+	root := realTemp(t)
+	s := fakeSelf(t, root)
+	dir, lock, err := makeStaging(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer removeStaging(dir)
+	if !stagingInUse(dir) {
+		t.Fatal("a staging folder whose Staged holds it is not in use")
+	}
+	h, err := takeLock(dir)
+	if err != nil {
+		t.Fatalf("the helper's lock: %v", err)
+	}
+	lock.Close() // InstallAndRelaunch lets go once the helper said it took the job
+	if !stagingInUse(dir) {
+		t.Error("the staging folder is not in use while the helper holds it")
+	}
+	h.Close()
+	if stagingInUse(dir) {
+		t.Error("the staging folder is still in use after the helper let go")
+	}
+}
+
 // An app that allows a downgrade passes the choice to its helper, which
 // checks the versions again before the swap.
 func TestDowngradeAllowedByTheApp(t *testing.T) {

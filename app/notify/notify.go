@@ -130,7 +130,24 @@
 //     Setup returns ErrUnavailable. The system asks the user once, at
 //     RequestPermission, and remembers the answer per app; sign development
 //     builds with a stable identity (gnui run does) so it survives rebuilds.
-//   - Windows and Linux: not yet; Setup returns ErrUnsupported (errors.Is
+//   - Windows (phase 8 W6, D71): WinRT toasts posted as the app's AUMID
+//     (Options.AppID, which Setup also makes the process's explicit
+//     AUMID). The AUMID must be registered for the user
+//     (HKCU\Software\Classes\AppUserModelId\<AppID>, written by
+//     app/install), else Setup returns ErrNotRegistered. There is no
+//     permission prompt: RequestPermission and Status answer with the
+//     user's setting at once. A response while the app runs comes from the
+//     toast's Activated and Dismissed events, reply text included. A click
+//     or an action after the app quit starts it through the app's URL scheme
+//     (Options.Scheme, "<scheme>:gnui-notify?…"): Setup takes such an
+//     argument from os.Args, and a second instance's from app/instance
+//     (whose Options.Schemes must name the scheme), and either is delivered
+//     as the response, not as EvOpenURLs; IsActivation tells an app that
+//     reads its arguments to skip it. The reply text of a quit app's
+//     response is lost (no COM activator). Without a Scheme the actions work
+//     only while the app runs. Thread groups and attachments map to the
+//     toast's group and inline image; Subtitle is a second line.
+//   - Linux: not yet; Setup returns ErrUnsupported (errors.Is
 //     errors.ErrUnsupported) and Available is false.
 package notify
 
@@ -139,6 +156,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
@@ -196,6 +214,11 @@ var (
 	// ErrInvalid: a note, category or action the system cannot take (the
 	// error says what).
 	ErrInvalid = errors.New("notify: invalid")
+	// ErrNotRegistered: Windows shows no toast for an app whose AUMID is not
+	// registered (Options.AppID empty, or no
+	// HKCU\Software\Classes\AppUserModelId\<AppID>: install.Install
+	// writes it). The error names what is missing.
+	ErrNotRegistered = errors.New("notify: the app is not registered for notifications")
 )
 
 // The ErrCode of a ResultPost for a note that failed before the system had
@@ -218,8 +241,17 @@ type Options struct {
 	// the new note, instead of posting the new note without actions.
 	EvictOldest bool
 	// Foreground shows notes while the app is the active app (Foreground
-	// changes it later). Off, the system does not show them then.
+	// changes it later). Off, the system does not show them then (macOS;
+	// Windows shows toasts either way).
 	Foreground bool
+	// AppID is the app's identity on Windows, its AUMID: app.AppConfig.ID
+	// ("" reads the process's explicit AUMID). Ignored on macOS (the
+	// bundle identifier is).
+	AppID string
+	// Scheme is the app's URL scheme on Windows ("a3kb"), through which a
+	// click on a toast reaches an app that is not running; "" keeps the
+	// actions to while it runs. Ignored on macOS.
+	Scheme string
 }
 
 // Permission is what RequestPermission asks for.
@@ -511,6 +543,25 @@ type backend interface {
 // prepared is a backend's request, made and not sent.
 type prepared any
 
+// configurer is a backend that takes Setup's options before it starts and
+// checks that the system knows the app (Windows: the AUMID's registration).
+type configurer interface {
+	configure(o Options) error
+}
+
+// activationTag starts the part after "<scheme>:" of a URL a toast starts a
+// stopped app with (Windows).
+const activationTag = "gnui-notify?"
+
+// IsActivation reports whether arg, a command-line argument or a URL handed
+// over by a second instance, is a notification's activation, which Setup
+// (or app/instance, once the app runs) delivers as a Response: an app that
+// reads its arguments skips it. Only Windows starts an app with one.
+func IsActivation(arg string) bool {
+	_, rest, ok := strings.Cut(arg, ":")
+	return ok && strings.HasPrefix(rest, activationTag)
+}
+
 var svc struct {
 	setupMu sync.Mutex // Setup
 	b       backend
@@ -572,6 +623,11 @@ func Setup(o Options) error {
 	b := currentBackend()
 	if !b.supported() {
 		return ErrUnsupported
+	}
+	if c, ok := b.(configurer); ok {
+		if err := c.configure(o); err != nil {
+			return err
+		}
 	}
 	if !b.available() {
 		return ErrUnavailable

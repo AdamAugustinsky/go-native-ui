@@ -244,9 +244,10 @@ func stagingPrefix(bundle string) string {
 // makeStaging makes the private folder an update is staged in, on the
 // bundle's volume so that the swaps are renames: update-* in stagingRoot, or
 // else a hidden folder next to the bundle. The folder holds a "lock" file,
-// which marks it as ours; the returned file holds its lock (flock), which
-// passes to the helper, so that no other process takes the folder for a
-// stale one while it is in use.
+// which marks it as ours; the returned file holds a shared flock on it, so
+// that no other process takes the folder for a stale one while it is in use.
+// The helper takes a shared lock of its own before the app lets go of this
+// one (takeLock): the lock is never handed over as a descriptor.
 func makeStaging(s self) (string, *os.File, error) {
 	parent := filepath.Dir(s.bundle)
 	var want syscall.Stat_t
@@ -271,9 +272,9 @@ func makeStaging(s self) (string, *os.File, error) {
 		}
 		dir = d
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	lock, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_EXCL|os.O_RDONLY, 0o600)
 	if err == nil {
-		if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
 			lock.Close()
 		}
 	}
@@ -298,7 +299,8 @@ func isStaging(dir string) bool {
 }
 
 // stagingInUse reports whether a process (a Prepare, a Staged not yet
-// handed over, or the helper) holds the staging folder's lock.
+// handed over, or the helper) holds the staging folder's lock: an exclusive
+// lock is refused while anyone holds a shared one.
 func stagingInUse(dir string) bool {
 	f, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -557,13 +559,19 @@ func (s *Staged) InstallAndRelaunch(args []string) error {
 	defer readyR.Close()
 	cmd := exec.Command(helper, helperFlag, jobPath)
 	cmd.Dir = "/"
-	cmd.ExtraFiles = []*os.File{s.lock, readyW}          // fd 3: the staging folder's lock, held from Prepare to the helper's end; fd 4: readyFD
+	// Only the pipe is inherited, not the lock: macOS may revoke the helper's
+	// access to a file while it checks the new process (syspolicyd did, to the
+	// lock file, in one launch of 14), which leaves an inherited descriptor
+	// dead (EBADF). A pipe has no path to be revoked by. The helper opens and
+	// locks the file itself; s.lock holds the folder until it has.
+	cmd.ExtraFiles = []*os.File{readyW}                  // fd 3: readyFD
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives the app's terminal session, if any
 	err = cmd.Start()
 	readyW.Close()
 	if err == nil {
 		// A helper the system kills at exec still "starts": wait for it to
-		// say it took the job, so that the app does not quit for nothing.
+		// say it took the job and holds the lock, so that the app does not
+		// quit for nothing.
 		if err = waitReady(readyR, helperStartTimeout); err != nil {
 			cmd.Process.Kill()
 			cmd.Wait()
@@ -631,8 +639,9 @@ func copyBundle(src, dst string) error {
 const helperStartTimeout = 20 * time.Second
 
 // readyFD is the pipe the helper writes one byte to once it has taken the
-// job; a helper that refuses the job, or is stopped, ends without writing.
-const readyFD = 4
+// job and the staging folder's lock; a helper that refuses the job, or is
+// stopped, ends without writing.
+const readyFD = 3
 
 // waitReady waits for the helper's byte on r.
 func waitReady(r *os.File, timeout time.Duration) error {
