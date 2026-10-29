@@ -26,7 +26,7 @@ var (
 
 // ScreenPixel is the screen's colour (0xRRGGBB) at the centre of v's window:
 // what the page shows there, composed. Test packages run side by side on
-// one desktop, so it first puts v's top-level window above the others; when
+// one desktop, so it puts v's top-level window above the others while it reads; when
 // another program's window still covers the point, covered is that window's
 // class.
 func ScreenPixel(v *View) (px uint32, covered string) {
@@ -43,6 +43,7 @@ func ScreenPixel(v *View) (px uint32, covered string) {
 	dc := call(pGetDC, 0)
 	c := uint32(call(pGetPixel, dc, uintptr(x), uintptr(y)))
 	call(pReleaseDC, 0, dc)
+	call(pSetWindowPos, root, ^uintptr(1), 0, 0, 0, 0, swpNoSizeMoveActivate) // HWND_NOTOPMOST: not over other packages' windows
 	return c&0xFF<<16 | c&0xFF00 | c>>16&0xFF, covered // COLORREF is 0x00BBGGRR
 }
 
