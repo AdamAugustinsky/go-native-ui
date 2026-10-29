@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"runtime"
 	"time"
 	"unsafe"
@@ -52,13 +53,18 @@ type report struct {
 	// measurement, and Covering names what is on top.
 	TrailingValid bool                   `json:"trailing_valid"`
 	Covering      map[string]*windowInfo `json:"covering,omitempty"`
-	Errors        []string               `json:"errors,omitempty"`
+	// NoRedirect is the same probe in a child process whose top-level
+	// window has WS_EX_NOREDIRECTIONBITMAP, as the framework's windows do
+	// (platform.Open): does a GDI child still show over the swap chain? (W3)
+	NoRedirect json.RawMessage `json:"noredirect,omitempty"`
+	Errors     []string        `json:"errors,omitempty"`
 }
 
 var (
-	frames  = flag.Int("frames", 120, "frames of the scroll measured")
-	speed   = flag.Int("speed", 4, "pixels the list scrolls per frame")
-	timeout = flag.Duration("timeout", 60*time.Second, "give up (exit 1) after this long")
+	frames     = flag.Int("frames", 120, "frames of the scroll measured")
+	speed      = flag.Int("speed", 4, "pixels the list scrolls per frame")
+	timeout    = flag.Duration("timeout", 60*time.Second, "give up (exit 1) after this long")
+	noRedirect = flag.Bool("noredirect", false, "create the top-level window with WS_EX_NOREDIRECTIONBITMAP (the child-process run)")
 )
 
 func main() {
@@ -164,6 +170,9 @@ func main() {
 		r.Covering = covering()
 	}
 	call(pDestroyWindow, wins.top)
+	if !*noRedirect {
+		r.NoRedirect = runNoRedirect()
+	}
 	out, _ := json.MarshalIndent(r, "", "  ")
 	fmt.Println(string(out))
 }
@@ -179,4 +188,21 @@ var qpcFreq int64
 func qpcFrequency() int64 {
 	call(win32.Proc(k32, "QueryPerformanceFrequency"), uintptr(unsafe.Pointer(&qpcFreq)))
 	return qpcFreq
+}
+
+// runNoRedirect runs the probe again in a child process with
+// -noredirect and returns its report.
+func runNoRedirect() json.RawMessage {
+	exe, err := os.Executable()
+	if err != nil {
+		return json.RawMessage(fmt.Sprintf("%q", err.Error()))
+	}
+	out, err := exec.Command(exe, "-noredirect", "-frames", "30").Output()
+	if err != nil && len(out) == 0 {
+		return json.RawMessage(fmt.Sprintf("%q", err.Error()))
+	}
+	if !json.Valid(out) {
+		return json.RawMessage(fmt.Sprintf("%q", string(out)))
+	}
+	return out
 }

@@ -15,8 +15,6 @@ import (
 // its own locked thread, as W1's do (windows_windows_test.go).
 
 const (
-	wsCaption     = 0x00C00000
-	wsThickFrame  = 0x00040000
 	wsExAppWindow = 0x00040000
 )
 

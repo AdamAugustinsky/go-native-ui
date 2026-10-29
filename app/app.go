@@ -119,6 +119,10 @@ type Config struct {
 	// the OS has no panels yet (platform.PanelsSupported).
 	Panel *platform.Panel
 
+	// ChildWindows: the window hosts Win32 controls that draw with GDI
+	// (platform.Options.ChildWindows). Windows only; ignored elsewhere.
+	ChildWindows bool
+
 	// Place, when set, runs once the window exists and before its first
 	// frame, while it is still hidden: it may move, size or zoom the window
 	// (platform.Window's SetFrameRect and Zoom), as an app that puts its
@@ -371,7 +375,7 @@ func (a *App) openWin(cfg Config, b Builder, st *StartupReport, nativeMenus bool
 		MinWidth: int(cfg.MinWidth + 0.5), MinHeight: int(cfg.MinHeight + 0.5),
 		Titlebar: cfg.Titlebar, TrafficLights: cfg.TrafficLights, PublicAPIOnly: cfg.PublicAPIOnly,
 		Backdrop: cfg.Backdrop, Buttons: cfg.Buttons, Materials: cfg.Materials,
-		Panel: cfg.Panel,
+		Panel: cfg.Panel, ChildWindows: cfg.ChildWindows,
 	})
 	if err != nil {
 		return fmt.Errorf("app: open window: %w", err)

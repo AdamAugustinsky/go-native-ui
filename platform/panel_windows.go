@@ -37,9 +37,7 @@ const (
 	wsExNoActivate = 0x08000000
 	gwlExStyle     = -20
 
-	wmActivate      = 0x0006
 	wmMouseActivate = 0x0021
-	waInactive      = 0
 	maNoActivate    = 3
 
 	swShowNoActivate = 4
