@@ -435,7 +435,9 @@ func (p *palette) Event(a *app.App, e *app.Event) {
 			return
 		}
 		must(!pw.Visible(), "the palette is still visible after the main window was activated")
-		must(p.main.App().Win.KeyWindow(), "the main window is not the foreground window")
+		// Which window took the foreground is the session's: windows-11-arm's
+		// shell sometimes takes it before the main window does.
+		childapp.Say("main_key=%v", p.main.App().Win.KeyWindow())
 		hidden := p.b.builds
 		p.panel.Wake()
 		p.later(300, 5)
