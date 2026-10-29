@@ -140,7 +140,7 @@ jobs:
     # phase 8's live suites (webview, panels, capture, ws) took the job to 24-25 min
     timeout-minutes: 35
     env:
-      QUARANTINE: '^(TestGreenButtonWaitsForNativeReadiness|TestClientClose|TestPanelHidesOnDeactivate|TestVideoPlaysOnInAHiddenWindow)$'
+      QUARANTINE: '^(TestGreenButtonWaitsForNativeReadiness|TestClientClose|TestPanelHidesOnDeactivate)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

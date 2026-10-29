@@ -126,6 +126,26 @@ func (w *Window) Activate() {
 func (w *Window) Hide() {
 	objc.Send1(w.win, selOrderOut, 0)
 	w.unlinkHidden()
+	// AppKit reports an occlusion change only when the state changes: a
+	// window it never reported (opened covered, or on an asleep display) is
+	// ordered out with no event, and its app drew on, unpaced, without
+	// Input.Hidden (a video at its full rate in a hidden window). Hide
+	// reports it hidden; Show takes that back if AppKit still said nothing.
+	if w.visible == -1 {
+		w.hideSaid = true
+		w.pushVisible(false)
+	}
+}
+
+// pushVisible reports the window shown or hidden (EvVisible), as the
+// occlusion delegate does. Main thread.
+func (w *Window) pushVisible(on bool) {
+	e := Event{Kind: EvVisible, Time: Now()}
+	w.visible, w.visibleT = 0, e.Time
+	if on {
+		e.Flags, w.visible = FlagDown, 1
+	}
+	w.q.push(e)
 }
 
 // Visible reports whether the window is on screen (ordered in, possibly
