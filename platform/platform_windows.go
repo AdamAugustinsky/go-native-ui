@@ -575,6 +575,7 @@ func (w *Window) Close() {
 	if w.hwnd == 0 {
 		return
 	}
+	w.abortDialogs() // its file dialogs (W8), while the window still exists
 	reg.remove(w)
 	w.wakeMark.Store(false)
 	if w.clip != nil { // ends now, or when the native call it may be in returns; publishes nothing either way

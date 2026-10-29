@@ -316,3 +316,62 @@ func TestLiveDoDragDrop(t *testing.T) {
 		t.Fatalf("EvDragEnd: %+v (ticket %d)", ev, ticket)
 	}
 }
+
+// A foreign data object (the shell's, from SHCreateDataObject, holding text)
+// dropped 20 times, with the target registered and revoked around each drop,
+// keeps no reference of ours, and the window's own objects stay as they were
+// (W8's gate: 20 drops leak no COM object).
+var (
+	leakFE  formatEtc
+	leakSM  stgMedium
+	leakObj uintptr
+)
+
+func TestTwentyForeignDropsLeakNothing(t *testing.T) {
+	w := openDragWindow(t)
+	pCreate := win32.Proc(shell32, "SHCreateDataObject")
+	if pCreate == 0 {
+		t.Skip("no SHCreateDataObject")
+	}
+	if !w.oleSetup() {
+		t.Skip("OLE cannot be used on this thread")
+	}
+	if hr := com.HR(win32.Call(pCreate, 0, 0, 0, 0, uintptr(unsafe.Pointer(&iidDataObject)), uintptr(unsafe.Pointer(&leakObj)))); hr < 0 || leakObj == 0 {
+		t.Skipf("SHCreateDataObject: %#x", uint32(hr))
+	}
+	defer win32.Release(leakObj)
+	leakFE = formatEtc{cfFormat: cfUnicodeText, dwAspect: 1, lindex: -1, tymed: tymedHGlobal}
+	leakSM = stgMedium{tymed: tymedHGlobal, hglobal: allocClipboardText([]byte("dropped"))}
+	if hr := com.HR(com.Call(leakObj, 7, uintptr(unsafe.Pointer(&leakFE)), uintptr(unsafe.Pointer(&leakSM)), 1)); hr < 0 { // SetData, the object owns the memory
+		t.Skipf("IDataObject.SetData: %#x", uint32(hr))
+	}
+	refs := func() uintptr { win32.AddRef(leakObj); return com.Call(leakObj, 2) } // Release returns the count left
+	before, gdi0, user0 := refs(), uintptr(0), uintptr(0)
+	w.SetDragHandler(func(float32, float32, DragKinds, DragOp) DragAnswer {
+		return DragAnswer{Op: DragOpCopy, Accept: DragText}
+	})
+	for i := 0; i < 20; i++ {
+		w.SetDropKinds(DragText)
+		if !w.drag.registered {
+			t.Fatalf("drop %d: the window did not register", i)
+		}
+		testEffect = effectCopy
+		dragCall(w, 3, leakObj, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+		testEffect = effectCopy
+		dragCall(w, 6, leakObj, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+		ev := eventsOf(w, EvDrop)
+		if len(ev) != 1 || string(w.Text(ev[0].Text)) != "dropped" {
+			t.Fatalf("drop %d: %+v", i, ev)
+		}
+		w.SetDropKinds(0)
+		if i == 0 {
+			gdi0, user0 = guiObjects()
+		}
+	}
+	if after := refs(); after != before {
+		t.Errorf("the data object's references: %d before the drops, %d after", before, after)
+	}
+	if gdi1, user1 := guiObjects(); gdi1 > gdi0 || user1 > user0 {
+		t.Errorf("after 20 drops: GDI %d → %d, USER %d → %d", gdi0, gdi1, user0, user1)
+	}
+}
