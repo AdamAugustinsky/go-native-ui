@@ -581,6 +581,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 			fx = k.Fixed(rc.ExpandedMinH)
 			k.NextHeight(fx)
 		}
+		st.ed.SetColors(rc.Text.RGBA(r), rc.Fill.RGBA(r)) // Windows: the editor's window fills its box
 		ns = k.NativeEditor(st.ed, label)
 		editorPx := st.ed.Height() * sc // after the editor took its signals: this frame's
 		if fx.Value > 0 {
