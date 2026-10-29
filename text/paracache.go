@@ -20,6 +20,7 @@ type paraEnt struct {
 	fontOff, fontN   uint32
 	lineOff, lineN   uint32
 	gOff, gN         uint32
+	fitLo, fitHi     float32 // ParaView.FitFrom and FitTo
 }
 
 // paraBuild is the output of one layout, before the cache copies it.
@@ -33,11 +34,15 @@ type paraBuild struct {
 	width     float32
 	height    float32
 	truncated bool
+	// fitLo and fitHi are ParaView.FitFrom and FitTo; reset leaves them empty
+	// (a layout certifies nothing until its backend says what).
+	fitLo, fitHi float32
 }
 
 func (b *paraBuild) reset() {
 	b.lines, b.glyphs, b.xs, b.faces, b.clus, b.spanOf = b.lines[:0], b.glyphs[:0], b.xs[:0], b.faces[:0], b.clus[:0], b.spanOf[:0]
 	b.width, b.height, b.truncated = 0, 0, false
+	b.fitLo, b.fitHi = 1, 0
 }
 
 // reserve sizes the build buffers for a paragraph of up to glyphs glyphs and
@@ -175,7 +180,7 @@ func grow[T any](s *[]T, n int) {
 func (s *paraSlabs) add(p *Para, h uint64, b *paraBuild) paraEnt {
 	e := paraEnt{
 		hash: h, dir: p.Dir, ellipsis: p.Ellipsis, truncated: b.truncated,
-		maxLines: int32(p.MaxLines), width: p.Width, lineH: p.LineHeight, outW: b.width, outH: b.height,
+		maxLines: int32(p.MaxLines), width: p.Width, lineH: p.LineHeight, outW: b.width, outH: b.height, fitLo: b.fitLo, fitHi: b.fitHi,
 		textOff: uint32(len(s.text)), textLen: uint32(len(p.Text)),
 		spanOff: uint32(len(s.spans)), spanN: uint32(len(p.Spans)),
 		fontOff: uint32(len(s.fonts)), fontN: uint32(len(p.Fonts)),
@@ -219,6 +224,8 @@ func (s *paraSlabs) view(e *paraEnt) ParaView {
 		Width:     e.outW,
 		Height:    e.outH,
 		Truncated: e.truncated,
+		FitFrom:   e.fitLo,
+		FitTo:     e.fitHi,
 	}
 }
 

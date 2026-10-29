@@ -1,0 +1,8 @@
+{
+	"id": "dev.gonativeui.test.winprobe",
+	"name": "Win Probe",
+	"version": "1.2.3",
+	"build": "7",
+	"icon": "../hello/icon.png",
+	"windows": {"publisher": "Go Native UI tests", "copyright": "none"}
+}

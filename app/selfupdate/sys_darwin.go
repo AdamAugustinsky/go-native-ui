@@ -50,6 +50,7 @@ const (
 
 	cfNumberSInt64 = 4
 	renameSwapFlag = 0x2 // RENAME_SWAP (sys/stdio.h)
+	xattrNoFollow  = 0x1 // XATTR_NOFOLLOW (sys/xattr.h)
 )
 
 type sysLib struct {
@@ -62,7 +63,7 @@ type sysLib struct {
 
 	dictGet, numberGet, errorDesc uintptr
 
-	renamex, errnoLoc, pidPath, listPids uintptr
+	renamex, errnoLoc, pidPath, listPids, removeXattr uintptr
 }
 
 var sys sysLib
@@ -90,8 +91,9 @@ func (s *sysLib) load() {
 	s.dictGet, s.numberGet, s.errorDesc = cf.Sym(core, "CFDictionaryGetValue"), cf.Sym(core, "CFNumberGetValue"), cf.Sym(core, "CFErrorCopyDescription")
 	s.renamex, s.errnoLoc = cf.Sym(libc, "renamex_np"), cf.Sym(libc, "__error")
 	s.pidPath, s.listPids = cf.Sym(libc, "proc_pidpath"), cf.Sym(libc, "proc_listallpids")
+	s.removeXattr = cf.Sym(libc, "removexattr")
 	for _, p := range []uintptr{s.staticCreate, s.checkValidity, s.copySelf, s.copyDR, s.reqCreate, s.reqCopyString,
-		s.copySigningInfo, s.errorMsg, s.infoFlags, s.dictGet, s.numberGet, s.errorDesc, s.renamex, s.errnoLoc, s.pidPath, s.listPids} {
+		s.copySigningInfo, s.errorMsg, s.infoFlags, s.dictGet, s.numberGet, s.errorDesc, s.renamex, s.errnoLoc, s.pidPath, s.listPids, s.removeXattr} {
 		if p == 0 {
 			s.err = cf.ErrUnavailable
 		}
@@ -327,6 +329,30 @@ func renameSwap(a, b string) error {
 		return nil
 	}
 	return &os.LinkError{Op: "renamex_np", Old: a, New: b, Err: e}
+}
+
+// unquarantine removes the quarantine attribute from path itself (not what a
+// link names); a path without one is fine.
+func unquarantine(path string) error {
+	if err := ready(); err != nil {
+		return err
+	}
+	fr := cf.Acquire()
+	defer cf.Release(fr)
+	p, name := cString(path), cString("com.apple.quarantine")
+	runtime.LockOSThread()
+	r := int32(fr.Reset().ArgPtr(unsafe.Pointer(&p[0])).ArgPtr(unsafe.Pointer(&name[0])).Arg32(xattrNoFollow).Call(sys.removeXattr).R0())
+	var e syscall.Errno
+	if r != 0 {
+		e = syscall.Errno(*(*int32)(ffi.PtrFromC(fr.Call0(sys.errnoLoc))))
+	}
+	runtime.UnlockOSThread()
+	runtime.KeepAlive(p)
+	runtime.KeepAlive(name)
+	if r == 0 || e == syscall.ENOATTR {
+		return nil
+	}
+	return &os.PathError{Op: "removexattr", Path: path, Err: e}
 }
 
 // processPath is the executable of process pid (proc_pidpath), "" when there

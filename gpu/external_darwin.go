@@ -172,8 +172,11 @@ func (r *Renderer) addTexture(tex objc.ID, kind TextureKind) (int, TextureID) {
 		r.kinds = append(r.kinds, 0)
 		r.lastUse = append(r.lastUse, 0)
 		r.xtex = append(r.xtex, xtex{})
+		r.texW = append(r.texW, 0)
+		r.texH = append(r.texH, 0)
 	}
 	r.textures[i], r.kinds[i], r.lastUse[i], r.xtex[i] = tex, kind, 0, xtex{}
+	r.texW[i], r.texH[i] = 0, 0
 	return i, id
 }
 
@@ -198,16 +201,23 @@ func (r *Renderer) NewYUVTexture(f YUVFormat, w, h int, sp YUVSpace) (TextureID,
 	if w <= 0 || h <= 0 || (f != YUVNV12 && f != YUVI420) {
 		return 0, errors.New("gpu: NewYUVTexture: bad format or size")
 	}
-	cw, ch := chromaSize(w, h)
 	x := xtex{w: int32(w), h: int32(h), format: f, space: sp, owned: true}
-	if f == YUVNV12 {
+	r.newChromaPlanes(&x)
+	i, id := r.addTexture(r.newPlane(mtlR8Unorm, w, h), texYUV)
+	r.xtex[i] = x
+	cw, ch := chromaSize(w, h)
+	r.ids.addBytes(i, int64(w)*int64(h)+2*int64(cw)*int64(ch)) // Y, and the chroma (NV12's RG8 plane or two R8 ones)
+	return id, nil
+}
+
+// newChromaPlanes creates the chroma planes of owned YUV texture x.
+func (r *Renderer) newChromaPlanes(x *xtex) {
+	cw, ch := chromaSize(int(x.w), int(x.h))
+	if x.format == YUVNV12 {
 		x.planes[0] = r.newPlane(mtlRG8Unorm, cw, ch)
 	} else {
 		x.planes[0], x.planes[1] = r.newPlane(mtlR8Unorm, cw, ch), r.newPlane(mtlR8Unorm, cw, ch)
 	}
-	i, id := r.addTexture(r.newPlane(mtlR8Unorm, w, h), texYUV)
-	r.xtex[i] = x
-	return id, nil
 }
 
 // StageYUV fills YUV texture t (NewYUVTexture) with image im, staged like

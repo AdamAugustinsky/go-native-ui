@@ -761,7 +761,18 @@ func TestFullTableReconcilesBeforeEvicting(t *testing.T) {
 
 // EvictOldest never takes the slot of a note replaced by one not taken yet:
 // the system removes by ID, which would remove the replacement too.
-func TestEvictionSkipsReplacedNotes(t *testing.T) {
+func TestEvictionSkipsReplacedNotes(t *testing.T) { evictionSkipsReplacedNotes(t) }
+
+// The same on a clock that does not tick between the posts, as Windows' does
+// not (the oldest is then the post with the smaller gen).
+func TestEvictionSkipsReplacedNotesOnACoarseClock(t *testing.T) {
+	old := postClock
+	postClock = func() int64 { return 1 }
+	defer func() { postClock = old }()
+	evictionSkipsReplacedNotes(t)
+}
+
+func evictionSkipsReplacedNotes(t *testing.T) {
 	f, _ := fresh(t, Options{EvictOldest: true})
 	mustPost(t, Note{ID: "x", Title: "x0", UserData: []byte("x0")}) // the oldest
 	k0 := f.lastAdd().key
@@ -1211,7 +1222,7 @@ func TestCutUTF8(t *testing.T) {
 
 // Without a notification center the calls fail cleanly: ErrUnsupported
 // where the OS has none here, ErrUnavailable on macOS outside a bundle (a
-// test binary), never a crash.
+// test binary), ErrNotRegistered on Windows without an AUMID, never a crash.
 func TestWithoutACenter(t *testing.T) {
 	svc.setupMu.Lock()
 	prevOn := svc.on.Load()
@@ -1235,6 +1246,13 @@ func TestWithoutACenter(t *testing.T) {
 	case "darwin":
 		if !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("Setup: %v, want ErrUnavailable", err)
+		}
+		if _, err := Post(Note{Title: "x"}); !errors.Is(err, ErrNotSetUp) {
+			t.Fatalf("Post: %v", err)
+		}
+	case "windows": // no AUMID in a test binary
+		if !errors.Is(err, ErrNotRegistered) {
+			t.Fatalf("Setup: %v, want ErrNotRegistered", err)
 		}
 		if _, err := Post(Note{Title: "x"}); !errors.Is(err, ErrNotSetUp) {
 			t.Fatalf("Post: %v", err)
@@ -1398,6 +1416,53 @@ func TestLastDrainEndsParking(t *testing.T) {
 	p.wait()
 	if st := ReadStats(); acks.Load() != 1 || drops.Load() != 1 || st.LostAtExit != 1 || st.Parked != 0 || retrying() {
 		t.Fatalf("after it: answered %d, given up %d, retrying %v, stats %+v", acks.Load(), drops.Load(), retrying(), st)
+	}
+}
+
+// The retry goroutine ends its list before it answers what it stored: the
+// last drain waits for it all the same, or an answer could come after the
+// drain, or not before the check that none is left.
+func TestLastDrainWaitsForTheAnswerOfTheRetry(t *testing.T) {
+	f, _ := fresh(t, Options{})
+	for i, k := range fillSlots(t, f, MaxResponses, "") {
+		if !stored(k, ActionClick, nil, nil) {
+			t.Fatal(i)
+		}
+	}
+	for i := range nSpare {
+		if !stored(uint64(1)<<40|uint64(i+1), ActionClick, nil, nil) {
+			t.Fatal(i)
+		}
+	}
+	p := respond(uint64(1)<<41, 1, nil, []byte("parked"))
+	if p == nil {
+		t.Fatal("stored with every record taken")
+	}
+	answering, release := make(chan struct{}), make(chan struct{})
+	var acks atomic.Int32
+	p.ack, p.drop = func() { close(answering); <-release; acks.Add(1) }, func() {}
+	p.wait()
+	waitUntil(t, "the retry stored it", func() bool {
+		select {
+		case <-answering:
+			return true
+		default:
+			return false
+		}
+	})
+	if retrying() {
+		t.Fatal("the retry goroutine still holds a list that is empty")
+	}
+	returned := make(chan bool)
+	go func() { returned <- lastDrain(true) }()
+	select {
+	case <-returned:
+		t.Fatal("the last drain returned while the retry goroutine was still answering")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if <-returned || acks.Load() != 1 {
+		t.Fatalf("after the answer: answered %d", acks.Load())
 	}
 }
 

@@ -45,9 +45,10 @@ go test ./examples/services                              # every service replace
   bundle the id `….dev` (the notification grant and the login agent are keyed by that
   bundle id and are separate). `App.ID()` is `AppConfig.ID` or, when that is empty,
   the running bundle's id, so an app that wants them apart leaves `ID` empty and
-  passes `a.ID()` from `Start`. That is empty outside a bundle (`go run`, Windows,
-  Linux), where the app needs a constant of its own: the framework has no
-  development/release split there.
+  passes `a.ID()` from `Start`. Outside a bundle (`go run`, Windows, Linux) it is a
+  development id made from the executable's name (`dev.gonativeui.notes`), valid as
+  a directory name; the framework has no development/release split there, so an
+  app that wants one sets `ID` itself.
 - **The Dock and the status item** are exercised without a bundle by their packages'
   own tests, and work from a bare `go run`.
 - Only macOS has a native version of the first three. The others are marked "not

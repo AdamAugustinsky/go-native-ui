@@ -57,6 +57,25 @@ func TestImageIOAPNG(t *testing.T) {
 	}
 }
 
+// TestImageIOTrim: a trimmed decoder releases its source object and renders
+// the same frames again, opening it from the file.
+func TestImageIOTrim(t *testing.T) {
+	w, d := openIIO(t, animgen.APNG(8, 8, disposalFrames(), 3))
+	_, _, before := renderIIO(t, w, d, 2)
+	if kept := d.trim(&w.fr); kept <= 0 || kept >= d.retained() {
+		t.Errorf("trim kept %d of %d bytes", kept, d.retained())
+	}
+	if d.(*iioAnim).src != 0 {
+		t.Error("the source object is still open")
+	}
+	for _, f := range []int{2, 3, 0} {
+		_, _, after := renderIIO(t, w, d, f)
+		if f == 2 && string(after) != string(before) {
+			t.Error("frame 2 differs after the trim")
+		}
+	}
+}
+
 func TestImageIOAPNGBlendAndDelays(t *testing.T) {
 	half := animgen.Solid(4, 4, color.NRGBA{0, 0, 255, 128})
 	fr := []animgen.Frame{

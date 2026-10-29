@@ -47,7 +47,17 @@
 //   - macOS 13 and later: ServiceManagement's SMAppService (mainAppService for
 //     App, agentServiceWithPlistName: for Agent). It works only in a bundled
 //     app; elsewhere every call returns ErrUnavailable.
-//   - Windows and Linux: not yet; every call returns ErrUnsupported (errors.Is
+//   - Windows: a value under HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+//     starting the running executable (D76). App's value is named after the
+//     executable (without ".exe") and passes no arguments; RunValue names
+//     the value and its arguments (the way to start hidden: RunValue(name,
+//     StartHiddenArg)). Agent returns ErrNotFound: there are no bundled
+//     agents. Enable writes the command again each time, so it follows the
+//     executable; it never touches the user's switch in Task Manager or
+//     Settings → Apps → Startup (…\Explorer\StartupApproved\Run), which Status
+//     reports as RequiresApproval while it is off (OpenSettings opens that
+//     page). Disable deletes the value.
+//   - Linux: not yet; every call returns ErrUnsupported (errors.Is
 //     errors.ErrUnsupported). StartHidden works everywhere.
 package login
 
@@ -55,6 +65,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 var (
@@ -128,7 +139,9 @@ func StartHidden() bool {
 // Item is one login item: the app itself (App) or a bundled launch agent
 // (Agent).
 type Item struct {
-	agent string // "" for the app
+	agent string   // "" for the app
+	run   string   // a Windows Run value's name (RunValue)
+	args  []string // its arguments
 }
 
 // App is the app's own login item: it starts the app at login with no
@@ -158,6 +171,21 @@ func validAgent(name string) bool {
 	return name != ""
 }
 
+// RunValue is the Windows login item that the value name under
+// HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
+// describes: it starts the running executable with args. An app that had a
+// Run value before keeps its name (a3-kb: RunValue("HyperPedia",
+// StartHiddenArg)), so the user's choice in Task Manager carries over. On
+// other systems its calls return ErrUnsupported. A name that is empty, has
+// a backslash or is longer than 255 characters gives an Item whose calls
+// fail with ErrInvalid.
+func RunValue(name string, args ...string) Item {
+	if name == "" || len(name) > 255 || strings.ContainsAny(name, "\\\x00") {
+		return Item{agent: "\x00" + name}
+	}
+	return Item{run: name, args: append([]string(nil), args...)}
+}
+
 func (i Item) check() error {
 	if len(i.agent) > 0 && i.agent[0] == 0 {
 		return fmt.Errorf("%w: %q", ErrInvalid, i.agent[1:])
@@ -170,7 +198,7 @@ func (i Item) Status() (State, error) {
 	if err := i.check(); err != nil {
 		return NotFound, err
 	}
-	return osStatus(i.agent)
+	return osStatusItem(i)
 }
 
 // Enable registers the item as a login item and returns the state it is in:
@@ -181,7 +209,7 @@ func (i Item) Enable() (State, error) {
 	if err := i.check(); err != nil {
 		return NotFound, err
 	}
-	return osEnable(i.agent)
+	return osEnableItem(i)
 }
 
 // Disable removes the item from the login items. An item that is not
@@ -190,7 +218,7 @@ func (i Item) Disable() (State, error) {
 	if err := i.check(); err != nil {
 		return NotFound, err
 	}
-	return osDisable(i.agent)
+	return osDisableItem(i)
 }
 
 // Status is App().Status().
@@ -203,5 +231,5 @@ func Enable() (State, error) { return App().Enable() }
 func Disable() (State, error) { return App().Disable() }
 
 // OpenSettings opens System Settings at the Login Items pane, where the user
-// approves a login item.
+// approves a login item (on Windows, Settings → Apps → Startup).
 func OpenSettings() error { return osOpenSettings() }

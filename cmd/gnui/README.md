@@ -144,6 +144,7 @@ are required.
 | `entitlements` | written to a generated entitlements plist and applied to the main bundle | none |
 | `loginAgents` | bundled launch agents (below) | none |
 | `extraPlist` | merged into `Info.plist` last, wins | none |
+| `windows` | for `-target windows/…` only: `publisher` (CompanyName, shown in Settings' installed apps), `aumid` (overrides `id` as the AppUserModelID), `description` (FileDescription, default the display name), `copyright`, and `sign`, the signing command with `{file}` for the executable (see the packaging guide, section 6) | none |
 
 ### Login agents
 

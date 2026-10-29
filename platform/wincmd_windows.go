@@ -1,7 +1,7 @@
 package platform
 
 import (
-	"syscall"
+	"unicode/utf16"
 	"unsafe"
 
 	"gonativeui/internal/win32"
@@ -79,18 +79,32 @@ func procEither(dll uintptr, a, b string) uintptr {
 }
 
 // SetTitle sets the window's title (the title bar, the taskbar button,
-// Alt+Tab). Main thread.
+// Alt+Tab). Text from the first NUL on is dropped, as the OS reads a C
+// string. It allocates only while the title outgrows the buffer it keeps.
+// Main thread.
 func (w *Window) SetTitle(title string) {
 	if w.hwnd == 0 {
 		return
 	}
-	u, err := syscall.UTF16FromString(title)
-	if err != nil {
-		return
+	t := w.titleBuf[:0]
+	for _, r := range title {
+		if r == 0 {
+			break
+		}
+		t = utf16.AppendRune(t, r)
 	}
-	w.titleBuf = u
+	w.titleBuf = append(t, 0)
 	win32.Call(pSetWindowTextW, w.hwnd, uintptr(unsafe.Pointer(&w.titleBuf[0])))
 }
+
+// Retire does nothing here: no OS waits for a quit answer inside the pump.
+func (w *Window) Retire() {}
+
+// SetRepresentedFile does nothing here: only macOS has a proxy icon.
+func (w *Window) SetRepresentedFile(path string) {}
+
+// SetRepresentedURL does nothing here: only macOS has a proxy icon.
+func (w *Window) SetRepresentedURL(url string) {}
 
 // FrameRect is the window's frame in the virtual screen's pixels (see above).
 // Main thread.
@@ -220,10 +234,3 @@ func (w *Window) Visible() bool {
 
 // SetDocumentEdited does nothing on Windows (the caption has no such mark).
 func (w *Window) SetDocumentEdited(edited bool) {}
-
-// RequestAttention does nothing here yet and returns 0 (the taskbar flash is
-// phase 8's S1).
-func RequestAttention(critical bool) int { return 0 }
-
-// CancelAttention does nothing here yet.
-func CancelAttention(id int) {}

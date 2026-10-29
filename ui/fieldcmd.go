@@ -9,8 +9,8 @@ import (
 // before the field acts on it. The set follows AppKit's command selectors
 // (doCommandBySelector: of NSTextView, which a native composer sends the same
 // way): move up and down, page up and down, insert newline, cancel, insert tab
-// and backtab, delete backward and forward at the start or end of the text,
-// and the insertion of a separator character.
+// and backtab, delete backward and forward, and the insertion of a separator
+// character.
 type FieldCommand uint8
 
 const (
@@ -36,11 +36,11 @@ const (
 	// focus traversal.
 	FieldInsertTab
 	FieldInsertBacktab
-	// FieldDeleteBackward: deleteBackward: with the caret at the start of the
-	// text and no selection (Backspace, or the system binding for it).
+	// FieldDeleteBackward: deleteBackward: (Backspace, or the system binding
+	// for it), wherever the caret is and with or without a selection; a
+	// commander that only cares about the edge reads the buffer's caret.
 	FieldDeleteBackward
-	// FieldDeleteForward: deleteForward: with the caret at the end of the
-	// text and no selection.
+	// FieldDeleteForward: deleteForward: (Delete), likewise.
 	FieldDeleteForward
 	// FieldInsertSeparator: one of the separator characters is being inserted
 	// at the caret; the rune is the argument. The text before it, in the same
@@ -74,9 +74,8 @@ func (c *Context) NextFieldCommander(cmdr FieldCommander, separators string) {
 }
 
 // keyCommand is the command for key event e, when the key has one: without
-// modifiers (Shift+Tab is the backtab), and for Backspace and Delete only at
-// the start and end of the text.
-func keyCommand(e *KeyEvent, buf *TextBuffer) FieldCommand {
+// modifiers (Shift+Tab is the backtab).
+func keyCommand(e *KeyEvent) FieldCommand {
 	if e.Mods&^ModShift != 0 {
 		return FieldNone
 	}
@@ -107,20 +106,16 @@ func keyCommand(e *KeyEvent, buf *TextBuffer) FieldCommand {
 	case KeyEscape:
 		return FieldCancel
 	case KeyBackspace:
-		if buf.caret == 0 && !buf.HasSelection() {
-			return FieldDeleteBackward
-		}
+		return FieldDeleteBackward
 	case KeyDelete:
-		if buf.caret == len(buf.b) && !buf.HasSelection() {
-			return FieldDeleteForward
-		}
+		return FieldDeleteForward
 	}
 	return FieldNone
 }
 
 // editCommand is the command for edit action a (what the system's bindings
 // deliver on macOS), when it has one.
-func editCommand(a EditAction, buf *TextBuffer) FieldCommand {
+func editCommand(a EditAction) FieldCommand {
 	switch a {
 	case EditMoveUp:
 		return FieldMoveUp
@@ -131,13 +126,9 @@ func editCommand(a EditAction, buf *TextBuffer) FieldCommand {
 	case EditMoveRight:
 		return FieldMoveRight
 	case EditDeleteBackward:
-		if buf.caret == 0 && !buf.HasSelection() {
-			return FieldDeleteBackward
-		}
+		return FieldDeleteBackward
 	case EditDeleteForward:
-		if buf.caret == len(buf.b) && !buf.HasSelection() {
-			return FieldDeleteForward
-		}
+		return FieldDeleteForward
 	}
 	return FieldNone
 }
@@ -145,13 +136,12 @@ func editCommand(a EditAction, buf *TextBuffer) FieldCommand {
 // insertTyped inserts p at the caret; with a commander and separators it
 // offers each separator character as FieldInsertSeparator at the place it is
 // inserted, and inserts it only if the commander passes. sealed makes the
-// insertion one undo step (pasted text).
-func (c *Context) insertTyped(buf *TextBuffer, p []byte, sealed bool) {
+// insertion undo steps of their own (pasted text).
+func (c *Context) insertTyped(buf *TextBuffer, p []byte, sealed bool, cm FieldCommander, seps string) {
 	ins := buf.Insert
 	if sealed {
 		ins = buf.insertSealed
 	}
-	cm, seps := c.cmdr, c.cmdrSeps
 	if cm == nil || seps == "" {
 		ins(p)
 		return

@@ -78,6 +78,8 @@ type Cache struct {
 	upHead, upN                    int
 	pages                          []*page
 	frame                          uint64
+	ep                             interface{ Epoch() uint32 } // the renderer's, if it counts rebuilds
+	epoch                          uint32                      // ep's when the GPU's contents were last made
 	gpuUsed, cpuUsed               int64
 	st                             Stats
 	closed                         bool
@@ -86,7 +88,9 @@ type Cache struct {
 // NewCache starts a cache and its decoding workers. Setup allocates: the
 // tables are sized by Options.Entries and never grow. The cache is bound to
 // Options.Renderer for its entire lifetime; replacing the renderer requires
-// a new cache, not reuse of the old cache's texture IDs or handles.
+// a new cache, not reuse of the old cache's texture IDs or handles. A
+// renderer that rebuilds itself in place after a lost device
+// (gpu.Renderer.Rebuild) is the same renderer: see Poll.
 func NewCache(o Options) *Cache {
 	if o.Renderer == nil {
 		panic("img: Options.Renderer is nil")
@@ -138,6 +142,9 @@ func NewCache(o Options) *Cache {
 	c.pool = task.NewPool(task.Options{Workers: o.Workers, Queue: queue, Wake: o.Wake}, c.decodeJob)
 	c.apool = task.NewPool(task.Options{Workers: animWorkers, Queue: queue}, c.decodeJob)
 	c.wake = o.Wake
+	if ep, ok := o.Renderer.(interface{ Epoch() uint32 }); ok {
+		c.ep, c.epoch = ep, ep.Epoch()
+	}
 	c.ringCap, c.autoFn = o.AnimRing-1, o.Autoplay
 	if c.autoFn == nil {
 		c.autoFn = func() bool { return systemAutoplay(c.fr) }
@@ -368,9 +375,19 @@ func taskKey(i int32, gen uint32) uint64 { return uint64(gen)<<32 | uint64(uint3
 // frame, before the frame's Requests; it reports whether uploads are left
 // for the next frame (then ask for one: ui.Context.RequestFrame). It
 // allocates nothing.
+//
+// When the renderer was rebuilt after a lost device (its Epoch changed), the
+// textures kept their ids and lost their pixels: Poll takes every image off
+// the GPU and uploads again, a few a frame like new decodes, those it still
+// holds the pixels of (Options.CPUBytes); the others, and the handles of
+// images whose pixels it dropped, no longer resolve and are requested again.
+// An image is Pending until then.
 func (c *Cache) Poll() (more bool) {
 	if c.closed {
 		return false
+	}
+	if c.ep != nil && c.ep.Epoch() != c.epoch {
+		c.gpuLost()
 	}
 	c.frame++
 	c.autoKnown = false
@@ -401,6 +418,23 @@ func (c *Cache) Poll() (more bool) {
 	}
 	c.trimCPU()
 	return c.upN > 0
+}
+
+// gpuLost takes every image off the GPU, whose contents the renderer lost
+// (it was rebuilt), and queues those whose pixels are in memory to be
+// uploaded again, most recently used first.
+func (c *Cache) gpuLost() {
+	c.epoch = c.ep.Epoch()
+	for i := c.head; i >= 0; {
+		next := c.ents[i].next
+		if c.ents[i].stage == stGPU {
+			c.evictGPU(i)
+			if e := &c.ents[i]; e.stage == stCPU && !e.queue {
+				c.enqueue(i)
+			}
+		}
+		i = next
+	}
 }
 
 // finish takes one finished decode.
@@ -584,6 +618,9 @@ func (c *Cache) trimCPU() {
 	for i := c.tail; i >= 0 && c.cpuUsed > c.cpuBudget; {
 		prev := c.ents[i].prev
 		e := &c.ents[i]
+		if a := c.anims[i]; a != nil && a.hidden && c.inUse(e) && !a.inflight && c.trimHidden(a) {
+			break // (built but not shown, clipped or scrolled out: its canvases go, and come back when it is shown)
+		}
 		switch {
 		case c.anims[i] != nil && !c.inUse(e) && !c.animBusy(i): // an animation that is not shown goes whole: its decoder, canvases and frames
 			if e.stage == stGPU {

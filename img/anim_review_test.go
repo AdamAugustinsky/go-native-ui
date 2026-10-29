@@ -256,6 +256,59 @@ func TestAnimIdleEvictedUnderCPUPressure(t *testing.T) {
 	}
 }
 
+// TestAnimHiddenBuiltEvictedUnderCPUPressure: a list that is not virtualised
+// builds every animation each frame, and most of them are clipped away. They
+// are in use (requested, drawn) but not shown, and under CPU pressure they go
+// like the ones not built: the budget holds with only the shown one kept.
+func TestAnimHiddenBuiltEvictedUnderCPUPressure(t *testing.T) {
+	const mem, budget, n = 12 << 20, 40 << 20, 12
+	fs := useFake(t, func(*fakeSet) *fakeDec {
+		return &fakeDec{w: 1000, h: 1000, delays: []int{100, 100, 100}, mem: mem}
+	})
+	g := &animGPU{fakeGPU: newFakeGPU()}
+	c := NewCache(Options{Renderer: g, Wake: func() {}, CPUBytes: budget})
+	defer c.Close(time.Second)
+	now := ms
+	var hs [n]Handle
+	for f := 0; f < 30; f++ {
+		settle(t, c, func() {
+			for i := range hs {
+				k := Key{Hash: uint64(i + 1), W: 16, H: 16, Flags: Animate}
+				hs[i], _ = c.Request(k, Bytes([]byte("FAKE")))
+				c.UseAnimated(hs[i], Present{Now: now, Visible: i == 0})
+			}
+		})
+		now += 100 * ms
+		if got := c.Stats().CPUBytes; f > 2 && got > budget+mem {
+			t.Fatalf("frame %d: CPUBytes is %d with %d built and one shown, over the budget of %d", f, got, n, budget)
+		}
+	}
+	if !c.Animated(hs[0]) {
+		t.Error("the shown animation was evicted")
+	}
+	if fs.trims.Load() == 0 {
+		t.Error("no hidden animation lost its canvases")
+	}
+	if live := fs.opens.Load() - fs.closes.Load(); live != n {
+		t.Errorf("%d animations alive, want all %d (trimmed, not evicted)", live, n)
+	}
+	// One is revealed: it carries on, and its canvases count again.
+	before := c.animOf(hs[n-1]).cur
+	for f := 0; f < 10; f++ {
+		settle(t, c, func() {
+			for i := range hs {
+				c.UseAnimated(hs[i], Present{Now: now, Visible: i == 0 || i == n-1})
+			}
+		})
+		now += 100 * ms
+		time.Sleep(5 * time.Millisecond) // (the frame jobs are not part of settle)
+	}
+	if c.animOf(hs[n-1]).cur == before {
+		a := c.animOf(hs[n-1])
+		t.Errorf("not playing: cur %d next %d nring %d inflight %v trimmed %v hidden %v started %v mem %d cpu %d", a.cur, a.next, a.nring, a.inflight, a.trimmed, a.hidden, a.started, a.mem, c.Stats().CPUBytes)
+	}
+}
+
 // ---- 4: Close with a decode running leaks no buffer ---------------------------------
 
 func TestAnimCloseTimedOutFreesRing(t *testing.T) {

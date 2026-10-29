@@ -49,10 +49,18 @@
 //   - macOS: NSStatusItem in the system status bar, with an NSMenu built as the
 //     menu bar's are. A symbol is an SF Symbol; an image is drawn as a template
 //     (tinted for light and dark menu bars) when Template is set.
-//   - Windows (phase 8 W5): Shell_NotifyIconW with a native popup menu; the
-//     title becomes the tooltip (the notification area shows no text), and
-//     Balloon is the fallback for toasts (NIF_INFO). Until W5 lands New
-//     returns ErrUnsupported.
+//   - Windows (phase 8 W5): Shell_NotifyIconW (version 4) in the
+//     notification area, owned by the app's hidden window, with a native
+//     popup menu built from the model each time it opens (dark when the
+//     system's apps are, through undocumented uxtheme calls that
+//     Options.PublicAPIOnly and the gnui_publicapi tag turn off). The image
+//     is the PNG scaled to the area's icon size (a Template one drawn white
+//     or black for the taskbar's theme); a symbol, or no image, shows the
+//     executable's icon, so Icon{Symbol: …, PNG: …} gives each OS its
+//     own. The notification area shows no text: the Title is the
+//     tooltip's second line. A left click is NIN_SELECT (or Enter), a right
+//     click WM_CONTEXTMENU. The icons come back by themselves when Explorer
+//     restarts. Balloon is the fallback for toasts (NIF_INFO).
 //   - Linux: not yet; New returns ErrUnsupported (errors.Is
 //     errors.ErrUnsupported).
 package tray
@@ -122,6 +130,9 @@ type Options struct {
 	// RightClickMenu makes the left click an event and the right click (or a
 	// Control-click) open the menu; see the package documentation.
 	RightClickMenu bool
+	// PublicAPIOnly keeps the menu to documented system interfaces: on
+	// Windows it stays light in dark mode (as with the gnui_publicapi tag).
+	PublicAPIOnly bool
 }
 
 // Click is a click on a status item (Item.Clicked).

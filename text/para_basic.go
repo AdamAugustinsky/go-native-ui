@@ -202,13 +202,24 @@ func (l *BasicLayouter) layout(p *Para) {
 	l.shapeRuns(p)
 	// Without cluster information (or room to wrap in) the text is one line
 	// per newline.
-	wrapping := p.Width >= 1
+	measurable := true
 	for k := range l.runs {
 		if l.meas[k].textLen != l.runs[k].end-l.runs[k].start {
-			wrapping = false
+			measurable = false
 		}
 	}
+	wrapping := p.Width >= 1 && measurable
+	// The layout holds at every width at which each comparison that decided
+	// it comes out the same (note narrows the interval); an unmeasurable
+	// layout certifies nothing.
+	l.b.fitLo, l.b.fitHi = 1, float32(math.Inf(1))
+	if !measurable {
+		l.b.fitHi = 0
+	}
 	l.breakLines(txt, p.Width, wrapping)
+	if measurable && !wrapping {
+		l.noteUnbounded(txt, p)
+	}
 
 	n := len(l.ends)
 	if p.MaxLines > 0 && n > p.MaxLines {
@@ -301,7 +312,9 @@ func (l *BasicLayouter) breakLines(txt []byte, avail float32, wrapping bool) {
 			continue
 		}
 		te := trimEnd(txt, start, end)
-		if x := l.measure(start, te); x <= avail+0.01 || te <= start {
+		x := l.measure(start, te)
+		l.note(x, x <= avail+fitSlack)
+		if x <= avail+fitSlack || te <= start {
 			lastFit = end
 			if hard {
 				l.ends = append(l.ends, int32(end))
@@ -320,8 +333,15 @@ func (l *BasicLayouter) breakLines(txt []byte, avail float32, wrapping bool) {
 		g := start
 		for {
 			n := NextGrapheme(txt, g)
-			if n > te || n <= g || (g > start && l.measure(start, n) > avail+0.01) {
+			if n > te || n <= g {
 				break
+			}
+			if g > start {
+				x := l.measure(start, n)
+				l.note(x, x <= avail+fitSlack)
+				if x > avail+fitSlack {
+					break
+				}
 			}
 			g = n
 		}
@@ -364,11 +384,11 @@ func (l *BasicLayouter) cutForEllipsis(p *Para, start, limit int, wrapping bool)
 	var room float32 // the widest ellipsis the cut left room for
 	for {
 		room = max(room, l.ellipsisWidth(p, run))
-		cut = l.fitCut(p, start, limit, p.Width-room)
+		cut = l.fitCut(p, start, limit, room)
 		run = l.ellipsisRun(start, trimEnd(p.Text, start, cut))
 		if ew := l.ellipsisWidth(p, run); ew <= room {
 			if ew < room { // a narrower ellipsis than room was left for: keep more if that still fits
-				if c := l.fitCut(p, start, limit, p.Width-ew); c > cut {
+				if c := l.fitCut(p, start, limit, ew); c > cut {
 					if r := l.ellipsisRun(start, trimEnd(p.Text, start, c)); l.ellipsisWidth(p, r) <= ew {
 						cut, run = c, r
 					}
@@ -380,18 +400,58 @@ func (l *BasicLayouter) cutForEllipsis(p *Para, start, limit int, wrapping bool)
 }
 
 // fitCut is the last grapheme boundary in [start, limit] whose text, without
-// trailing white space, is at most room wide.
-func (l *BasicLayouter) fitCut(p *Para, start, limit int, room float32) int {
+// trailing white space, leaves room for an ellipsis ew wide in the width.
+func (l *BasicLayouter) fitCut(p *Para, start, limit int, ew float32) int {
+	room := p.Width - ew
 	cut := start
 	for g := start; g < limit; {
 		n := NextGrapheme(p.Text, g)
-		if n <= g || n > limit || l.measure(start, trimEnd(p.Text, start, n)) > room+0.01 {
+		if n <= g || n > limit {
+			break
+		}
+		x := l.measure(start, trimEnd(p.Text, start, n))
+		l.note(x+ew, x <= room+fitSlack)
+		if x > room+fitSlack {
 			break
 		}
 		g = n
 		cut = g
 	}
 	return cut
+}
+
+// fitMargin keeps the interval of note clear of the rounding of the
+// comparisons it stands for.
+const fitMargin = 0.002
+
+// note records a comparison that decided the layout: a line of width x
+// (including what is set after it, an ellipsis) fitted the width, or did not.
+// Layouts at the widths that decide every such comparison alike are the same
+// layout, so the widest line that fitted bounds the interval from below and
+// the narrowest that did not from above (ParaView.FitFrom).
+func (l *BasicLayouter) note(x float32, fits bool) {
+	if fits {
+		l.b.fitLo = max(l.b.fitLo, x-fitSlack+fitMargin)
+	} else {
+		l.b.fitHi = min(l.b.fitHi, x-fitSlack-fitMargin)
+	}
+}
+
+// noteUnbounded does the noting of a layout that was not wrapped to a width:
+// one line per newline, so a width keeps it when every line fits (the
+// segments of a line are narrower than the line). Text left out by MaxLines
+// would come out differently at a width that wraps.
+func (l *BasicLayouter) noteUnbounded(txt []byte, p *Para) {
+	if p.MaxLines > 0 && len(l.ends) > p.MaxLines {
+		l.b.fitHi = 0
+		return
+	}
+	start := 0
+	for _, e := range l.ends {
+		end := int(e)
+		l.note(l.measure(start, trimEnd(txt, start, end)), true)
+		start = end
+	}
 }
 
 // ellipsisRun is the style run of the last character of [start, to), the

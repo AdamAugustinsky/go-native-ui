@@ -477,26 +477,29 @@ func TestSwapWithoutRenameSwap(t *testing.T) {
 	}
 }
 
-// The helper is a copy of the executable outside its bundle; it must derive
-// the same designated requirement as the app.
-func TestRequirementOfACopy(t *testing.T) {
-	want, err := selfRequirement()
-	if err != nil {
+// The helper runs from a copy of the whole bundle, which must validate as the
+// bundle does: a Developer ID signature binds the Info.plist, and the system
+// kills the executable copied out of its bundle at exec. The copy carries no
+// quarantine.
+func TestHelperCopyOfTheBundle(t *testing.T) {
+	root := realTemp(t)
+	b := makeBundle(t, filepath.Join(root, "Applications"), testID, "1.0", "healthy", true)
+	run(t, "/usr/bin/xattr", "-w", "com.apple.quarantine", "0081;00000000;Safari;", b)
+	cp := filepath.Join(root, "staging", "helper", "SUTest.app")
+	if err := os.MkdirAll(filepath.Dir(cp), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	exe, _ := os.Executable()
-	cp := filepath.Join(realTemp(t), "copy")
-	if err := copyExecutable(exe, cp); err != nil {
+	if err := copyBundle(b, cp); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(cp)
-	cmd.Env = append(os.Environ(), "SELFUPDATE_PRINT_DR=1")
-	got, err := cmd.Output()
-	if err != nil {
-		t.Fatal(err)
+	if err := verifyCode(cp, testReq); err != nil {
+		t.Fatalf("the copy does not validate: %v", err)
 	}
-	if string(got) != want {
-		t.Fatalf("the copy's requirement %q, the original's %q", got, want)
+	if out, err := exec.Command("/usr/bin/xattr", "-p", "com.apple.quarantine", cp).CombinedOutput(); err == nil {
+		t.Errorf("the copy is quarantined: %s", out)
+	}
+	if err := copyBundle(b, cp); err == nil {
+		t.Error("copying over an existing copy worked")
 	}
 }
 
@@ -769,6 +772,52 @@ func TestUpdateIsInstalledAndKept(t *testing.T) {
 		if !strings.Contains(string(log), step) {
 			t.Errorf("selfupdate.log has no %q line:\n%s", step, log)
 		}
+	}
+}
+
+// The helper must not depend on a descriptor it inherited to the lock file.
+// In the field, syspolicyd scanned the helper's copy of the bundle as it was
+// launched and revoked access to the lock file (the kernel logs "syspolicyd
+// revoked access to .../lock"); the helper's fd 3 was dead (EBADF), it
+// refused the job, and InstallAndRelaunch failed. The test app revokes its
+// inherited file descriptors the same way before the helper runs.
+func TestUpdateWhenTheInheritedLockIsRevoked(t *testing.T) {
+	w := newWorld(t, 20*time.Second)
+	zip := zipApp(t, makeBundle(t, filepath.Join(w.root, "build"), testID, "2.0", "healthy", true), filepath.Join(w.root, "u.zip"))
+	w.env = append(w.env, "SUTEST_REVOKE_INHERITED=1")
+	helper, _ := w.update(t, zip)
+	w.wait(t, 20*time.Second, "the new version starting", func(r report) bool { return r.Version == "2.0" && r.Event == "started" })
+	waitGone(t, helper, 20*time.Second)
+	if v := w.installed(t); v != "2.0" {
+		w.dump(t)
+		t.Fatalf("installed version %q, want 2.0", v)
+	}
+}
+
+// While the helper holds the staging folder, a later Prepare does not take it
+// for a stale one.
+func TestStagingHeldFromPrepareToTheHelper(t *testing.T) {
+	root := realTemp(t)
+	s := fakeSelf(t, root)
+	dir, lock, err := makeStaging(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer removeStaging(dir)
+	if !stagingInUse(dir) {
+		t.Fatal("a staging folder whose Staged holds it is not in use")
+	}
+	h, err := takeLock(dir)
+	if err != nil {
+		t.Fatalf("the helper's lock: %v", err)
+	}
+	lock.Close() // InstallAndRelaunch lets go once the helper said it took the job
+	if !stagingInUse(dir) {
+		t.Error("the staging folder is not in use while the helper holds it")
+	}
+	h.Close()
+	if stagingInUse(dir) {
+		t.Error("the staging folder is still in use after the helper let go")
 	}
 }
 

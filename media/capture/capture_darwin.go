@@ -457,20 +457,6 @@ func (n *scNative) chosen() error {
 	return ErrTargetGone
 }
 
-// videoSize is the stream's size in pixels: the filter's content at its
-// pixel scale, bounded by MaxWidth and MaxHeight, even.
-func videoSize(w, h float64, maxW, maxH int) (int, int) {
-	limit := 1.0
-	if maxW > 0 && w > float64(maxW) {
-		limit = float64(maxW) / w
-	}
-	if maxH > 0 && h*limit > float64(maxH) {
-		limit = float64(maxH) / h
-	}
-	pw, ph := int(w*limit)&^1, int(h*limit)&^1
-	return max(pw, 2), max(ph, 2)
-}
-
 func (n *scNative) start(path string) error {
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)

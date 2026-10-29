@@ -46,6 +46,10 @@ const (
 	eglHeight                 = 0x3056
 	eglPlatformSurfacelessKHR = 0x31DD // EGL_MESA_platform_surfaceless
 	eglPlatformDeviceEXT      = 0x313F // EGL_EXT_platform_device
+	eglNotInitialized         = 0x3001 // eglGetError codes that mean the context or display is gone
+	eglBadContext             = 0x3006
+	eglBadDisplay             = 0x3008
+	eglContextLost            = 0x300E
 
 	glColorBufferBit = 0x4000
 	maxConfigs       = 64
@@ -186,6 +190,8 @@ func cstr(s string) []byte { return append([]byte(s), 0) }
 
 // Surface is an EGL window surface with a current GL context.
 type Surface struct {
+	lossState // DeviceLost, Epoch: see devloss.go
+
 	native platform.Native
 	w, h   int32
 
@@ -210,27 +216,32 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 		return nil, err
 	}
 	s := &Surface{native: n, w: w, h: h}
-	var err error
-	defer func() {
-		if err != nil {
-			s.Destroy()
-		}
-	}()
-
-	var nativeWindow, platformKind uintptr
 	if n.Wayland {
-		if err = loadWaylandEGL(); err != nil {
+		if err := loadWaylandEGL(); err != nil {
 			return nil, err
 		}
 		s.win = fr.Call3(wlegl.create, n.Surface, uintptr(w), uintptr(h))
 		if s.win == 0 {
-			err = errors.New("wl_egl_window_create failed")
-			return nil, err
+			return nil, errors.New("wl_egl_window_create failed")
 		}
-		nativeWindow, platformKind = s.win, eglPlatformWaylandKHR
 	} else {
 		loadX11Visual()
-		nativeWindow, platformKind = n.X11Window, eglPlatformX11KHR
+	}
+	if err := s.setup(); err != nil {
+		s.Destroy()
+		return nil, err
+	}
+	return s, nil
+}
+
+// setup creates the display, the context, the window surface and the GL entry
+// points for the window (NewSurface, Recover); the wl_egl_window of a Wayland
+// window is made before it.
+func (s *Surface) setup() error {
+	n := s.native
+	nativeWindow, platformKind := n.X11Window, uintptr(eglPlatformX11KHR)
+	if n.Wayland {
+		nativeWindow, platformKind = s.win, eglPlatformWaylandKHR
 	}
 
 	// EGL 1.5 eglGetPlatformDisplay, then EGL_EXT_platform_base, then the
@@ -245,31 +256,27 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 		s.dpy = fr.Call1(eglf.getDisplay, n.Display)
 	}
 	if s.dpy == 0 {
-		err = errors.New("egl: no display for the window system connection")
-		return nil, err
+		return errors.New("egl: no display for the window system connection")
 	}
 	if !ok(fr.Call3(eglf.initialize, s.dpy, uintptr(unsafe.Pointer(&s.major)), uintptr(unsafe.Pointer(&s.minor)))) {
-		err = s.eglErr("eglInitialize")
+		err := s.eglErr("eglInitialize")
 		s.dpy = 0
-		return nil, err
+		return err
 	}
 
 	errGL := s.makeContext(true)
 	if errGL != nil {
 		if errES := s.makeContext(false); errES != nil {
-			err = fmt.Errorf("no usable EGL context: OpenGL 3.3 core: %v; OpenGL ES 3: %v", errGL, errES)
-			return nil, err
+			return fmt.Errorf("no usable EGL context: OpenGL 3.3 core: %v; OpenGL ES 3: %v", errGL, errES)
 		}
 	}
 
 	s.surf = fr.Call4(eglf.createWindowSurface, s.dpy, s.cfg, nativeWindow, 0)
 	if s.surf == 0 {
-		err = s.eglErr("eglCreateWindowSurface")
-		return nil, err
+		return s.eglErr("eglCreateWindowSurface")
 	}
 	if !ok(fr.Call4(eglf.makeCurrent, s.dpy, s.surf, s.surf, s.ctx)) {
-		err = s.eglErr("eglMakeCurrent")
-		return nil, err
+		return s.eglErr("eglMakeCurrent")
 	}
 	// Wayland: frame callbacks pace us and a hidden surface must never block
 	// in the swap. X11: the blocking swap is the vsync throttle.
@@ -279,10 +286,7 @@ func NewSurface(n platform.Native, w, h int32, scale float32) (*Surface, error) 
 	}
 	fr.Call2(eglf.swapInterval, s.dpy, interval)
 
-	if err = s.loadGL(); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return s.loadGL()
 }
 
 func ok(r uintptr) bool { return uint32(r) != 0 } // EGLBoolean is unsigned int
@@ -389,14 +393,15 @@ type Frame struct {
 // the surface's context current on the calling thread if it is not already
 // (rendering threads should be locked with runtime.LockOSThread, as the
 // context is bound to the thread). It returns false if the surface is not
-// usable. Every successful BeginFrame must be followed by EndFrame on the
-// same thread.
+// usable, or the context was lost and not recovered (Recover). Every
+// successful BeginFrame must be followed by EndFrame on the same thread.
 func (s *Surface) BeginFrame(f *Frame) bool {
-	if s.dpy == 0 || s.surf == 0 || s.w <= 0 || s.h <= 0 {
+	if s.dpy == 0 || s.surf == 0 || s.w <= 0 || s.h <= 0 || s.lost {
 		return false
 	}
 	if fr.Call0(eglf.getCurrentContext) != s.ctx {
 		if !ok(fr.Call4(eglf.makeCurrent, s.dpy, s.surf, s.surf, s.ctx)) {
+			s.noteEGLError()
 			return false
 		}
 	}
@@ -413,7 +418,29 @@ func (s *Surface) EndFrame(f *Frame) {
 		s.revealFirstFrame(show)
 	}
 	s.swapped = ok(fr.Call2(eglf.swapBuffers, s.dpy, s.surf))
+	if !s.swapped {
+		s.noteEGLError()
+	}
 	*f = Frame{}
+}
+
+// noteEGLError reads the error of the EGL call that just failed (make-current
+// or swap): the context or the display being gone is a device loss.
+func (s *Surface) noteEGLError() {
+	if eglLostError(uint32(fr.Call0(eglf.getError))) {
+		s.lost = true
+	}
+}
+
+// eglLostError reports whether an eglGetError code means the context or the
+// display is gone (EGL_CONTEXT_LOST after a GPU reset, or a bad or terminated
+// display or context), as opposed to a failure that retrying may fix.
+func eglLostError(code uint32) bool {
+	switch code {
+	case eglContextLost, eglBadContext, eglBadDisplay, eglNotInitialized:
+		return true
+	}
+	return false
 }
 
 // Present clears to the colour and swaps. It returns false if the frame
@@ -468,6 +495,16 @@ func (s *Surface) FrameSource() uintptr { return 0 }
 
 // Destroy releases the EGL objects. Call it before platform.Window.Close.
 func (s *Surface) Destroy() {
+	s.teardown()
+	if s.win != 0 {
+		fr.Call1(wlegl.destroy, s.win)
+	}
+	*s = Surface{}
+}
+
+// teardown destroys the window surface and the context and terminates the
+// display; the wl_egl_window of a Wayland window stays.
+func (s *Surface) teardown() {
 	if s.dpy != 0 {
 		fr.Call4(eglf.makeCurrent, s.dpy, 0, 0, 0)
 		if s.surf != 0 {
@@ -478,10 +515,26 @@ func (s *Surface) Destroy() {
 		}
 		fr.Call1(eglf.terminate, s.dpy)
 	}
-	if s.win != 0 {
-		fr.Call1(wlegl.destroy, s.win)
+	s.dpy, s.cfg, s.ctx, s.surf = 0, 0, 0, 0
+}
+
+// Recover makes the surface work again on its window after the context was
+// lost (DeviceLost): it destroys the context, window surface and display and
+// creates them anew, with the new context current on the calling thread. d is
+// the shared device of macOS and is not used here; nil.
+//
+// The renderer made in the old context must be rebuilt in the new one
+// (Renderer.Rebuild with Device and Queue). On an error the surface stays
+// lost, and Recover may be tried again.
+func (s *Surface) Recover(d *Device) error {
+	s.teardown()
+	if err := s.setup(); err != nil {
+		s.teardown()
+		return err
 	}
-	*s = Surface{}
+	s.lost = false
+	s.epoch++
+	return nil
 }
 
 // ---- Offscreen contexts (no window) ----
@@ -516,6 +569,19 @@ func NewOffscreenRenderer() (*Renderer, error) {
 		return nil, fmt.Errorf("%w: %v", ErrNoDevice, err)
 	}
 	r := &Renderer{ownsCtx: true}
+	if err := r.openOffscreen(); err != nil {
+		return nil, err
+	}
+	if err := r.init(); err != nil {
+		r.Destroy()
+		return nil, err
+	}
+	return r, nil
+}
+
+// openOffscreen creates the display and the context of an offscreen renderer
+// and makes the context current (NewOffscreenRenderer, Rebuild).
+func (r *Renderer) openOffscreen() error {
 	var why []string
 	try := func(what string, dpy uintptr, terminate bool) bool {
 		if dpy == 0 {
@@ -540,13 +606,9 @@ func NewOffscreenRenderer() (*Renderer, error) {
 		ok1 = try("default display", fr.Call1(eglf.getDisplay, 0), false)
 	}
 	if !ok1 {
-		return nil, fmt.Errorf("%w: %s", ErrNoDevice, strings.Join(why, "; "))
+		return fmt.Errorf("%w: %s", ErrNoDevice, strings.Join(why, "; "))
 	}
-	if err := r.init(); err != nil {
-		r.Destroy()
-		return nil, err
-	}
-	return r, nil
+	return nil
 }
 
 // platformDisplay calls eglGetPlatformDisplay(EXT) with no attributes.

@@ -299,8 +299,10 @@ func TestOffscreenRunsLeaveNoWorkersOrHandles(t *testing.T) {
 			t.Skipf("offscreen rendering: %v", err)
 		}
 	}
+	// A worker that was stopped ends when its call returns, which on a loaded
+	// runner takes seconds; one that was not stopped never does.
 	settled := func(g0, f0 int) (g, f int) {
-		for n := 0; n < 200; n++ {
+		for end := time.Now().Add(30 * time.Second); time.Now().Before(end); {
 			if g, f = runtime.NumGoroutine(), openFiles(); g <= g0 && f <= f0 {
 				return
 			}

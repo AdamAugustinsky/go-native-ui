@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package capture_test
 
@@ -9,7 +9,7 @@ import (
 	"gonativeui/media/capture"
 )
 
-// TestUnsupported: no capture here yet (Windows until M2, Linux, D63).
+// TestUnsupported: no capture on Linux yet (D63).
 func TestUnsupported(t *testing.T) {
 	if _, err := capture.Pick(nil, capture.Options{}); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Pick = %v", err)
