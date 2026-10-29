@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -44,7 +45,7 @@ func openChrome(t *testing.T, band float32) *Window {
 // clientOrigin is the client area's top-left in screen pixels.
 func clientOrigin(w *Window) point {
 	pt := point{}
-	win32.Call(pClientToScreen, w.hwnd, uintptr(unsafe.Pointer(&pt)))
+	syscall.SyscallN(pClientToScreen, w.hwnd, uintptr(unsafe.Pointer(&pt))) // keeps the local valid, unlike win32.Call
 	return pt
 }
 
@@ -224,7 +225,8 @@ func TestCaptionMetricsMatchTheSystem(t *testing.T) {
 	w.Show()
 	settle(w)
 	var r rect
-	if hr := win32.HR(win32.Call(pDwmGetWindowAttrW, w.hwnd, dwmaCaptionButtonBounds, uintptr(unsafe.Pointer(&r)), unsafe.Sizeof(r))); hr < 0 {
+	if r0, _, _ := syscall.SyscallN(pDwmGetWindowAttrW, w.hwnd, dwmaCaptionButtonBounds, uintptr(unsafe.Pointer(&r)), unsafe.Sizeof(r)); win32.HR(r0) < 0 {
+		hr := win32.HR(r0)
 		t.Skipf("DWMWA_CAPTION_BUTTON_BOUNDS: %#x", uint32(hr))
 	}
 	x, y, ww, _ := w.FrameRect()

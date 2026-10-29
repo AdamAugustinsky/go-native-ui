@@ -326,7 +326,7 @@ func TestPointerOverHostIsTheHosts(t *testing.T) {
 		t.Errorf("WM_SETCURSOR for the window returned %d, want 1", r)
 	}
 	pt := point{20, 20}
-	win32.Call(htPClientToScreen, w.hwnd, uintptr(unsafe.Pointer(&pt)))
+	syscall.SyscallN(htPClientToScreen, w.hwnd, uintptr(unsafe.Pointer(&pt))) // keeps the local valid, unlike win32.Call
 	if at := win32.Call(htPWindowFromPoint, uintptr(*(*uint64)(unsafe.Pointer(&pt)))); at != edit && at != w.hwnd {
 		t.Logf("WindowFromPoint is %#x (another window covers ours on this runner)", at)
 	} else if at != edit {

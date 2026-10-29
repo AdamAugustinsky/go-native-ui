@@ -784,8 +784,8 @@ func clipHolders() string {
 		if hwnd == 0 {
 			return "none"
 		}
-		var pid uint32
-		win32.Call(pGetWindowThreadProcessW, hwnd, uintptr(unsafe.Pointer(&pid)))
+		var pid uint32 // syscall.SyscallN, unlike win32.Call, keeps a local the call writes valid
+		syscall.SyscallN(pGetWindowThreadProcessW, hwnd, uintptr(unsafe.Pointer(&pid)))
 		if int(pid) == os.Getpid() {
 			return fmt.Sprintf("%#x of this process", hwnd)
 		}
@@ -794,7 +794,7 @@ func clipHolders() string {
 		if h := win32.Call(pOpenProcessT, queryLimited, 0, uintptr(pid)); h != 0 {
 			buf := make([]uint16, 512)
 			n := uint32(len(buf))
-			if win32.Bool(win32.Call(pQueryFullProcessImageW, h, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n)))) {
+			if r, _, _ := syscall.SyscallN(pQueryFullProcessImageW, h, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n))); win32.Bool(r) {
 				name = filepath.Base(syscall.UTF16ToString(buf[:n]))
 			}
 			win32.Call(pCloseHandleT, h)

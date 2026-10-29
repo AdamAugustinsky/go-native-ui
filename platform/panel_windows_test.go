@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -34,7 +35,7 @@ func openPanel(t *testing.T, p Panel) *Window {
 // sent with the point in screen coordinates).
 func hitTest(w *Window, x, y int32) uintptr {
 	pt := point{x, y}
-	win32.Call(win32.Proc(user32, "ClientToScreen"), w.hwnd, uintptr(unsafe.Pointer(&pt)))
+	syscall.SyscallN(win32.Proc(user32, "ClientToScreen"), w.hwnd, uintptr(unsafe.Pointer(&pt))) // keeps the local valid, unlike win32.Call
 	return win32.Call(pSendMessageW, w.hwnd, wmNcHitTest, 0, uintptr(uint16(int16(pt.x)))|uintptr(uint16(int16(pt.y)))<<16)
 }
 

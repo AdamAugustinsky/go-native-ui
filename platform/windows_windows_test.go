@@ -282,7 +282,7 @@ func TestWaitAppWithNoWindow(t *testing.T) {
 func blockReason() (string, bool) {
 	var buf [256]uint16
 	n := uint32(len(buf))
-	if !win32.Bool(win32.Call(pBlockReasonQuery, reg.app.hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n)))) {
+	if r, _, _ := syscall.SyscallN(pBlockReasonQuery, reg.app.hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n))); !win32.Bool(r) { // keeps the locals valid, unlike win32.Call
 		return "", false
 	}
 	return syscall.UTF16ToString(buf[:]), true

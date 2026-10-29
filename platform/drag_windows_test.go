@@ -25,6 +25,13 @@ var (
 	testSource oleObj // a foreign IDataObject: the vtable of ours, another address
 	testFE     formatEtc
 	testSM     stgMedium
+	// EnumFormatEtc's enumerator and Next's count: as locals they lived on
+	// the goroutine's stack, which can move inside com.Call before the
+	// native call, so Next wrote its count to the old stack and the list
+	// ended early ("lists 1 formats, want 4", p8-win-gaps 40829144782 on
+	// arm64).
+	testEnum    uintptr
+	testFetched uint32
 )
 
 func openDragWindow(t *testing.T) *Window {
@@ -225,18 +232,18 @@ func TestDataObjectOfASession(t *testing.T) {
 	}
 
 	// EnumFormatEtc lists the four formats the session offers.
-	var enum uintptr
-	hrEnum := win32.HR(com.Call(obj, 8, dataDirGet, uintptr(unsafe.Pointer(&enum))))
-	if hrEnum != 0 || enum == 0 {
+	testEnum = 0
+	hrEnum := win32.HR(com.Call(obj, 8, dataDirGet, uintptr(unsafe.Pointer(&testEnum))))
+	if hrEnum != 0 || testEnum == 0 {
 		t.Fatalf("EnumFormatEtc = %#x", hrEnum)
 	}
+	enum := testEnum
 	defer com.Release(enum)
 	n := 0
-	var fetched uint32
 	for ; n < 8; n++ {
 		testFE = formatEtc{}
-		fetched = 0
-		if com.Call(enum, 3 /* Next */, 1, uintptr(unsafe.Pointer(&testFE)), uintptr(unsafe.Pointer(&fetched))) != 0 || fetched != 1 {
+		testFetched = 0
+		if com.Call(enum, 3 /* Next */, 1, uintptr(unsafe.Pointer(&testFE)), uintptr(unsafe.Pointer(&testFetched))) != 0 || testFetched != 1 {
 			break
 		}
 	}
