@@ -1,8 +1,10 @@
 package widgettest
 
 import (
+	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -60,6 +62,76 @@ func OnMain(f func()) {
 	d := make(chan struct{})
 	mainQ <- func() { defer close(d); f() }
 	<-d
+}
+
+// OutsideCause says what in the system or in another app a repaint cause
+// stands for, when it is one that reaches a window which sits idle on a Mac in
+// use: none of them is the app's own doing.
+//
+//   - CauseAppearance: the appearance or the system's values changed. AppKit
+//     posts one some time after launch on a Mac with a mouse (the scroller
+//     style turns legacy: bars that take room).
+//   - CauseApp with EvActivated or EvDeactivated: another app took the
+//     activation, or gave it back (D37: an app event draws what the Handler
+//     may have changed). Other processes' windows do it all the time where
+//     tests run side by side; until the overlay recorded app events these
+//     frames showed as "menu" or "NO CAUSE".
+//   - CauseApp with EvScreensChanged: AppKit reported screen-parameter changes
+//     (including a hosted runner's virtual display reconfiguration).
+//   - CauseVisible: another window covered or uncovered this one, or the
+//     display slept or woke. A change waits for the loop's next wake, so it
+//     may come with one of the above.
+func OutsideCause(c app.RepaintCause) (string, bool) {
+	switch c.Kind {
+	case app.CauseAppearance:
+		return "the system's appearance or values changed", true
+	case app.CauseVisible:
+		return "another window covered or uncovered this one", true
+	case app.CauseApp:
+		if app.EventKind(c.Sub) == app.EvScreensChanged {
+			return "the system's screen parameters changed", true
+		}
+		if k := app.EventKind(c.Sub); k == app.EvActivated || k == app.EvDeactivated {
+			return "another app took the activation or gave it back", true
+		}
+	}
+	return "", false
+}
+
+// FramesSince sorts the frames a's debug overlay recorded after its frame n
+// (what a.DebugFrames() was then) into those whose every cause is an outside
+// one (OutsideCause), which it counts, and the rest, which it describes with
+// their causes. A frame the overlay no longer keeps (it keeps 64) is among the
+// rest. The overlay must be on (App.EnableDebug, or GNUI_DEBUG=overlay). A
+// test that wants an idle window to draw nothing checks the rest: frames of
+// the system's making come where windows of other tests' processes open and
+// close over this one. Main thread, outside a frame.
+func FramesSince(a *app.App, n uint64) (outside int, rest []string) {
+	last := a.DebugFrames()
+	for fn := n + 1; fn <= last; fn++ {
+		r, ok := a.DebugFrame(int(last - fn))
+		if !ok || r.N != fn {
+			rest = append(rest, fmt.Sprintf("frame %d: no record", fn))
+			continue
+		}
+		mine := r.NCauses == 0
+		var cs []string
+		for _, c := range r.Causes[:r.NCauses] {
+			cs = append(cs, c.String())
+			if _, ok := OutsideCause(c); !ok {
+				mine = true
+			}
+		}
+		if !mine {
+			outside++
+			continue
+		}
+		if len(cs) == 0 {
+			cs = append(cs, "no cause")
+		}
+		rest = append(rest, fmt.Sprintf("frame %d: %s", fn, strings.Join(cs, " + ")))
+	}
+	return outside, rest
 }
 
 // Live is what RunLive learned about a real window.

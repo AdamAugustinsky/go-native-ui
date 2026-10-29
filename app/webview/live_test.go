@@ -54,6 +54,7 @@ type harness struct {
 	views  []*webview.View
 	hidden map[*webview.View]bool // views not built: their hosts hide
 	frames atomic.Int64
+	debugN atomic.Int64 // the debug overlay's number of the last frame built (the idle gate)
 	// atStart and afterOpen: the engine was loaded when Start began, and
 	// once the window had drawn its first frame
 	atStart, afterOpen bool
@@ -96,6 +97,9 @@ func (h *harness) Event(a *app.App, e *app.Event) {
 // Build lays the views out side by side.
 func (h *harness) Build(c *ui.Context) {
 	h.frames.Add(1)
+	if h.win != nil { // nil in the frame OpenWindow draws
+		h.debugN.Store(int64(h.win.App().DebugFrames()))
+	}
 	c.NextAxis(ui.AxisX)
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.Push(c.Box(0, "views"))

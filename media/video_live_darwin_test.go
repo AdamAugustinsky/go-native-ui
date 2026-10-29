@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -224,40 +225,39 @@ func testVideoInWindow(t *testing.T, disturb bool) {
 		t.Errorf("%s: %d imports pending, %d leased 3 s on (want 0, 0); window: %s", what, pending, leased, b.covered(l, platform.Now()))
 	}
 
-	// Paused: zero frames during a visibility-stable second. An occlusion
-	// notification owes a repaint even for a paused poster; only that change
-	// restarts the measurement, bounded to five seconds (not arbitrary retries).
-	snapshot := func() (n int64, st platform.DebugState) {
-		atRunLoop(func() { n, st = b.builds.Load(), b.a.Win.DebugState() })
-		return
-	}
+	// Paused: no frame of its own in two seconds. The debug overlay records
+	// each frame's causes; frames of the system's making (another window
+	// covered or uncovered this one, another app took the activation) are
+	// not the video's, and come all the time where other test processes'
+	// windows open and close over this one: waiting for the window's
+	// visibility to hold still for a second failed on CI, where it changed
+	// every second for 5 s (p8-win-dialogs 40805350430). The Do that turns
+	// the overlay on owes a frame, which a covered window draws late (1-3 s
+	// on CI and on a Mac whose display sleeps): the count starts after it.
+	var nDo uint64
+	l.Do(func(a *app.App) { a.EnableDebug(true); nDo = a.DebugFrames() })
 	time.Sleep(time.Second)
-	deadline := time.Now().Add(5 * time.Second)
-	for round := 0; ; round++ {
-		n, before := snapshot()
-		if disturb && round < 2 {
-			// Two real delegate notifications: each repaints, but neither is
-			// video playback. The old two-window check misclassified both.
+	if disturb {
+		// Two real delegate notifications: each repaints (a visibility
+		// cause), but neither is video playback.
+		for i := 0; i < 2; i++ {
 			atRunLoop(func() {
 				win := objc.ID(b.a.Win.Native().NSWindow)
 				del := objc.Send(win, objc.Sel("delegate"))
 				objc.Send1(del, objc.Sel("windowDidChangeOcclusionState:"), 0)
 				platform.WakeLoop()
 			})
+			time.Sleep(300 * time.Millisecond)
 		}
-		time.Sleep(time.Second)
-		end, after := snapshot()
-		if after.LastVisibleT != before.LastVisibleT {
-			if time.Now().After(deadline) {
-				t.Fatalf("paused window visibility did not settle: %s", after.Append(nil))
-			}
-			t.Logf("paused: %d frames with an occlusion notification; measuring a stable interval", end-n)
-			continue
-		}
-		if end != n {
-			t.Errorf("paused: %d frames in a visibility-stable second, want 0; window: %s", end-n, after.Append(nil))
-		}
-		break
+	}
+	time.Sleep(time.Second)
+	var outside int
+	var rest []string
+	var st platform.DebugState
+	atRunLoop(func() { outside, rest = widgettest.FramesSince(b.a, nDo+1); st = b.a.Win.DebugState() })
+	t.Logf("paused: %d frames of the system's making (not counted)", outside)
+	if len(rest) != 0 {
+		t.Errorf("paused: %d frames of its own, want 0: %s; window: %s", len(rest), strings.Join(rest, "; "), st.Append(nil))
 	}
 
 	// Playing, from a run-loop callback: frames at the video's 30 fps.

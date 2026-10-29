@@ -18,6 +18,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/app/webview"
+	"gonativeui/widget/widgettest"
 )
 
 // engineLoaded reports whether WebKit is among the process's images.
@@ -156,8 +157,16 @@ func TestViewMatrix(t *testing.T) {
 			t.Errorf("CornerRadius 9.5: the layer's is %v", r)
 		}
 	})
-	h.navigate(in, p.url("/popup"), "Popup")
-	h.wait("the popup loaded in place", 20*time.Second, func() bool { return in.State().Title == "Page B" })
+	// Not navigate's wait for the title Popup: the page opens /b in place
+	// 50 ms after it loads, and a poll on a loaded runner can first look
+	// after that (the title Popup: not within 20s). Page B in a new view
+	// is only the popup's.
+	var err error
+	h.Do(func(*app.App) { err = in.Navigate(p.url("/popup")) })
+	if err != nil {
+		t.Fatalf("Navigate(/popup): %v", err)
+	}
+	h.wait("the popup loaded in place", 20*time.Second, func() bool { s := in.State(); return s.Title == "Page B" && s.URL == p.url("/b") })
 	h.close(in)
 
 	// a download of 10 MB
@@ -226,39 +235,44 @@ func TestViewMatrix(t *testing.T) {
 	h.navigate(np2, p.url("/cookie"), "cookie:none")
 	h.close(np2)
 
-	// idle: once loaded, the view adds no frames
-	h.Do(func(*app.App) {})
+	// idle: once loaded, the view adds no frames of its own. The debug
+	// overlay records each frame's causes: the system's own (another app
+	// took the activation or gave it back, the screens changed, another
+	// window covered or uncovered this one, the display slept or woke) are
+	// not the view's doing, as widgettest/live's idle test has it. Another
+	// test process's window over this one draws a frame with no app event.
+	// The Do's own frame comes first, and the measurement starts after it:
+	// a covered window's frames come late (more than 500 ms on the CI
+	// runner and on a Mac whose display sleeps), and it used to land in the
+	// 3 s as a frame with no app event.
+	var nDo int64
+	h.Do(func(*app.App) { h.win.App().EnableDebug(true); nDo = int64(h.win.App().DebugFrames()) })
+	for end := time.Now().Add(10 * time.Second); h.debugN.Load() <= nDo && time.Now().Before(end); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	time.Sleep(500 * time.Millisecond)
 	h.mu.Lock()
 	k0 := len(h.kinds)
 	h.mu.Unlock()
-	f0 := h.frames.Load()
+	f0, n0 := h.frames.Load(), h.debugN.Load()
 	time.Sleep(3 * time.Second)
 	idle := h.frames.Load() - f0
 	h.mu.Lock()
 	during := append([]app.EventKind(nil), h.kinds[k0:]...)
 	h.mu.Unlock()
 	t.Logf("gate: an idle view, 3 s: %d frames (presents); app events %v", idle, during)
-	// An app event draws what the Handler may have changed (D37). The
-	// system's own (another app took the activation or gave it back, the
-	// screens changed: a hosted runner's session does both) are not the
-	// view's doing, as widgettest/live's idle test has it.
-	outside := 0
-	for _, k := range during {
-		if k == app.EvActivated || k == app.EvDeactivated || k == app.EvScreensChanged {
-			outside++
-		}
-	}
-	if idle != 0 && outside > 0 && outside == len(during) {
-		t.Logf("the idle frames follow %d of the system's app events: not counted", outside)
-		idle = 0
+	var rest []string
+	if idle != 0 {
+		var outside int
+		h.Do(func(*app.App) { outside, rest = widgettest.FramesSince(h.win.App(), uint64(n0)) })
+		t.Logf("the idle frames: %d of the system's or another app's making (not counted); others %v", outside, rest)
 	}
 	for pid, p := range webKitProcesses() {
 		if _, ok := before[pid]; !ok {
 			t.Logf("reported, not budgeted: WebKit process %s started with the views: %s", pid, p)
 		}
 	}
-	if idle != 0 {
-		t.Errorf("an idle view drew %d frames in 3 s", idle)
+	if len(rest) != 0 {
+		t.Errorf("an idle view drew %d frames of its own in 3 s: %s", len(rest), strings.Join(rest, "; "))
 	}
 }
