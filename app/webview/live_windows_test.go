@@ -15,6 +15,7 @@ import (
 
 	"gonativeui/app"
 	"gonativeui/app/webview"
+	"gonativeui/widget/widgettest"
 )
 
 var (
@@ -240,26 +241,42 @@ func TestViewMatrix(t *testing.T) {
 	h.show(v, true)
 	h.wait("the shown view resumed", 5*time.Second, func() bool { return !webview.Suspended(v) })
 
-	// idle: once loaded, the view adds no frames
-	h.Do(func(*app.App) {})
+	// idle: once loaded, the view adds no frames of its own. As on macOS
+	// (live_darwin_test.go): the Do's own frame comes first and the
+	// measurement starts after it, and the frames whose recorded causes are
+	// all the system's (another window covered or uncovered this one, the
+	// activation, the screens) are not counted. It drew 1 frame with no app
+	// event in 3 s on arm64 (p8-macos-flakes 40832748617), the macOS
+	// failure's signature: the Do's frame, late on a loaded runner.
+	var nDo int64
+	h.Do(func(*app.App) { h.win.App().EnableDebug(true); nDo = int64(h.win.App().DebugFrames()) })
+	for end := time.Now().Add(10 * time.Second); h.debugN.Load() <= nDo && time.Now().Before(end); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	time.Sleep(500 * time.Millisecond)
 	h.mu.Lock()
 	k0 := len(h.kinds)
 	h.mu.Unlock()
-	f0 := h.frames.Load()
+	f0, n0 := h.frames.Load(), h.debugN.Load()
 	time.Sleep(3 * time.Second)
 	idle := h.frames.Load() - f0
 	h.mu.Lock()
 	during := append([]app.EventKind(nil), h.kinds[k0:]...)
 	h.mu.Unlock()
 	t.Logf("gate: an idle view, 3 s: %d frames (presents); app events %v", idle, during)
+	var rest []string
+	if idle != 0 {
+		var outside int
+		h.Do(func(*app.App) { outside, rest = widgettest.FramesSince(h.win.App(), uint64(n0)) })
+		t.Logf("the idle frames: %d of the system's or another app's making (not counted); others %v", outside, rest)
+	}
 	for pid, m := range engineProcesses() {
 		if _, ok := before[pid]; !ok {
 			t.Logf("reported, not budgeted: WebView2 process %s, %s", pid, m)
 		}
 	}
-	if idle != 0 {
-		t.Errorf("an idle view drew %d frames in 3 s", idle)
+	if len(rest) != 0 {
+		t.Errorf("an idle view drew %d frames of its own in 3 s: %s", len(rest), strings.Join(rest, "; "))
 	}
 }
 
