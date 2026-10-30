@@ -140,7 +140,7 @@ func (c *Context) focusOnPress() {
 // the rubber bands.
 func (c *Context) stepScroll() {
 	c.stepRubber()
-	for _, id := range c.prevOrder {
+	for _, id := range c.scrollBoxes {
 		b := &c.boxes[id]
 		if b.flags&scrollMask == 0 {
 			continue

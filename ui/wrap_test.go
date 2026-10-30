@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"gonativeui/gpu"
+	"gonativeui/text"
 )
 
 // The edit shaper advances 8 px per character in font 0 and the line height is
@@ -265,5 +266,101 @@ func TestWrapAllocatesNothingWhenWarm(t *testing.T) {
 	}
 	if len(ink(&h.list)) < 8 {
 		t.Fatal("nothing drawn")
+	}
+}
+
+type countedLayouter struct {
+	Layouter
+	layouts, views int
+}
+
+func (l *countedLayouter) Layout(p *text.Para) text.ParaRef {
+	l.layouts++
+	return l.Layouter.Layout(p)
+}
+
+func (l *countedLayouter) Paragraph(r text.ParaRef) text.ParaView {
+	l.views++
+	return l.Layouter.Paragraph(r)
+}
+
+func TestWrapReusesCertifiedWidthsAndChecksInput(t *testing.T) {
+	h := newWrapHarness(t, 500, 200)
+	l := &countedLayouter{Layouter: h.c.lay}
+	h.c.lay = l
+	w, body, font := float32(79), "one two three###stable", text.FontKey(0)
+	build := func(c *Context) {
+		c.NextFont(font)
+		c.NextWidth(Px(w))
+		c.Box(DrawText|WrapText, body)
+	}
+	h.frame(build)
+	first := l.layouts
+	w = 78
+	h.frame(build)
+	if l.layouts != first {
+		t.Fatal("certified width laid the paragraph out again")
+	}
+	w = 40
+	h.frame(build)
+	if l.layouts != first+1 {
+		t.Fatal("uncertified width kept the old layout")
+	}
+	body = "six ten seven###stable"
+	h.frame(build)
+	if l.layouts != first+2 {
+		t.Fatal("changed bytes kept the old layout")
+	}
+	font = 1
+	h.frame(build)
+	if l.layouts != first+3 {
+		t.Fatal("changed font kept the old layout")
+	}
+	h.c.lay = &countedLayouter{Layouter: text.NewBasicLayouter(newEditShaper())}
+	h.frame(build) // an evicted or replaced paragraph must be rebuilt
+	if h.c.lay.(*countedLayouter).layouts == 0 {
+		t.Fatal("invalid paragraph survived")
+	}
+}
+
+func TestWrapTextSizeUsesOneLayoutWhenItFits(t *testing.T) {
+	h := newWrapHarness(t, 500, 200)
+	l := &countedLayouter{Layouter: h.c.lay}
+	h.c.lay = l
+	h.frame(func(c *Context) {
+		c.NextWidth(TextSize(0))
+		c.Box(DrawText|WrapText, "natural width")
+	})
+	if l.layouts != 1 {
+		t.Fatalf("natural width laid out %d times, want 1", l.layouts)
+	}
+}
+
+func TestRichViewAndFocusTargetsAreLazy(t *testing.T) {
+	h := newWrapHarness(t, 500, 200)
+	l := &countedLayouter{Layouter: h.c.lay}
+	h.c.lay = l
+	build := func(c *Context) {
+		c.NextWidth(Px(300))
+		c.RichText(42, []byte("one two"), []Span{{Len: 3, Flags: SpanLink}, {Off: 4, Len: 3, Flags: SpanLink}}, nil, RichOpts{})
+	}
+	for i := 0; i < 3; i++ {
+		l.views = 0
+		h.frame(build)
+		if l.views != 1 {
+			t.Fatalf("frame %d fetched %d views, want 1", i, l.views)
+		}
+		for _, f := range h.c.richFocus {
+			if f.ready {
+				t.Fatal("idle frame computed link focus geometry")
+			}
+		}
+	}
+	h.in.PushKey(KeyEvent{Code: KeyTab, Down: true})
+	h.frame(build)
+	for _, f := range h.c.richFocus {
+		if !f.ready {
+			t.Fatal("Tab did not compute link targets")
+		}
 	}
 }
