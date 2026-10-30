@@ -3,6 +3,7 @@
 package media
 
 import (
+	"bytes"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,40 @@ import (
 	"gonativeui/internal/cf"
 	"gonativeui/platform"
 )
+
+// A video opened paused shows its poster before it owns a decoded playback
+// buffer. A rebuild must restore that picture on the first return frame.
+func TestVideoPosterRestoresAfterDeviceLoss(t *testing.T) {
+	var err error
+	var before, after shot
+	onMain(func() {
+		var r *gpu.Renderer
+		r, err = gpu.NewOffscreenRenderer()
+		if err != nil {
+			return
+		}
+		defer r.Destroy()
+		v := &Video{posW: 8, posH: 8, poster: make([]byte, 8*8*4)}
+		for i := 0; i < len(v.poster); i += 4 {
+			v.poster[i], v.poster[i+3] = 255, 255
+		}
+		v.state.Store(uint32(VideoReady))
+		before = frameOf(r, v, 8, 8)
+		if err = r.Rebuild(0, 0); err != nil {
+			return
+		}
+		after = frameOf(r, v, 8, 8)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.tex == 0 || before.at(4, 4) != ([3]int{255, 0, 0}) {
+		t.Fatal("poster fixture did not draw")
+	}
+	if after.tex != before.tex || !bytes.Equal(before.pix, after.pix) {
+		t.Fatalf("poster after rebuild: tex=%d/%d pixel=%v/%v", before.tex, after.tex, before.at(4, 4), after.at(4, 4))
+	}
+}
 
 // pump runs the main thread's run loop for d, so that what AVFoundation
 // queues on the main queue (the end notification) is delivered, then the app
