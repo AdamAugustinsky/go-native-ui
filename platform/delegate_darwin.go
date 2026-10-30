@@ -88,7 +88,7 @@ func (w *Window) focus(key bool) {
 func windowDidChangeOcclusion(c *ffi.CB) {
 	if w := delegateWindow(objc.ID(c.Int(0))); w != nil {
 		e := Event{Kind: EvVisible, Time: Now()}
-		w.visible, w.visibleT = 0, e.Time
+		w.visible, w.visibleT, w.hideSaid = 0, e.Time, false
 		if uintptr(objc.Send(w.win, selOcclusionState))&2 != 0 { // NSWindowOcclusionStateVisible
 			e.Flags = FlagDown
 			w.visible = 1

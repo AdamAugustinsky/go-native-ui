@@ -285,7 +285,8 @@ const (
 	// SizePixels is Value pixels.
 	SizePixels
 	// SizeText is the extent of the display text (advance on X, line height
-	// on Y) plus the box's padding on that axis plus Value extra pixels.
+	// on Y) plus the box's padding on that axis plus Value extra pixels; on X
+	// the advance and padding are rounded up to a whole pixel first (CeilText).
 	SizeText
 	// SizeParentPct is Value (a fraction, 1 = 100 %) of the parent's content
 	// area (its size minus its padding) on that axis. A parent that sizes
@@ -394,10 +395,15 @@ type Tint struct {
 	T float32
 }
 
-// Theme holds the colours of the built-in hover/press overlay.
+// Theme holds the colours of the built-in hover/press overlay and the shape
+// of rounded corners.
 type Theme struct {
 	HotOverlay    uint32 // RGBA8; alpha is multiplied by hot_t
 	ActiveOverlay uint32 // RGBA8; alpha is multiplied by active_t
+	// ContinuousCorners rounds the corners of boxes (their fill, border and
+	// hover overlay) with the continuous curve macOS draws, a squircle,
+	// instead of circular arcs (gpu.ShapeContinuous). Shadows stay circular.
+	ContinuousCorners bool
 }
 
 // Rates are the animation rates k in rate = 1−2^(−k·dt), per second.

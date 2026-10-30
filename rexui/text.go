@@ -76,7 +76,7 @@ type LabelOpts struct {
 // MetaFont is Rex's metadata face at sizePt points: the UI face with
 // tabular figures (LabelOpts.MetaPt). Asking for it each frame is a lookup.
 func MetaFont(k *base.Kit, sizePt float32) text.FontKey {
-	return k.TextSystem().Font(text.FontDesc{SizePt: sizePt, Tabular: true, Scale: k.Scale()})
+	return k.TextSystem().Font(text.FontDesc{SizePt: sizePt, TabularDigits: true, Scale: k.Scale()})
 }
 
 // labelColor is o's colour: Label when none was set.
@@ -135,7 +135,7 @@ func labelStyle(k *base.Kit, o *LabelOpts) {
 	if o.Wrap {
 		k.ApplySize(ui.Pct(1), ui.TextSize(0))
 	} else {
-		k.ApplySize(ui.TextSize(base.LabelSlack), ui.Px(st.Line))
+		k.ApplySize(ui.TextSize(0), ui.Px(st.Cell))
 	}
 	font := st.Font
 	switch {

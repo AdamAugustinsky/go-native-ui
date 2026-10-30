@@ -93,6 +93,42 @@ func scenarioDock() {
 		childapp.Say("allocs_unchanged=%v allocs_changed=%v", unchanged, changed)
 		dock.SetBadge("")
 
+		// Progress: the tile's content view and its bar, read from AppKit.
+		bar := func() objc.ID {
+			view := objc.Send(tile, objc.Sel("contentView"))
+			if view == 0 {
+				return 0
+			}
+			subs := objc.Send(view, objc.Sel("subviews"))
+			for i := uintptr(0); i < uintptr(objc.Send(subs, objc.Sel("count"))); i++ {
+				v := objc.Send1(subs, objc.Sel("objectAtIndex:"), i)
+				if objc.SendBool1(v, objc.Sel("isKindOfClass:"), uintptr(objc.Cls("NSProgressIndicator"))) {
+					return v
+				}
+			}
+			return 0
+		}
+		if err := dock.SetProgress(0.5); err != nil {
+			childapp.Fail("SetProgress: %v", err)
+		}
+		b := bar()
+		if b == 0 || objc.SendF64(b, objc.Sel("doubleValue")) != 0.5 || objc.SendBool(b, objc.Sel("isIndeterminate")) {
+			childapp.Fail("after SetProgress(0.5): bar %v", b)
+		}
+		dock.SetProgress(2)
+		if objc.SendF64(bar(), objc.Sel("doubleValue")) != 1 || dock.Progress() != 1 {
+			childapp.Fail("a progress over 1 is not 1")
+		}
+		dock.SetProgress(dock.Indeterminate)
+		if !objc.SendBool(bar(), objc.Sel("isIndeterminate")) {
+			childapp.Fail("SetProgress(Indeterminate) left the bar determinate")
+		}
+		dock.SetProgress(dock.NoProgress)
+		if objc.Send(tile, objc.Sel("contentView")) != 0 || dock.Progress() != dock.NoProgress {
+			childapp.Fail("NoProgress left the tile's content view")
+		}
+		childapp.Say("progress_ok=1")
+
 		// A bounce: the system makes one only for an inactive app, and then
 		// the request has an id; for an active one the id is 0.
 		active := objc.SendBool(nsApp(), objc.Sel("isActive"))
@@ -130,7 +166,7 @@ func TestLiveDock(t *testing.T) {
 		t.Errorf("SetBadge with the label already shown allocates %s times, want 0", r.KV["allocs_unchanged"])
 	}
 	t.Logf("SetBadge allocations: unchanged %s, changed %s", r.KV["allocs_unchanged"], r.KV["allocs_changed"])
-	if r.KV["done"] != "1" {
+	if r.KV["done"] != "1" || r.KV["progress_ok"] != "1" {
 		t.Fatalf("the scenario did not finish\n%s", r.Out)
 	}
 	if r.KV["policy0"] != "0" || r.KV["policy_accessory"] != strconv.Itoa(int(app.PolicyAccessory)) ||

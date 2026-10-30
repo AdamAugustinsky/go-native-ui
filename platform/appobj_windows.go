@@ -38,6 +38,7 @@ var (
 // (phase 8's standing rules; P1 measured about 2 ms cold).
 func StartApp(o AppOptions) error {
 	startCommon(o)
+	reg.app.started = true
 	setDPIAwareness()
 	if !ensureAppWindow() {
 		return errors.New("platform: cannot create the app window")
@@ -197,3 +198,7 @@ func NativeLoop() bool { return reg.app.modal > 0 }
 // the frame that draws it: inside a native modal loop, whose tick draws only
 // the windows that asked for a frame.
 func ArmOnWake() bool { return NativeLoop() }
+
+// QuitWaitNative is false here: Windows runs no wait of its own for a quit
+// answer inside the pump.
+func QuitWaitNative() bool { return false }

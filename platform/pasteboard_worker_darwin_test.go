@@ -50,6 +50,12 @@ func runSlowOwner() {
 	delay, _ := time.ParseDuration(os.Getenv("GNUI_PB_SLOW"))
 	data := slowPNG()
 	pbImageInit()
+	// GNUI_PB_SLOW_NAME: promise a text on that named pasteboard instead (the drag
+	// tests' source), so that the general one is left alone.
+	typ, name := pbPNG, os.Getenv("GNUI_PB_SLOW_NAME")
+	if name != "" {
+		data, typ = []byte("slow text"), objc.Retain(objc.Str("public.utf8-plain-text"))
+	}
 	cls := objc.Define("GNUISlowProvider", objc.Cls("NSObject"), []string{"NSPasteboardItemDataProvider"})
 	cls.Method(objc.Sel("pasteboard:item:provideDataForType:"), "v@:@@@", func(c *ffi.CB) {
 		time.Sleep(delay)
@@ -62,10 +68,13 @@ func runSlowOwner() {
 	itemCls, selInit, selAlloc := objc.Cls("NSPasteboardItem"), objc.Sel("init"), objc.Sel("alloc")
 	item := objc.Send(objc.Send(itemCls, selAlloc), selInit)
 	clsArr, selArr := objc.Cls("NSArray"), objc.Sel("arrayWithObject:")
-	types := objc.ID(objc.F.Reset().Arg(uintptr(clsArr)).Arg(uintptr(selArr)).Arg(uintptr(pbPNG)).Call(objc.MsgSend).R0())
+	types := objc.ID(objc.F.Reset().Arg(uintptr(clsArr)).Arg(uintptr(selArr)).Arg(uintptr(typ)).Call(objc.MsgSend).R0())
 	objc.Send2(item, objc.Sel("setDataProvider:forTypes:"), uintptr(provider), uintptr(types))
 	items := objc.ID(objc.F.Reset().Arg(uintptr(clsArr)).Arg(uintptr(selArr)).Arg(uintptr(item)).Call(objc.MsgSend).R0())
 	pb := objc.Send(clsPasteboard, selGeneralPB)
+	if name != "" {
+		pb = objc.Send1(clsPasteboard, selPBNamed, uintptr(objc.Str(name)))
+	}
 	objc.Send(pb, selClearContents)
 	objc.SendBool1(pb, objc.Sel("writeObjects:"), uintptr(items))
 	os.Stdout.WriteString("ready\n")

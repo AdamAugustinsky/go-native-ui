@@ -354,6 +354,7 @@ func (s *drawState) row(c *ui.Context, txt []byte, col uint32) {
 		if txt[i] < utf8.RuneSelf {
 			g = glyphs[txt[i] : txt[i]+1]
 			i++
+			c.NextSize(ui.Px(s.adv), ui.TextSize(0)) // a column of the panel's width, not the glyph's advance rounded up
 		} else {
 			_, sz := utf8.DecodeRune(txt[i:])
 			g = txt[i : i+sz]

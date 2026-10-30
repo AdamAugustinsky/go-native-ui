@@ -14,6 +14,8 @@ var (
 	selSetFrameDisplay   = objc.Sel("setFrame:display:")
 	selToggleFullScreen  = objc.Sel("toggleFullScreen:")
 	selSetDocumentEdited = objc.Sel("setDocumentEdited:")
+	selSetRepFilename    = objc.Sel("setRepresentedFilename:")
+	selSetRepURL         = objc.Sel("setRepresentedURL:")
 	selRequestAttention  = objc.Sel("requestUserAttention:")
 	selCancelAttention   = objc.Sel("cancelUserAttentionRequest:")
 	selDeminiaturize     = objc.Sel("deminiaturize:")
@@ -37,6 +39,28 @@ func primaryTop() float64 {
 func (w *Window) SetTitle(title string) {
 	pool := objc.F.Call0(objc.PoolPush)
 	objc.Send1(w.win, selSetTitle, uintptr(objc.Str(title)))
+	objc.F.Call1(objc.PoolPop, pool)
+}
+
+// SetRepresentedFile makes the window stand for a file: its title bar shows
+// the file's icon (the proxy icon), which can be dragged out and ⌘-clicked
+// for the path menu. "" clears it. Main thread.
+func (w *Window) SetRepresentedFile(path string) {
+	pool := objc.F.Call0(objc.PoolPush)
+	objc.Send1(w.win, selSetRepFilename, uintptr(objc.Str(path)))
+	objc.F.Call1(objc.PoolPop, pool)
+}
+
+// SetRepresentedURL makes the window stand for a URL (a file: URL as a file
+// does, any other as the web page's proxy icon). "" clears it, and so does a
+// string that is not a URL. Main thread.
+func (w *Window) SetRepresentedURL(url string) {
+	pool := objc.F.Call0(objc.PoolPush)
+	var u objc.ID
+	if url != "" {
+		u = objc.Send1(objc.Cls("NSURL"), selURLWithString, uintptr(objc.Str(url)))
+	}
+	objc.Send1(w.win, selSetRepURL, uintptr(u))
 	objc.F.Call1(objc.PoolPop, pool)
 }
 
@@ -102,6 +126,26 @@ func (w *Window) Activate() {
 func (w *Window) Hide() {
 	objc.Send1(w.win, selOrderOut, 0)
 	w.unlinkHidden()
+	// AppKit reports an occlusion change only when the state changes: a
+	// window it never reported (opened covered, or on an asleep display) is
+	// ordered out with no event, and its app drew on, unpaced, without
+	// Input.Hidden (a video at its full rate in a hidden window). Hide
+	// reports it hidden; Show takes that back if AppKit still said nothing.
+	if w.visible == -1 {
+		w.hideSaid = true
+		w.pushVisible(false)
+	}
+}
+
+// pushVisible reports the window shown or hidden (EvVisible), as the
+// occlusion delegate does. Main thread.
+func (w *Window) pushVisible(on bool) {
+	e := Event{Kind: EvVisible, Time: Now()}
+	w.visible, w.visibleT = 0, e.Time
+	if on {
+		e.Flags, w.visible = FlagDown, 1
+	}
+	w.q.push(e)
 }
 
 // Visible reports whether the window is on screen (ordered in, possibly

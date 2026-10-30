@@ -9,7 +9,14 @@ name: ci
 # Speed mode (docs/QUARANTINE.md): known flaky tests are skipped per job via
 # the QUARANTINE regexp (go test -skip), and the benches' display-link stall
 # failures print a ::warning:: instead of failing the job. To un-quarantine a
-# test, delete its name from the job's QUARANTINE.
+# test, delete its name from the job's QUARANTINE. A job with nothing
+# quarantined has no QUARANTINE and no -skip (an empty regexp skips every test).
+#
+# Job time (#30): macOS and Windows each run as two jobs side by side, the
+# tests and the windowed benches, so neither waits for the other. The test
+# steps run `go test -json` through tools/testtimes, which prints the log as
+# usual and ends with a table of the slowest packages and tests (in the job
+# summary too); the raw stream is the tests-* artifact.
 
 on:
   push:
@@ -133,7 +140,7 @@ jobs:
     # phase 8's live suites (webview, panels, capture, ws) took the job to 24-25 min
     timeout-minutes: 35
     env:
-      QUARANTINE: '^(TestGreenButtonWaitsForNativeReadiness|TestPackageWithoutAppleIdentity|TestVListEditFrameBudget|TestOtherWindows|TestDragTypesDoNotReachHosts|TestEditorNestedLoopDraws|TestEditorUndoRedo|TestEditorMarkedTextSubmission|TestMixFollowsAndDoesNotAllocate|TestStallOfAHiddenWindowSkipsAndSaysWhy|TestRunKeepsDesignatedRequirement|TestScrollEventsThroughTheQueue|TestPackagedBinaryHasNoDebugChordOrInspector|TestClientClose)$'
+      QUARANTINE: '^(TestGreenButtonWaitsForNativeReadiness|TestClientClose|TestPanelHidesOnDeactivate)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -145,24 +152,6 @@ jobs:
         run: |
           sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
           nohup caffeinate -dimsu >/dev/null 2>&1 &
-      - name: stall gate wrapper (display-link stalls warn instead of failing, docs/QUARANTINE.md)
-        run: |
-          # stallgate.sh <regexp> command...: runs the command; when it fails and
-          # its stderr matches the regexp (the display link stopped ticking, the
-          # quarantined failure), prints a ::warning:: and succeeds. Any other
-          # failure (an allocation gate, a CPU budget) still fails the step.
-          cat > "$RUNNER_TEMP/stallgate.sh" <<'EOF'
-          re=$1; shift
-          err=$(mktemp)
-          "$@" 2>"$err"; status=$?
-          cat "$err" >&2
-          if [ "$status" -ne 0 ] && grep -E -q -- "$re" "$err"; then
-            msg=$(grep -E -- "$re" "$err" | head -n 3 | tr '\n' ' ' | cut -c1-400)
-            echo "::warning::quarantined (display-link stall, docs/QUARANTINE.md): $1 exited $status: $msg"
-            exit 0
-          fi
-          exit "$status"
-          EOF
       - name: libghostty-vt cache (D74; artifacts are built, never committed)
         uses: actions/cache@v4
         with:
@@ -191,107 +180,18 @@ jobs:
           echo "GNUI_REQUIRE_LIBGHOSTTY=1" >> "$GITHUB_ENV"
       - name: test (arm64)
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE") | go run ./tools/testtimes -title "macOS arm64" -raw test-macos.json
           go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: public-API build (gnui_publicapi, DECISIONS.md D53)
         run: |
           go vet -tags gnui_publicapi $(go list ./... | grep -v -E "$PKGS_EXCLUDE")
-          go test -tags gnui_publicapi -count=1 -skip "$QUARANTINE" ./platform ./app
+          go test -json -tags gnui_publicapi -count=1 -skip "$QUARANTINE" ./platform ./app | go run ./tools/testtimes -title "macOS arm64, gnui_publicapi" -raw test-macos-publicapi.json
       - name: ffi benchmarks
         run: go test -run '^$' -bench . -benchmem ./internal/ffi
-      - name: build spike
-        run: go build -trimpath -ldflags="-s -w" -o bin/spike ./cmd/spike
-      - name: spike bench + gates
-        run: |
-          # The first launch of a new binary pays the Gatekeeper/XProtect scan.
-          ./bin/spike -exit-first -timeout 60s >/dev/null || true
-          STALL='bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want'
-          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-macos.json
-          { echo '```json'; cat spike-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          # The runner's display link sometimes stops for 20-60 s; the spike
-          # restarts its measured frames after such a stall and says so.
-          jq -r 'select(.FrameSourceStalls > 0) | "::warning title=spike: frame source stalled::\(.FrameSourceStalls) stall(s), longest \(.LongestStallMs / 1000 | floor) s: \(.StallCause); measured frames restarted \(.MeasureRestarts) time(s)"' spike-macos.json
-          # The gate must not excuse a stall of our own making: a main thread
-          # blocked for 1.5 s in a frame, with a frame requested, fails it.
-          if ./bin/spike -bench -idle 1s -gate -test-block 1500ms -timeout 180s > spike-blocked.json 2> spike-blocked.err; then
-            echo "::error::the spike gate passed a main thread blocked for 1.5 s"; exit 1
-          fi
-          grep -q "main thread was out of its run loop" spike-blocked.err || { cat spike-blocked.err; exit 1; }
-      - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
-          go run ./cmd/rexlook/rex/rexshot -o rex-macos.png -o-dark rex-macos-dark.png
-          ./bin/listbench -o listbench-macos.png
-          ./bin/listbench -exit-first -timeout 60s >/dev/null || true
-          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/listbench -bench -gate -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-macos.json
-          { echo '```json'; cat listbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: pilot (offscreen PNG, windowed bench with the allocation gate)
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
-          ./bin/pilot -o pilot-macos.png
-          ./bin/pilot -exit-first -v -timeout 60s >/dev/null || true
-          STALL='bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want'
-          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/pilot -bench -gate -allow-unpaced -budget-scale 3 -timeout 150s | tee pilot-macos.json
-          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/pilot -bench -rows 1000000 -gate -allow-unpaced -budget-scale 3 -timeout 150s | tee pilot-1m-macos.json
-          { echo '```json'; cat pilot-macos.json pilot-1m-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: gallery (offscreen PNGs in light and dark, windowed bench with the allocation gate)
-        if: ${{ !cancelled() }} # a stalled pilot bench of the runner must not hide the gallery's result
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
-          ./bin/gallery -o gallery-macos.png -o-dark gallery-macos-dark.png
-          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-macos.json
-          { echo '```json'; cat gallery-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: gallery with the debug overlay on (windowed bench with the allocation gate)
-        if: ${{ !cancelled() }}
-        run: |
-          GNUI_DEBUG=overlay bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-overlay-macos.json
-          { echo '```json'; cat gallery-overlay-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: a release build has no debug chord, menu or inspector panel (gnui_release)
         if: ${{ !cancelled() }}
         run: go test -tags gnui_release ./app -run 'Release' -count=1
-      - name: notes example (windowed bench with the allocation gate)
-        if: ${{ !cancelled() }}
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
-          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/notes -bench -gate -allow-unpaced -timeout 150s | tee notes-macos.json
-          { echo '```json'; cat notes-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: rexlook (windowed bench with the allocation gate; native shell, then drawn)
-        if: ${{ !cancelled() }}
-        # The CPU budget (1000 µs/frame) is checked at 3x on the shared
-        # runner (-budget-scale 3): -drawn takes ~970 µs/frame even on an
-        # idle M-series Mac; only a catastrophic regression fails here.
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
-          ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -allocsites -timeout 240s | tee rexlook-macos.json
-          ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -allocsites -drawn -timeout 240s | tee rexlook-drawn-macos.json
-          { echo '```json'; cat rexlook-macos.json rexlook-drawn-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          # D27: an allocation of ours that misses some windows (one every
-          # 1800 frames, windows of 900) fails although a window is clean.
-          if ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -test-alloc-every 1800 -timeout 240s > rexlook-planted.json 2> rexlook-planted.err; then
-            echo "::error::rexlook's gate passed an allocation of ours every 1800 frames"; exit 1
-          fi
-          grep -q "of our code in the measured windows" rexlook-planted.err || { cat rexlook-planted.err; exit 1; }
-      - name: vlistbench (windowed bench with the allocation gate; the offscreen session runs in go test)
-        if: ${{ !cancelled() }}
-        # The list and edit time budgets (P99 and maximum) are checked at 3x
-        # on the shared runner (-budget-scale 3): the edit budget is missed
-        # now and then even on an idle Mac.
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/vlistbench ./cmd/vlistbench
-          ./bin/vlistbench -bench -gate -allow-unpaced -budget-scale 3 -allocsites -timeout 240s | tee vlistbench-macos.json
-          { echo '```json'; cat vlistbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: imgbench (windowed image-grid bench with the allocation gate)
-        if: ${{ !cancelled() }}
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/imgbench ./cmd/imgbench
-          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/imgbench -bench -gate -allow-unpaced -timeout 150s | tee imgbench-macos.json
-          { echo '```json'; cat imgbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: live resize (two draws per transaction must not starve the drawable pool)
-        run: |
-          go build -trimpath -ldflags="-s -w" -o bin/rexlook ./cmd/rexlook
-          ./bin/rexlook -live-resize-test | tee rexlook-live-resize-macos.json
-          ./bin/pilot -live-resize-test | tee pilot-live-resize-macos.json
       - name: GnuiShot on the hosted runner (informational, phase 6 T2)
         # Can a hosted runner capture its own windows with GnuiShot? It needs the
         # Screen Recording grant, which a runner cannot be given interactively.
@@ -333,6 +233,130 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
+          name: tests-macos
+          path: test-macos*.json
+          if-no-files-found: ignore
+
+  macos-bench:
+    name: macOS arm64 benches (Metal)
+    if: inputs.only == '' || inputs.only == 'macos'
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: keep the display awake
+        # The windowed benches need display-link frames; a runner VM whose
+        # display drifts towards sleep stops delivering them.
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 || true
+          nohup caffeinate -dimsu >/dev/null 2>&1 &
+      - name: stall gate wrapper (display-link stalls warn instead of failing, docs/QUARANTINE.md)
+        run: |
+          # stallgate.sh <regexp> command...: runs the command; when it fails and
+          # its stderr matches the regexp (the display link stopped ticking, the
+          # quarantined failure), prints a ::warning:: and succeeds. Any other
+          # failure (an allocation gate, a CPU budget) still fails the step.
+          cat > "$RUNNER_TEMP/stallgate.sh" <<'EOF'
+          re=$1; shift
+          err=$(mktemp)
+          "$@" 2>"$err"; status=$?
+          cat "$err" >&2
+          if [ "$status" -ne 0 ] && grep -E -q -- "$re" "$err"; then
+            msg=$(grep -E -- "$re" "$err" | head -n 3 | tr '\n' ' ' | cut -c1-400)
+            echo "::warning::quarantined (display-link stall, docs/QUARANTINE.md): $1 exited $status: $msg"
+            exit 0
+          fi
+          exit "$status"
+          EOF
+      - name: build the bench binaries once
+        # One go build for every binary the steps below run: they share the
+        # packages they link, and the linker runs for them in parallel.
+        run: go build -trimpath -ldflags="-s -w" -o bin/ ./cmd/spike ./cmd/listbench ./cmd/pilot ./cmd/gallery ./examples/notes ./cmd/rexlook ./cmd/rexlook/rex/rexshot ./cmd/vlistbench ./cmd/imgbench
+      - name: spike bench + gates
+        run: |
+          # The first launch of a new binary pays the Gatekeeper/XProtect scan.
+          ./bin/spike -exit-first -timeout 60s >/dev/null || true
+          STALL='bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want'
+          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-macos.json
+          { echo '```json'; cat spike-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # The runner's display link sometimes stops for 20-60 s; the spike
+          # restarts its measured frames after such a stall and says so.
+          jq -r 'select(.FrameSourceStalls > 0) | "::warning title=spike: frame source stalled::\(.FrameSourceStalls) stall(s), longest \(.LongestStallMs / 1000 | floor) s: \(.StallCause); measured frames restarted \(.MeasureRestarts) time(s)"' spike-macos.json
+          # The gate must not excuse a stall of our own making: a main thread
+          # blocked for 1.5 s in a frame, with a frame requested, fails it.
+          if ./bin/spike -bench -idle 1s -gate -test-block 1500ms -timeout 180s > spike-blocked.json 2> spike-blocked.err; then
+            echo "::error::the spike gate passed a main thread blocked for 1.5 s"; exit 1
+          fi
+          grep -q "main thread was out of its run loop" spike-blocked.err || { cat spike-blocked.err; exit 1; }
+      - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
+        run: |
+          ./bin/rexshot -o rex-macos.png -o-dark rex-macos-dark.png
+          ./bin/listbench -o listbench-macos.png
+          ./bin/listbench -exit-first -timeout 60s >/dev/null || true
+          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/listbench -bench -gate -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-macos.json
+          { echo '```json'; cat listbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: pilot (offscreen PNG, windowed bench with the allocation gate)
+        run: |
+          ./bin/pilot -o pilot-macos.png
+          ./bin/pilot -exit-first -v -timeout 60s >/dev/null || true
+          STALL='bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want'
+          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/pilot -bench -gate -allow-unpaced -budget-scale 3 -timeout 150s | tee pilot-macos.json
+          bash "$RUNNER_TEMP/stallgate.sh" "$STALL" ./bin/pilot -bench -rows 1000000 -gate -allow-unpaced -budget-scale 3 -timeout 150s | tee pilot-1m-macos.json
+          { echo '```json'; cat pilot-macos.json pilot-1m-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: gallery (offscreen PNGs in light and dark, windowed bench with the allocation gate)
+        if: ${{ !cancelled() }} # a stalled pilot bench of the runner must not hide the gallery's result
+        run: |
+          ./bin/gallery -o gallery-macos.png -o-dark gallery-macos-dark.png
+          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-macos.json
+          { echo '```json'; cat gallery-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: gallery with the debug overlay on (windowed bench with the allocation gate)
+        if: ${{ !cancelled() }}
+        run: |
+          GNUI_DEBUG=overlay bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/gallery -bench -gate -allow-unpaced -timeout 150s | tee gallery-overlay-macos.json
+          { echo '```json'; cat gallery-overlay-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: notes example (windowed bench with the allocation gate)
+        if: ${{ !cancelled() }}
+        run: |
+          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/notes -bench -gate -allow-unpaced -timeout 150s | tee notes-macos.json
+          { echo '```json'; cat notes-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: rexlook (windowed bench with the allocation gate; native shell, then drawn)
+        if: ${{ !cancelled() }}
+        # The CPU budget (1000 µs/frame) is checked at 3x on the shared
+        # runner (-budget-scale 3): -drawn takes ~970 µs/frame even on an
+        # idle M-series Mac; only a catastrophic regression fails here.
+        run: |
+          ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -allocsites -timeout 240s | tee rexlook-macos.json
+          ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -allocsites -drawn -timeout 240s | tee rexlook-drawn-macos.json
+          { echo '```json'; cat rexlook-macos.json rexlook-drawn-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # D27: an allocation of ours that misses some windows (one every
+          # 1800 frames, windows of 900) fails although a window is clean.
+          if ./bin/rexlook -bench -gate -allow-unpaced -budget-scale 3 -test-alloc-every 1800 -timeout 240s > rexlook-planted.json 2> rexlook-planted.err; then
+            echo "::error::rexlook's gate passed an allocation of ours every 1800 frames"; exit 1
+          fi
+          grep -q "of our code in the measured windows" rexlook-planted.err || { cat rexlook-planted.err; exit 1; }
+      - name: vlistbench (windowed bench with the allocation gate; the offscreen session runs in go test)
+        if: ${{ !cancelled() }}
+        # The list and edit time budgets (P99 and maximum) are checked at 3x
+        # on the shared runner (-budget-scale 3): the edit budget is missed
+        # now and then even on an idle Mac.
+        run: |
+          ./bin/vlistbench -bench -gate -allow-unpaced -budget-scale 3 -allocsites -timeout 240s | tee vlistbench-macos.json
+          { echo '```json'; cat vlistbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: imgbench (windowed image-grid bench with the allocation gate)
+        if: ${{ !cancelled() }}
+        run: |
+          bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/imgbench -bench -gate -allow-unpaced -timeout 150s | tee imgbench-macos.json
+          { echo '```json'; cat imgbench-macos.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: live resize (two draws per transaction must not starve the drawable pool)
+        run: |
+          ./bin/rexlook -live-resize-test | tee rexlook-live-resize-macos.json
+          ./bin/pilot -live-resize-test | tee pilot-live-resize-macos.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
           name: spike-macos
           path: |
             spike-macos.json
@@ -352,11 +376,60 @@ jobs:
             vlistbench-macos.json
           if-no-files-found: ignore
 
+
+  libghostty-windows:
+    # The Windows DLLs of libghostty-vt (D74), cross-built by Zig on Linux
+    # (as tools/libghostty does from a Mac) and cached like the macOS one.
+    # The Windows jobs put them in .cache/libghostty-vt, where term's tests,
+    # the terminal's and `gnui package`'s nativeLibs find them.
+    name: libghostty-vt for Windows (Zig cross-build)
+    if: inputs.only == '' || inputs.only == 'windows'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: libghostty-vt cache (artifacts are built, never committed)
+        uses: actions/cache@v4
+        with:
+          path: .cache/libghostty-vt
+          key: libghostty-vt-${{ hashFiles('internal/ghosttyvt/ghosttyvt.go', 'tools/libghostty/*.go') }}-windows
+      - name: libghostty-vt (Zig 0.17.0 and Ghostty at the pinned commit)
+        run: |
+          if ! go run ./tools/libghostty -check -targets windows/amd64,windows/arm64; then
+            commit=$(go run ./tools/libghostty -print-commit)
+            curl -sSfL -o "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+            echo "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+            tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            git init -q "$RUNNER_TEMP/ghostty"
+            git -C "$RUNNER_TEMP/ghostty" fetch -q --depth 1 https://github.com/ghostty-org/ghostty "$commit"
+            git -C "$RUNNER_TEMP/ghostty" checkout -q FETCH_HEAD
+            # deps.files.ghostty.org has failed mid-download (the macOS job's note)
+            for try in 1 2 3; do
+              go run ./tools/libghostty -src "$RUNNER_TEMP/ghostty" -zig "$RUNNER_TEMP/zig-x86_64-linux-0.17.0/zig" -targets windows/amd64,windows/arm64 && break
+              [ "$try" = 3 ] && exit 1
+              echo "::warning::libghostty build failed (try $try of 3), trying again"
+              sleep 20
+            done
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libghostty-vt-windows
+          path: .cache/libghostty-vt
+          retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
+
   windows:
     name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
     if: inputs.only == '' || inputs.only == 'windows'
+    needs: libghostty-windows
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45 # W1 added two two-window benches
+    env:
+      QUARANTINE: '^(TestFileDialogsCancelledOnceEach|TestSaveDialogAnswersWithThePath|TestCancelDialogDeliversNothing|TestWindowClosedUnderItsDialog|TestLivePalette)$'
     strategy:
       fail-fast: false
       matrix:
@@ -366,8 +439,73 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      QUARANTINE: '^(TestEvictionSkipsReplacedNotes|TestSystemIconsWindowsConcurrent|TestCloseDoesNotWaitForTheIconStyleRead|TestOffscreenRunsLeaveNoWorkersOrHandles|TestPackagedBinaryHasNoDebugChordOrInspector)$'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: download the modules
+        # cmd/gnui's tests build for darwin, which needs modules (purego) that no
+        # test of this OS does; those tests read the module cache, never the network.
+        run: go mod download
+      - uses: actions/download-artifact@v4
+        with:
+          name: libghostty-vt-windows
+          path: .cache/libghostty-vt
+      - name: libghostty-vt (the DLLs the libghostty-windows job built)
+        run: |
+          go run ./tools/libghostty -check -targets windows/${{ matrix.arch }}
+          echo "GNUI_REQUIRE_LIBGHOSTTY=1" >> "$GITHUB_ENV"
+      # windows-11-arm starts with shell surfaces over the desktop (a
+      # full-screen "Microsoft account" prompt, then Start and Search) that
+      # cover our windows and take the foreground (docs/PHASE8-PLAN.md, W4's
+      # probe note P7). The tests and benches open several windows, activate
+      # them and run a menu loop (W1), so they clear them first, as
+      # probes.yml does; a no-op on amd64.
+      - name: clear the shell surfaces over the desktop
+        shell: pwsh
+        run: |
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') {
+            $p = Get-Process $n -ErrorAction SilentlyContinue
+            if ($p) { $p | ForEach-Object { "stopping $n $($_.Id) '$($_.MainWindowTitle)'"; Stop-Process -Id $_.Id -Force } } else { "no $n running" }
+          }
+          Start-Sleep -Seconds 3
+          (New-Object -ComObject WScript.Shell).SendKeys('{ESC}')
+          Start-Sleep -Seconds 1
+          foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') { "$n after: $(@(Get-Process $n -ErrorAction SilentlyContinue).Count)" }
+      - name: test
+        run: |
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE|/app/webview$") | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}" -raw test-windows-${{ matrix.arch }}.json
+          { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      # app/webview alone, after the rest: WebView2's engine (a browser and
+      # its renderer, GPU and utility processes) and its focused page beside
+      # the other packages' desktop tests came with their foreground, focus
+      # and clipboard tests failing, a different one each run, on no other
+      # branch as often (H2), so it runs with nothing else on the desktop.
+      - name: test app/webview (alone)
+        if: ${{ !cancelled() }}
+        run: go test -json -count=1 -skip "$QUARANTINE" ./app/webview | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, app/webview" -raw test-windows-webview-${{ matrix.arch }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-windows-${{ matrix.arch }}
+          path: test-windows-*${{ matrix.arch }}.json
+          if-no-files-found: ignore
+
+  windows-bench:
+    name: Windows ${{ matrix.arch }} benches (D3D11, WARP on runners)
+    if: inputs.only == '' || inputs.only == 'windows'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-2025 }
+          - { arch: arm64, runner: windows-11-arm }
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -408,32 +546,25 @@ jobs:
           (New-Object -ComObject WScript.Shell).SendKeys('{ESC}')
           Start-Sleep -Seconds 1
           foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') { "$n after: $(@(Get-Process $n -ErrorAction SilentlyContinue).Count)" }
-      - name: test
-        run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
-          { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: build spike
-        run: go build -trimpath -ldflags="-s -w" -o bin/spike.exe ./cmd/spike
+      - name: build the bench binaries once
+        run: go build -trimpath -ldflags="-s -w" -o bin/ ./cmd/spike ./cmd/listbench ./cmd/pilot ./cmd/gallery ./examples/notes ./cmd/rexlook/rex/rexshot
       - name: spike bench + gates
         run: |
           bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/spike.exe -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-windows-${{ matrix.arch }}.json
           { echo '```json'; cat spike-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: listbench + rex (offscreen PNGs, windowed bench with the allocation gate)
         run: |
-          go build -trimpath -ldflags="-s -w" -o bin/listbench.exe ./cmd/listbench
-          go run ./cmd/rexlook/rex/rexshot -o rex-windows-${{ matrix.arch }}.png -o-dark rex-windows-${{ matrix.arch }}-dark.png
+          ./bin/rexshot.exe -o rex-windows-${{ matrix.arch }}.png -o-dark rex-windows-${{ matrix.arch }}-dark.png
           ./bin/listbench.exe -o listbench-windows-${{ matrix.arch }}.png
           ./bin/listbench.exe -bench -gate -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-windows-${{ matrix.arch }}.json
           { echo '```json'; cat listbench-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: pilot (offscreen PNG, windowed bench with the allocation gate)
         run: |
-          go build -trimpath -ldflags="-s -w" -o bin/pilot.exe ./cmd/pilot
           ./bin/pilot.exe -o pilot-windows-${{ matrix.arch }}.png
           ./bin/pilot.exe -bench -gate -allow-unpaced -budget-scale 3 -timeout 420s | tee pilot-windows-${{ matrix.arch }}.json
           { echo '```json'; cat pilot-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: gallery (offscreen PNGs in light and dark, windowed bench with the allocation gate)
         run: |
-          go build -trimpath -ldflags="-s -w" -o bin/gallery.exe ./cmd/gallery
           ./bin/gallery.exe -o gallery-windows-${{ matrix.arch }}.png -o-dark gallery-windows-${{ matrix.arch }}-dark.png
           ./bin/gallery.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-windows-${{ matrix.arch }}.json
           { echo '```json'; cat gallery-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -443,13 +574,17 @@ jobs:
           { echo '```json'; cat gallery-2w-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: notes example (windowed bench with the allocation gate)
         run: |
-          go build -trimpath -ldflags="-s -w" -o bin/notes.exe ./examples/notes
           ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-windows-${{ matrix.arch }}.json
           { echo '```json'; cat notes-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: notes with two windows (W1, D68)
         run: |
           ./bin/notes.exe -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s -windows 2 | tee notes-2w-windows-${{ matrix.arch }}.json
           { echo '```json'; cat notes-2w-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: shelldemo (W3, D66; hosts as child windows moved, hidden and shown every frame, with the allocation gate)
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/shelldemo.exe ./cmd/shelldemo
+          ./bin/shelldemo.exe -bench -gate | tee shelldemo-windows-${{ matrix.arch }}.json
+          { echo '```json'; cat shelldemo-windows-${{ matrix.arch }}.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -468,7 +603,9 @@ jobs:
             gallery-2w-windows-${{ matrix.arch }}.json
             notes-windows-${{ matrix.arch }}.json
             notes-2w-windows-${{ matrix.arch }}.json
+            shelldemo-windows-${{ matrix.arch }}.json
           if-no-files-found: ignore
+
 
   linux:
     name: Linux ${{ matrix.arch }} ${{ matrix.backend }} (EGL, Mesa llvmpipe)
@@ -486,10 +623,6 @@ jobs:
     env:
       GNUI_BACKEND: ${{ matrix.backend }}
       LIBGL_ALWAYS_SOFTWARE: "1"
-      # internal/ffi's tests run on their own: TestZeroAlloc is also the name of
-      # ui's, clib's and rexlook's zero-allocation tests, which keep running.
-      QUARANTINE_FFI: '^(TestColdThreadAttach|TestZeroAlloc)$'
-      QUARANTINE: '^(TestLastDrainEndsParking|TestMixFollowsAndDoesNotAllocate|TestPackagedBinaryHasNoDebugChordOrInspector)$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -547,6 +680,10 @@ jobs:
         with:
           path: ~/apt-cache
           key: apt-${{ matrix.runner }}-${{ hashFiles('.github/apt-packages.txt') }}
+      - name: download the modules
+        # cmd/gnui's tests build for darwin, which needs modules no test of this
+        # OS does; those tests read the module cache, never the network.
+        run: go mod download
       - name: stall gate wrapper (display-link stalls warn instead of failing, docs/QUARANTINE.md)
         run: |
           # stallgate.sh <regexp> command...: runs the command; when it fails and
@@ -567,8 +704,7 @@ jobs:
           EOF
       - name: test
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE" | grep -v -x gonativeui/internal/ffi)
-          go test -count=1 -skip "$QUARANTINE_FFI" ./internal/ffi
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE") | go run ./tools/testtimes -title "Linux ${{ matrix.arch }} ${{ matrix.backend }}" -raw test-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
           go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: platform tests (X11 on Xvfb - clipboard, cursors, content-first startup)
@@ -637,6 +773,12 @@ jobs:
             [ -f "$f" ] && { echo '```json'; cat "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
           [ -f weston.log ] && tail -n 40 weston.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-linux-${{ matrix.arch }}-${{ matrix.backend }}
+          path: test-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -23,13 +23,13 @@ var sy struct {
 	cfRelease, cfRetain                         uintptr
 	cfStringCreateWithBytes, cfStringGetCString uintptr
 	cfDictionaryCreate, cfDictionaryGetValue    uintptr
-	cfArrayCreate, arrayCallBacks               uintptr
 	cfAttributedStringCreate                    uintptr
 	cfAttrCreateMutable, cfAttrReplaceString    uintptr
 	cfAttrSetAttributes, cfAttrSetAttribute     uintptr
 	cfAttrGetLength                             uintptr
 	cfAttrBeginEditing, cfAttrEndEditing        uintptr
 	cfArrayGetCount, cfArrayGetValueAtIndex     uintptr
+	cfArrayCreate, arrayCallBacks               uintptr // arrayCallBacks: the address of the callback struct
 	cfNumberCreate                              uintptr
 	cfNumberGetValue, cfNumberGetTypeID         uintptr
 	cfGetTypeID, cfPreferencesCopyAppValue      uintptr
@@ -66,8 +66,8 @@ var sy struct {
 	// constant CFStringRefs (values of the exported globals)
 	kFontAttribute, kTraitsAttribute, kWeightTrait, kFamilyAttribute uintptr
 	kDesignTrait, kDesignMonospaced                                  uintptr
-	kFeatureSettings, kFeatureType, kFeatureSelector                 uintptr
 	kParagraphStyle                                                  uintptr
+	kFeatureSettings, kFeatureType, kFeatureSelector                 uintptr
 }
 
 var ctxFlags = [...]struct {
@@ -95,10 +95,13 @@ var (
 const (
 	encUTF8        = 0x08000100
 	numFloat64     = 6 // kCFNumberFloat64Type
+	numSInt32      = 3 // kCFNumberSInt32Type
 	numSInt64      = 4 // kCFNumberSInt64Type
 	uiFontSystem   = 2 // kCTFontUIFontSystem
 	traitColorGlph = 1 << 13
 	traitItalic    = 1 << 0 // kCTFontItalicTrait
+	numberSpacing  = 6      // kNumberSpacingType
+	monoNumbers    = 0      // kMonospacedNumbersSelector
 	bitmapAlphaPre = 1      // kCGImageAlphaPremultipliedLast
 	bitmapAlpha    = 7      // kCGImageAlphaOnly
 )
@@ -148,6 +151,7 @@ func loadSyms() error {
 		sy.cfAttrBeginEditing, sy.cfAttrEndEditing = sym(cf, "CFAttributedStringBeginEditing"), sym(cf, "CFAttributedStringEndEditing")
 		sy.cfArrayGetCount, sy.cfArrayGetValueAtIndex = sym(cf, "CFArrayGetCount"), sym(cf, "CFArrayGetValueAtIndex")
 		sy.cfNumberCreate = sym(cf, "CFNumberCreate")
+		sy.cfArrayCreate, sy.arrayCallBacks = sym(cf, "CFArrayCreate"), sym(cf, "kCFTypeArrayCallBacks")
 		sy.cfNumberGetValue, sy.cfNumberGetTypeID = sym(cf, "CFNumberGetValue"), sym(cf, "CFNumberGetTypeID")
 		sy.cfGetTypeID, sy.cfPreferencesCopyAppValue = sym(cf, "CFGetTypeID"), sym(cf, "CFPreferencesCopyAppValue")
 		sy.kCurrentApplication = global(cf, "kCFPreferencesCurrentApplication")
@@ -187,10 +191,9 @@ func loadSyms() error {
 		sy.kFontAttribute, sy.kTraitsAttribute = global(ct, "kCTFontAttributeName"), global(ct, "kCTFontTraitsAttribute")
 		sy.kWeightTrait, sy.kFamilyAttribute = global(ct, "kCTFontWeightTrait"), global(ct, "kCTFontFamilyNameAttribute")
 		sy.kDesignTrait, sy.kDesignMonospaced = global(ct, "kCTFontUIFontDesignTrait"), global(ct, "kCTFontUIFontDesignMonospaced")
+		sy.kParagraphStyle = global(ct, "kCTParagraphStyleAttributeName")
 		sy.kFeatureSettings = global(ct, "kCTFontFeatureSettingsAttribute")
 		sy.kFeatureType, sy.kFeatureSelector = global(ct, "kCTFontFeatureTypeIdentifierKey"), global(ct, "kCTFontFeatureSelectorIdentifierKey")
-		sy.cfArrayCreate, sy.arrayCallBacks = sym(cf, "CFArrayCreate"), sym(cf, "kCFTypeArrayCallBacks")
-		sy.kParagraphStyle = global(ct, "kCTParagraphStyleAttributeName")
 	})
 	return loadErr
 }
@@ -263,8 +266,8 @@ type System struct {
 	san   []byte    // the source with every invalid byte replaced by U+FFFD
 	keys  [2]uintptr
 	vals  [2]uintptr
-	arr   [1]uintptr
 	num   [1]float64
+	inum  [1]int32
 	gid   [1]uint16
 	pt    [2]float64
 	rect  [4]float64 // bounding rect out
@@ -347,6 +350,12 @@ func (s *System) number(v float64) uintptr {
 	return s.fr.Reset().Arg(0).Arg32(numFloat64).ArgPtr(unsafe.Pointer(&s.num[0])).Call(sy.cfNumberCreate).R0()
 }
 
+// integer creates a CFNumber holding a 32-bit integer (+1).
+func (s *System) integer(v int32) uintptr {
+	s.inum[0] = v
+	return s.fr.Reset().Arg(0).Arg32(numSInt32).ArgPtr(unsafe.Pointer(&s.inum[0])).Call(sy.cfNumberCreate).R0()
+}
+
 func (s *System) f64(fn, obj uintptr) float64 { return s.fr.Reset().Arg(obj).Call(fn).F64(0) }
 
 // cssWeightToCT maps a CSS weight to a CoreText weight trait (NSFontWeight*).
@@ -368,9 +377,8 @@ func cssWeightToCT(w int) float64 {
 }
 
 // traitsAttrs returns the attributes dictionary {traits: {weight, design}}
-// (+1), with {features: [{number spacing: monospaced}]} when tabular. mono
-// selects the system monospaced design.
-func (s *System) traitsAttrs(weight int, mono, tabular bool) uintptr {
+// (+1). mono selects the system monospaced design.
+func (s *System) traitsAttrs(weight int, mono bool) uintptr {
 	n := s.number(cssWeightToCT(weight))
 	s.keys[0], s.vals[0] = sy.kWeightTrait, n
 	cnt := 1
@@ -380,26 +388,8 @@ func (s *System) traitsAttrs(weight int, mono, tabular bool) uintptr {
 	}
 	traits := s.dictN(cnt)
 	s.release(n)
-	if !tabular {
-		attrs := s.dict1(sy.kTraitsAttribute, traits)
-		s.release(traits)
-		return attrs
-	}
-	// kNumberSpacingType (6), kMonospacedNumbersSelector (0)
-	typ, sel := s.number(6), s.number(0)
-	s.keys[0], s.vals[0] = sy.kFeatureType, typ
-	s.keys[1], s.vals[1] = sy.kFeatureSelector, sel
-	feature := s.dictN(2)
-	s.release(typ)
-	s.release(sel)
-	s.arr[0] = feature
-	features := s.fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&s.arr[0])).Arg(1).Arg(sy.arrayCallBacks).Call(sy.cfArrayCreate).R0()
-	s.release(feature)
-	s.keys[0], s.vals[0] = sy.kTraitsAttribute, traits
-	s.keys[1], s.vals[1] = sy.kFeatureSettings, features
-	attrs := s.dictN(2)
+	attrs := s.dict1(sy.kTraitsAttribute, traits)
 	s.release(traits)
-	s.release(features)
 	return attrs
 }
 
@@ -438,6 +428,9 @@ func (s *System) Font(d FontDesc) FontKey {
 			s.release(font)
 			font = it
 		}
+	}
+	if d.TabularDigits && font != 0 {
+		font = s.withTabularDigits(font, pt)
 	}
 	fe := fontEnt{desc: d, font: font, attrs: s.dict1(sy.kFontAttribute, font)}
 	fe.face = s.faceFor(font, d.Scale)
@@ -545,13 +538,12 @@ func (s *System) createFont(d FontDesc, pt float64) uintptr {
 		return f
 	}
 	base := s.fr.Reset().Arg32(uiFontSystem).ArgF64(pt).Arg(0).Call(sy.ctFontCreateUIFontForLanguage).R0()
-	if base == 0 || (d.Weight == 400 && !d.Mono && !d.Tabular) {
+	if base == 0 || (d.Weight == 400 && !d.Mono) {
 		return base
 	}
-	// Derive the weight, the monospaced design and the tabular figures from
-	// the system font's descriptor.
+	// Derive the weight / monospaced design from the system font's descriptor.
 	baseDesc := s.fr.Call1(sy.ctFontCopyFontDescriptor, base)
-	attrs := s.traitsAttrs(d.Weight, d.Mono, d.Tabular)
+	attrs := s.traitsAttrs(d.Weight, d.Mono)
 	desc := s.fr.Reset().Arg(baseDesc).Arg(attrs).Call(sy.ctFontDescriptorCreateCopyWithAttributes).R0()
 	s.release(attrs)
 	s.release(baseDesc)
@@ -564,6 +556,39 @@ func (s *System) createFont(d FontDesc, pt float64) uintptr {
 		return base
 	}
 	s.release(base)
+	return f
+}
+
+// withTabularDigits returns the font with its numbers set at one width, as
+// NSFont.monospacedDigitSystemFont does: the number-spacing feature of the
+// font's descriptor, which CTLine then applies to every run in the font. It
+// consumes font (+1) and returns the new font (+1); the font itself when
+// CoreText can't make the copy.
+func (s *System) withTabularDigits(font uintptr, pt float64) uintptr {
+	typ, sel := s.integer(numberSpacing), s.integer(monoNumbers)
+	s.keys[0], s.vals[0] = sy.kFeatureType, typ
+	s.keys[1], s.vals[1] = sy.kFeatureSelector, sel
+	feature := s.dictN(2)
+	s.release(typ)
+	s.release(sel)
+	s.vals[0] = feature
+	list := s.fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&s.vals[0])).Arg(1).Arg(sy.arrayCallBacks).Call(sy.cfArrayCreate).R0()
+	s.release(feature)
+	attrs := s.dict1(sy.kFeatureSettings, list)
+	s.release(list)
+	base := s.fr.Call1(sy.ctFontCopyFontDescriptor, font)
+	desc := s.fr.Reset().Arg(base).Arg(attrs).Call(sy.ctFontDescriptorCreateCopyWithAttributes).R0()
+	s.release(attrs)
+	s.release(base)
+	if desc == 0 {
+		return font
+	}
+	f := s.fr.Reset().Arg(desc).ArgF64(pt).Arg(0).Call(sy.ctFontCreateWithFontDescriptor).R0()
+	s.release(desc)
+	if f == 0 {
+		return font
+	}
+	s.release(font)
 	return f
 }
 
@@ -1049,6 +1074,11 @@ func (s *System) Dirty(p int) (x, y, w, h int, pixels []byte, stride int, ok boo
 
 // ClearDirty marks page p as uploaded.
 func (s *System) ClearDirty(p int) { s.atlas.clearDirty(p) }
+
+// DirtyAll marks every atlas page changed in full, so the next Dirty of each
+// page returns all of it: for a renderer whose textures lost their contents
+// (a rebuilt device), which needs the clean pages uploaded again too.
+func (s *System) DirtyAll() { s.atlas.markAllDirty() }
 
 // Close releases every CoreText/CoreGraphics object and the CPU caches: the
 // glyph atlas pages, the run and paragraph caches and the scratch, which a

@@ -46,6 +46,14 @@ uncaptured layer): `sh tools/appkitref/scroller.sh` prints NSScroller's
 widths, knob slots and knobs per control size and style as JSON
 (`-[NSScroller rectForPart:]`, no window, no GUI session). The theme's test
 reads it from `theme/testdata/appkit-scroller-27.2.json`.
+`scroller.sh -knobs` prints the knob's length in real scroll views (heights,
+documents, a content inset, both styles and sizes), the rules `widget/base`
+copies (`theme/testdata/appkit-scroller-knobs-27.2.json`). `corner.sh` prints
+how a continuous and a circular rounded corner of Core Animation cut into a
+box, row by row, which the squircle in `gpu` is fitted to and tested against
+(`gpu/testdata/appkit-corner-27.2.json`). Neither needs a window, so both run
+with the screen locked, as does the text-style table's `labelCell` (a label's
+intrinsic height).
 
 Which controls Tab reaches: `sh tools/appkitref/keynav.sh` prints, for a window
 of the usual controls, `canBecomeKeyView` of each and the order `nextValidKeyView`

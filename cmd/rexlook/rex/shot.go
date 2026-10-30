@@ -26,6 +26,8 @@ type ShotOptions struct {
 	// Native renders what the scene draws in the native shell (NativeConfig):
 	// no field (transparent) and no ⌘ and +, which are the window's.
 	Native bool
+	// Density is the panes' density.
+	Density theme.Density
 }
 
 // shotRex is the scene with the system appearance an offscreen window lacks.
@@ -49,6 +51,7 @@ func RenderShot(path string, o ShotOptions) (quads, drawCalls int, err error) {
 	x := NewApp()
 	x.Traffic = true
 	x.SetPreference(o.Preference)
+	x.SetDensity(o.Density)
 	cfg := Config()
 	if o.Native {
 		x.backdrop, x.shellShot = true, true

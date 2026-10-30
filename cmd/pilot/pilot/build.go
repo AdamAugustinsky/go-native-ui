@@ -367,8 +367,16 @@ func (pl *Pilot) drawList(c *ui.Context, r *theme.Resolved, i int, p *pane, pane
 	showDate, showSize := len(cols) > 1, len(cols) > 2
 
 	body := r.Styles[theme.StyleBody].Font
+	// Sizes line up in a column of tabular digits, as Finder's do (Menlo's
+	// digits are one width already).
+	var sizeFont text.FontKey
 	if pl.opt.Mono {
 		body = r.Font.Mono
+		sizeFont = body
+	} else {
+		d := theme.MacText[theme.StyleBody].Desc()
+		d.Scale, d.TabularDigits = r.Scale, true
+		sizeFont = k.TextSystem().Font(d)
 	}
 	iconW := theme.Snap(fileIconPt * s)
 	if v.l != nil {
@@ -414,11 +422,7 @@ func (pl *Pilot) drawList(c *ui.Context, r *theme.Resolved, i int, p *pane, pane
 					appendSize(f, ent.Size)
 					tx = f.Bytes()
 				}
-				if pl.opt.Mono || ent.Kind == fs.KindDir { // Menlo's digits are one width already
-					pl.cell(c, &t, 2, body, text2, tx)
-				} else {
-					pl.sizeCell(c, &t, 2, body, text2, tx)
-				}
+				pl.cell(c, &t, 2, sizeFont, text2, tx)
 			}
 		}
 	}
@@ -451,59 +455,6 @@ func (pl *Pilot) cell(c *ui.Context, t *rexui.Table, col int, font text.FontKey,
 	c.NextTextColor(color)
 	c.NextAlign(t.Columns()[col].Align)
 	t.TableHead.TextCell(&t.List.List, col, tx, ui.DrawText|ui.EllipsisOverflowX)
-}
-
-// sizeCell builds cell col of the file row being built as a size in tabular
-// digits (the system font's digits are proportional, so a column of sizes
-// would not line up): each digit takes the widest digit's advance, the
-// number ends at the cell's right edge and its unit follows it, as Finder's
-// monospaced-digit text does.
-func (pl *Pilot) sizeCell(c *ui.Context, t *rexui.Table, col int, font text.FontKey, color uint32, tx []byte) {
-	k := pl.bk
-	if pl.digitFont != font {
-		pl.digitFont, pl.digitW = font, 0
-		for d := byte('0'); d <= '9'; d++ {
-			pl.digitW = max(pl.digitW, k.TextWidth(font, string(rune(d))))
-		}
-	}
-	n := 0
-	for n < len(tx) && (tx[n] >= '0' && tx[n] <= '9' || tx[n] == '.') {
-		n++
-	}
-	c.NextSemNameBytes(tx)
-	// the number is boxes of whole pixels, each digit in its own cell: its ink
-	// ends within a pixel of the column's, which the column audit (0.5 px) does
-	// not take for the same edge
-	c.NextAuditExempt(ui.AuditColumn.Mask())
-	t.BeginCell(col)
-	key := c.ParentKey()
-	c.NextSize(ui.Pct(1), ui.Pct(1))
-	c.NextAxis(ui.AxisX)
-	c.NextGap(0)
-	c.NextJustify(ui.JustifyEnd)
-	c.NextCross(ui.CrossCenter)
-	c.Push(c.BoxKeyed(0, ui.KeyN(key, 1), nil))
-	for i := 0; i < n; i++ {
-		if tx[i] == '.' {
-			c.NextSize(ui.TextSize(0), ui.Pct(1))
-			c.NextAlign(ui.AlignRight)
-		} else {
-			c.NextSize(ui.Px(pl.digitW), ui.Pct(1))
-			c.NextAlign(ui.AlignCenter)
-		}
-		c.NextFont(font)
-		c.NextTextColor(color)
-		c.BoxKeyed(ui.DrawText, ui.KeyN(key, 100+uint64(i)), tx[i:i+1])
-	}
-	if n < len(tx) {
-		c.NextSize(ui.TextSize(0), ui.Pct(1))
-		c.NextAlign(ui.AlignRight) // (the audit reads a column's alignment from its widest text: the unit)
-		c.NextFont(font)
-		c.NextTextColor(color)
-		c.BoxKeyed(ui.DrawText, ui.KeyN(key, 99), tx[n:])
-	}
-	c.Pop()
-	t.EndCell()
 }
 
 // drawStatus builds the status line of pane i, centred in its band at the

@@ -62,6 +62,9 @@ type Strings struct {
 	// ScrollToBottom names a terminal's button back to the bottom of its
 	// scrollback; Loading, a web view's loading line.
 	ScrollToBottom, Loading string
+	// Maximize and Restore name a drawn titlebar's maximise button
+	// (CaptionButtons; Menu.Minimize and Menu.Close name the others).
+	Maximize, Restore string
 }
 
 // StringsEnglish are the default Strings.
@@ -106,6 +109,8 @@ var StringsEnglish = Strings{
 	ShowMore:       "Show More",
 	ScrollToBottom: "Scroll to bottom",
 	Loading:        "Loading",
+	Maximize:       "Maximize",
+	Restore:        "Restore",
 }
 
 // StringsPtBR are the Strings in Brazilian Portuguese, in macOS's words.
@@ -165,6 +170,8 @@ var StringsPtBR = Strings{
 	ShowMore:       "Mostrar Mais",
 	ScrollToBottom: "Rolar até o fim",
 	Loading:        "Carregando",
+	Maximize:       "Maximizar",
+	Restore:        "Restaurar",
 }
 
 var (

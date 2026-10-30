@@ -40,6 +40,7 @@ import (
 	rextheme "gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
+	"gonativeui/widget/workspace"
 )
 
 // WindowPt is the window size of the reference in points; TitlebarPt the
@@ -101,7 +102,11 @@ type Rex struct {
 	moving bool // some pane is still gliding
 
 	lastW, lastH int
-	disp         [maxPanes][4]float32 // rectangles the panes were drawn at
+	disp         [workspace.MaxPanes][4]float32 // rectangles the panes were drawn at
+
+	// density is how tightly the panes pack (theme.Resolved.SetDensity):
+	// their inset, gutters and corners come from the pane's surface profile.
+	density theme.Density
 
 	// The window's native shell (native.go): a backdrop instead of the
 	// painted field, native ⌘ and + buttons instead of drawn ones.
@@ -131,16 +136,15 @@ func New(ts TextSystem, scale float32) *Rex {
 // once the text system and the renderer exist; set Traffic before that if the
 // scene draws the traffic lights itself.
 func NewApp() *Rex {
-	setHeaderRecipe()
 	r := &Rex{nextUID: 1}
-	r.k = base.NewKit(nil, nil, headerTheme()) // holds the preference until Init makes the real one
+	r.k = base.NewKit(nil, nil, rextheme.Theme()) // holds the preference until Init makes the real one
 	return r
 }
 
 func (r *Rex) init(ts TextSystem, scale float32) {
 	r.ts = ts
 	pref := r.k.Preference()
-	r.k = base.NewKit(nil, ts, headerTheme())
+	r.k = base.NewKit(nil, ts, rextheme.Theme())
 	r.k.SetPreference(pref)
 	for i := range iconSpecs {
 		r.k.AddIcon(iconSpecs[i]) // the scene's icons follow the standard ones, as iconID says
@@ -167,28 +171,33 @@ func (r *Rex) SetPreference(p theme.Preference) { r.k.SetPreference(p) }
 // Preference is the preference set with SetPreference.
 func (r *Rex) Preference() theme.Preference { return r.k.Preference() }
 
+// SetDensity sets how tightly the panes pack: the theme's insets, gutters
+// and corners (the default), or compact ones.
+func (r *Rex) SetDensity(d theme.Density) { r.density = d }
+
 func (r *Rex) uid() uint32 {
 	r.nextUID++
 	return r.nextUID
 }
 
 var (
-	keyRoot  = ui.HashString(0, "rex")
-	keyTab   = ui.HashString(keyRoot, "tab")
-	keyPane  = ui.HashString(keyRoot, "pane")
-	keyDiv   = ui.HashString(keyRoot, "divider")
-	keyPlus  = ui.HashString(keyRoot, "plus")
-	keyCmd   = ui.HashString(keyRoot, "cmd")
-	keyBG    = ui.HashString(keyRoot, "bg")
-	keyBar   = ui.HashString(keyRoot, "titlebar")
-	keyTabs  = "tabs"
-	keyAnim  = ui.HashString(keyRoot, "anim")
-	keyFade  = ui.HashString(keyAnim, "fade")
-	keyFocus = ui.HashString(keyAnim, "focus")
-	keyMaxT  = ui.HashString(keyAnim, "max")
-	keyAnyT  = ui.HashString(keyAnim, "maxany")
-	keyGlide = ui.HashString(keyAnim, "glide")
-	keyKeyW  = ui.HashString(keyAnim, "keywindow")
+	keyRoot = ui.HashString(0, "rex")
+	keyTab  = ui.HashString(keyRoot, "tab")
+	// keyWorkspace is the Key of every tab's layout: the panes' and the
+	// dividers' keys derive from it and their identities, unique across tabs.
+	keyWorkspace = ui.HashString(keyRoot, "pane")
+	keyPlus      = ui.HashString(keyRoot, "plus")
+	keyCmd       = ui.HashString(keyRoot, "cmd")
+	keyBG        = ui.HashString(keyRoot, "bg")
+	keyBar       = ui.HashString(keyRoot, "titlebar")
+	keyTabs      = "tabs"
+	keyAnim      = ui.HashString(keyRoot, "anim")
+	keyFade      = ui.HashString(keyAnim, "fade")
+	keyFocus     = ui.HashString(keyAnim, "focus")
+	keyMaxT      = ui.HashString(keyAnim, "max")
+	keyAnyT      = ui.HashString(keyAnim, "maxany")
+	keyGlide     = ui.HashString(keyAnim, "glide")
+	keyKeyW      = ui.HashString(keyAnim, "keywindow")
 )
 
 // TabRectPt is where tab i was drawn in the latest frame, in points from the
@@ -201,9 +210,6 @@ func (r *Rex) TabRectPt(i int) [4]float32 {
 // tabKey is the key of the box of the tab with the uid (rexui.TabBar.TabKey).
 func (r *Rex) tabKey(uid uint32) ui.Key { return r.bar.TabKey(uint64(uid)) }
 
-func paneKey(uid uint32) ui.Key { return ui.KeyN(keyPane, uint64(uid)) }
-func divKey(uid uint32) ui.Key  { return ui.KeyN(keyDiv, uint64(uid)) }
-
 // buttons of a pane header, left to right.
 const (
 	btnSplitX = iota
@@ -215,9 +221,9 @@ const (
 
 // holderKey is the key of the box that holds button b of a pane header;
 // btnKey is the button's own, which carries its signals.
-func holderKey(paneUID uint32, b int) ui.Key { return ui.KeyN(paneKey(paneUID), uint64(b)+1) }
-func btnKey(paneUID uint32, b int) ui.Key {
-	return ui.HashString(holderKey(paneUID, b), headerButtons[b])
+func holderKey(t *tab, paneUID uint32, b int) ui.Key { return ui.KeyN(t.paneKey(paneUID), uint64(b)+1) }
+func btnKey(t *tab, paneUID uint32, b int) ui.Key {
+	return ui.HashString(holderKey(t, paneUID, b), headerButtons[b])
 }
 
 // Build builds the frame: it applies the input of the frame to the model
@@ -232,6 +238,7 @@ func (r *Rex) Build(c *ui.Context) {
 	}
 	r.k.Begin(c) // the fonts and icons at this scale, and the mode and accent of the frame
 	r.th.SetBackdrop(r.backdrop)
+	r.th.SetDensity(r.density)
 	if w != r.lastW || h != r.lastH {
 		r.glide = false // a resize follows the window exactly
 		r.lastW, r.lastH = w, h

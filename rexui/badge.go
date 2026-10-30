@@ -123,7 +123,7 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 	st := &r.Styles[theme.StyleCaption2]
 	w := h
 	if v != BadgeStatus {
-		w = max(h, theme.Snap(k.TextWidthBytes(st.Font, txt)+2*pt(sc, rc.PadX[v])+base.LabelSlack))
+		w = max(h, ui.CeilText(k.TextWidthBytes(st.Font, txt)+2*pt(sc, rc.PadX[v])))
 	}
 	key := ui.HashString(c.ParentKey(), "badge") // badges of one parent are told apart by their order
 	k.ApplySize(ui.Px(w), ui.Px(h))
@@ -144,9 +144,9 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 	}
 	c.Push(id)
 	// The text box is the whole capsule with the text centred in it, on both
-	// axes by the text's own rule. A box of the text's width plus LabelSlack
-	// and the font's line height, centred, leaves the text up to a pixel off:
-	// half a slack pixel to the left, and a snapped box a half pixel low.
+	// axes by the text's own rule. A box of the text's width and the font's line
+	// height, centred, leaves the text up to a pixel off: a snapped box a half
+	// pixel low.
 	c.NextSize(ui.Px(w), ui.Px(h))
 	c.NextAlign(ui.AlignCenter)
 	c.NextFont(st.Font)

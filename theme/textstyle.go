@@ -78,6 +78,11 @@ type TextSpec struct {
 	Weight int
 	// Mono selects the system's monospaced design (SF Mono).
 	Mono bool
+	// Cell is the height in points of a single-line label of the style: an
+	// NSTextField's intrinsic height, its cell's height rounded up to a half
+	// point. It is Line for most styles; Large Title (31), Title 2 (20.5) and
+	// Title 3 (19) are shorter than their line. 0 takes Line.
+	Cell float32
 }
 
 // Desc is the font description of s (Scale left zero for Resolve to set).
@@ -93,6 +98,10 @@ type StyleFont struct {
 	// Line is the line height in pixels (the style's, or the font's own if
 	// that is taller).
 	Line float32
+	// Cell is the height in pixels of a one-line label of the style
+	// (TextSpec.Cell): what rexui.Label is as tall as. It is Line when the
+	// style has no cell height of its own.
+	Cell float32
 	// Baseline is the baseline's distance from the top of a Line-tall box,
 	// in whole pixels.
 	Baseline float32
@@ -103,26 +112,26 @@ type StyleFont struct {
 // (docs/design/liquid-glass-reference.md). The Rex additions default to Body
 // and its semibold.
 var MacText = [NumTextStyles]TextSpec{
-	StyleLargeTitle:    {26, 32, WeightRegular, false},
-	StyleTitle1:        {22, 26, WeightRegular, false},
-	StyleTitle2:        {17, 22, WeightRegular, false},
-	StyleTitle3:        {15, 20, WeightRegular, false},
-	StyleHeadline:      {13, 16, WeightBold, false},
-	StyleBody:          {13, 16, WeightRegular, false},
-	StyleCallout:       {12, 15, WeightRegular, false},
-	StyleSubheadline:   {11, 14, WeightRegular, false},
-	StyleFootnote:      {10, 13, WeightRegular, false},
-	StyleCaption1:      {10, 13, WeightRegular, false},
-	StyleCaption2:      {10, 13, WeightMedium, false},
-	StyleMono:          {13, 16, WeightRegular, true},
-	StyleToolbarTitle:  {15, 19, WeightBold, false},
-	StyleWindowTitle:   {13, 16, WeightBold, false},
-	StyleSidebarHeader: {11, 14, WeightBold, false},
-	StyleBodySemibold:  {13, 16, WeightSemibold, false},
-	StyleMenu:          {14, 17, WeightRegular, false},
-	StyleTooltip:       {11, 13, WeightRegular, false},
-	StyleTabTitle:      {13, 16, WeightRegular, false},
-	StylePaneTitle:     {13, 16, WeightSemibold, false},
+	StyleLargeTitle:    {Size: 26, Line: 32, Weight: WeightRegular, Cell: 31},
+	StyleTitle1:        {Size: 22, Line: 26, Weight: WeightRegular},
+	StyleTitle2:        {Size: 17, Line: 22, Weight: WeightRegular, Cell: 20.5},
+	StyleTitle3:        {Size: 15, Line: 20, Weight: WeightRegular, Cell: 19},
+	StyleHeadline:      {Size: 13, Line: 16, Weight: WeightBold},
+	StyleBody:          {Size: 13, Line: 16, Weight: WeightRegular},
+	StyleCallout:       {Size: 12, Line: 15, Weight: WeightRegular},
+	StyleSubheadline:   {Size: 11, Line: 14, Weight: WeightRegular},
+	StyleFootnote:      {Size: 10, Line: 13, Weight: WeightRegular},
+	StyleCaption1:      {Size: 10, Line: 13, Weight: WeightRegular},
+	StyleCaption2:      {Size: 10, Line: 13, Weight: WeightMedium},
+	StyleMono:          {Size: 13, Line: 16, Weight: WeightRegular, Mono: true},
+	StyleToolbarTitle:  {Size: 15, Line: 19, Weight: WeightBold},
+	StyleWindowTitle:   {Size: 13, Line: 16, Weight: WeightBold},
+	StyleSidebarHeader: {Size: 11, Line: 14, Weight: WeightBold},
+	StyleBodySemibold:  {Size: 13, Line: 16, Weight: WeightSemibold},
+	StyleMenu:          {Size: 14, Line: 17, Weight: WeightRegular},
+	StyleTooltip:       {Size: 11, Line: 13, Weight: WeightRegular},
+	StyleTabTitle:      {Size: 13, Line: 16, Weight: WeightRegular},
+	StylePaneTitle:     {Size: 13, Line: 16, Weight: WeightSemibold},
 }
 
 // styleFont resolves spec at scale in ts.
@@ -136,5 +145,9 @@ func styleFont(ts TextSystem, spec TextSpec, scale float32) StyleFont {
 		line = nat
 	}
 	line = Snap(line)
-	return StyleFont{Font: k, Line: line, Baseline: Snap((line-(m.Ascent+m.Descent))/2 + m.Ascent)}
+	cell := line
+	if spec.Cell > 0 {
+		cell = min(Snap(spec.Cell*scale), line)
+	}
+	return StyleFont{Font: k, Line: line, Cell: cell, Baseline: Snap((line-(m.Ascent+m.Descent))/2 + m.Ascent)}
 }

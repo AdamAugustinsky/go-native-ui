@@ -72,7 +72,7 @@ func Link(k *base.Kit, label string, o LinkOpts) base.Signal {
 		c.NextCursor(ui.CursorPointer)
 	}
 	c.NextSemActions(ui.ActPress | ui.ActFocus)
-	k.BeginPress(&p, ui.RoleLink, ui.TextSize(base.LabelSlack), ui.Px(st.Line), ui.DrawText, base.StrBytes(p.Name))
+	k.BeginPress(&p, ui.RoleLink, ui.TextSize(0), ui.Px(st.Line), ui.DrawText, base.StrBytes(p.Name))
 	if !o.HoverUnderline || p.Hot > 0.5 || p.Ring > 0.5 {
 		sc := k.Scale()
 		w := k.TextWidth(st.Font, p.Name)

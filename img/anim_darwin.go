@@ -146,6 +146,13 @@ func (d *iioAnim) delay(i int) int  { return int(d.delays[i]) }
 // as two canvases).
 func (d *iioAnim) retained() int64 { return int64(len(d.data)) + 2*4*int64(d.w)*int64(d.h) }
 
+// trim releases the source object, which holds ImageIO's decoded frames; render
+// opens it again from the file.
+func (d *iioAnim) trim(fr *cframe) int64 {
+	d.close(fr)
+	return int64(len(d.data))
+}
+
 func (d *iioAnim) close(fr *cframe) {
 	if d.src != 0 {
 		fr.Call1(iio.cfRelease, d.src)
@@ -165,12 +172,7 @@ func (w *worker) openSystemDecoder(data []byte) (animDecoder, error) {
 		return nil, errNotAnimated
 	}
 	fr := &w.fr
-	cfd := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&data[0])).Arg(uintptr(len(data))).Arg(iio.allocNull).Call(iio.cfDataNoCopy).R0()
-	if cfd == 0 {
-		return nil, errNotAnimated
-	}
-	src := fr.Call2(iio.srcWithData, cfd, 0) // retains the data
-	fr.Call1(iio.cfRelease, cfd)
+	src := openSource(fr, data)
 	if src == 0 {
 		return nil, errNotAnimated
 	}
@@ -205,6 +207,17 @@ func (w *worker) openSystemDecoder(data []byte) (animDecoder, error) {
 		fr.Call1(iio.cfRelease, fp)
 	}
 	return d, nil
+}
+
+// openSource makes an ImageIO source over data (0 if it cannot).
+func openSource(fr *ffi.Frame, data []byte) uintptr {
+	cfd := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&data[0])).Arg(uintptr(len(data))).Arg(iio.allocNull).Call(iio.cfDataNoCopy).R0()
+	if cfd == 0 {
+		return 0
+	}
+	src := fr.Call2(iio.srcWithData, cfd, 0) // retains the data
+	fr.Call1(iio.cfRelease, cfd)
+	return src
 }
 
 // playsOf is the number of times an animation plays, from the container's
@@ -248,6 +261,11 @@ func (w *worker) playsOf(fr *ffi.Frame, props uintptr) int {
 // render asks ImageIO for frame i at the display size.
 func (d *iioAnim) render(w *worker, i int, tw, th, pad int32, pix []byte, bw int) error {
 	fr := &w.fr
+	if d.src == 0 { // trimmed
+		if d.src = openSource(fr, d.data); d.src == 0 {
+			return errDecodeAnim
+		}
+	}
 	w.i32 = max(tw, th)
 	num := fr.Reset().Arg(0).Arg(cfNumberSInt32).ArgPtr(unsafe.Pointer(&w.i32)).Call(iio.cfNumCreate).R0()
 	w.keys = [4]uintptr{iio.optFromAlways, iio.optMaxSize, iio.optCacheNow}

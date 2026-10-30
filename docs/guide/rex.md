@@ -81,6 +81,12 @@ tokens for nothing.
 - A person is `rexui.Avatar` with a `Backdrop` role naming what it sits on
   (`theme.Field`, `theme.Window`), so the ring and the initials' contrast are
   right; a stack of people is `AvatarStack`.
+- A bare symbol button (a pane header's split, maximise, close) is
+  `IconButton` with `IconBorderless`: a quiet grey (`theme.PaneButton`) that
+  darkens under the pointer, with a chip lighting up behind it
+  (`rexui.IconButtonChip`). Give it the hit area you want with `NextSize`; the
+  chip is the button's own box. Do not draw the chip or set the greys in the
+  app.
 - Colour choices (swatches) are circles.
 - Metadata (times, sizes, counts, hints) is `LabelOpts.MetaPt`: the UI face
   with tabular figures, a step smaller than what it describes, so it reads
@@ -120,6 +126,11 @@ engine could have done.
 	c.BeginFlow("tiles", ui.FlowOpts{GapX: c.Pt(12), GapY: c.Pt(12)}) // the tiles wrap onto lines
 ```
 
+- **A window of panes is a workspace.** Splits, the pane in use, hidden
+  and empty panes, a narrow window's single pane and the saved layout are
+  `widget/workspace`; each pane's material, corners and stroke are its
+  surface profile (`th.Surface(theme.SurfacePane, inactive)`). See
+  [workspace.md](workspace.md).
 - **Flex and grid are built in** (GUIDE §3): `Grow(weight)` for the room that
   is left, `NextMinSize`/`NextMaxSize` for bounds, `NextAlignSelf` for one
   child's cross alignment, `BeginGrid` for equal columns that follow the

@@ -28,6 +28,11 @@ type animDecoder interface {
 	// (an estimate: the encoded file and its canvases), which the cache
 	// counts against its CPU budget.
 	retained() int64
+	// trim frees what the decoder can build again, its canvases and any
+	// source objects of the system, and returns what it keeps (the encoded
+	// file). The next render rebuilds them, replaying from the first frame
+	// if need be. The cache calls it only while no frame job is out.
+	trim(fr *cframe) (kept int64)
 	// render draws frame i, composited on the canvas, scaled to tw×th, into
 	// pix: premultiplied RGBA, bw pixels per row, with pad pixels of border
 	// around the picture (the border is filled with the edge pixels). Frames
@@ -44,6 +49,7 @@ type frameSource interface {
 	playCount() int
 	delay(i int) int
 	retained() int64
+	trim() (kept int64)
 	frame(i int) (*image.RGBA, error)
 }
 
@@ -59,6 +65,8 @@ func (s stdAnim) render(_ *worker, i int, tw, th, pad int32, pix []byte, bw int)
 	scaleCanvas(pix, bw, pad, tw, th, m)
 	return nil
 }
+
+func (s stdAnim) trim(*cframe) int64 { return s.frameSource.trim() }
 
 func (stdAnim) close(*cframe) {}
 
@@ -239,7 +247,7 @@ func (w *worker) openAnim(c *Cache, j *job, data []byte) (r result, a *anim, han
 		dec.close(&w.fr)
 		return fail(errDecode)
 	}
-	a = &anim{dec: dec, frames: int32(n), plays: int32(dec.playCount()), tw: tw, th: th, pad: pad, bytes: int64(bw) * int64(bh) * 4, mem: dec.retained()}
+	a = &anim{dec: dec, frames: int32(n), plays: int32(dec.playCount()), tw: tw, th: th, pad: pad, bytes: int64(bw) * int64(bh) * 4, mem: dec.retained(), fullMem: dec.retained()}
 	a.delay = make([]int32, n)
 	for i := range a.delay {
 		a.delay[i] = effDelay(dec.delay(i))

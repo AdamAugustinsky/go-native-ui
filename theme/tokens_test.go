@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"testing"
 
 	"gonativeui/internal/appkitref"
@@ -25,7 +26,7 @@ type appkitRef struct {
 	} `json:"system"`
 	Colors     map[string]map[string]string `json:"colors"`
 	TextStyles map[string]struct {
-		Size, Line, Weight float64
+		Size, Line, Cell, Weight float64
 	} `json:"textStyles"`
 	Fonts struct {
 		TitleBar, Menu, ToolTips float64
@@ -214,6 +215,15 @@ func TestTextStylesAreAppKits(t *testing.T) {
 		got := MacText[style]
 		if !near(got.Size, w.Size, 0) || !near(got.Line, w.Line, 0) || got.Weight != weightOf[w.Weight] {
 			t.Errorf("%s: %+v, AppKit size %v line %v weight %v", name, got, w.Size, w.Line, w.Weight)
+		}
+		// a single-line label's height (NSTextField's intrinsic height): Line
+		// unless the style has a cell of its own
+		cell := got.Cell
+		if cell == 0 {
+			cell = got.Line
+		}
+		if !near(cell, w.Cell, 0) {
+			t.Errorf("%s: label cell %v pt, AppKit %v", name, cell, w.Cell)
 		}
 	}
 	for _, c := range []struct {
@@ -771,5 +781,85 @@ func TestCheckboxChromeIsAppKits(t *testing.T) {
 	r := (&Theme{}).Resolve(&fakeText{}, 2, Light)
 	if r.Sizes[SizeSmall].CheckGap != 8 {
 		t.Errorf("the gap does not scale: %v at 2x", r.Sizes[SizeSmall].CheckGap)
+	}
+}
+
+// Corners follow the platform (continuous on macOS) unless the theme says
+// which, and reach the UI as ui.Theme.ContinuousCorners.
+func TestCornerCurve(t *testing.T) {
+	for _, c := range []struct {
+		corners CornerCurve
+		want    bool
+	}{{CornersDefault, runtime.GOOS == "darwin"}, {CornersCircular, false}, {CornersContinuous, true}} {
+		r := (&Theme{Corners: c.corners}).Resolve(&fakeText{}, 2, Light)
+		if r.Continuous != c.want || r.UITheme().ContinuousCorners != c.want {
+			t.Errorf("Corners %d: continuous %v, want %v", c.corners, r.Continuous, c.want)
+		}
+	}
+}
+
+// A surface profile follows each of its inputs: the window's state, the
+// backdrop, Reduce Transparency, Increase Contrast and the density, without
+// being asked to resolve again; reading one allocates nothing.
+func TestSurfaceProfiles(t *testing.T) {
+	r := (&Theme{Metrics: Metrics{RadiusLarge: 10.5, Inset: 7.5, Gutter: 7}}).Resolve(&fakeText{}, 2, Light)
+
+	pane := r.Surface(SurfacePane, false)
+	if pane.Fill != FillDrawn || pane.Color != r.Colors[GlassTint] || pane.Opacity >= 1 || pane.Tint != 0 {
+		t.Errorf("pane: %+v, want the drawn glass", pane)
+	}
+	if pane.Radius != 21 || pane.Inset != 15 || pane.Gutter != 14 || pane.Header != 80 || pane.StrokeW != 1 || pane.Shadows[0] == 0 {
+		t.Errorf("pane geometry %+v", pane)
+	}
+	side, sideIn := r.Surface(SurfaceSidebar, false), r.Surface(SurfaceSidebar, true)
+	wantFill := FillOpaque
+	if nativeMaterials {
+		wantFill = FillNative
+	}
+	if side.Fill != wantFill || side.Color != r.Colors[SidebarFill] || sideIn.Color != r.Colors[SidebarFillInactive] || side.Radius != 0 || side.StrokeW != 0 {
+		t.Errorf("sidebar active %+v, inactive %+v", side, sideIn)
+	}
+	if c := r.Surface(SurfaceToolbarCapsule, false); c.Radius != 36 {
+		t.Errorf("capsule radius %v, want half the unified capsule (36 px at 2×)", c.Radius)
+	}
+
+	r.SetBackdrop(true)
+	if p := r.Surface(SurfacePane, false); p.Tint != p.Color || p.Tint == 0 {
+		t.Errorf("pane over a backdrop: tint %08X", p.Tint)
+	}
+
+	r.SetSystem(&SystemValues{Known: true, Settings: Settings{ReduceTransparency: true}})
+	r.SetBackdrop(true)
+	if p := r.Surface(SurfacePane, false); p.Fill != FillOpaque || p.Color != r.Colors[Pane] || p.Opacity != 1 || p.Tint != 0 {
+		t.Errorf("pane under Reduce Transparency: %+v", p)
+	}
+	if s := r.Surface(SurfaceSidebar, false); s.Fill == FillNative {
+		t.Errorf("sidebar under Reduce Transparency: %+v", s)
+	}
+	if s := r.Surface(SurfaceToolbarCapsule, false); s.Fill != FillOpaque || s.Color&0xFF != 0xFF {
+		t.Errorf("capsule under Reduce Transparency: %+v", s)
+	}
+
+	r.SetSystem(&SystemValues{Known: true, Settings: Settings{IncreaseContrast: true}})
+	if p := r.Surface(SurfacePopover, false); p.Stroke != r.Colors[Label2] || p.StrokeW < 1 {
+		t.Errorf("popover under Increase Contrast: stroke %08X × %v", p.Stroke, p.StrokeW)
+	}
+	if s := r.Surface(SurfaceSidebar, false); s.StrokeW != 0 {
+		t.Errorf("a flush sidebar is outlined under Increase Contrast: %+v", s)
+	}
+
+	r.SetDensity(DensityCompact)
+	if p := r.Surface(SurfacePane, false); p.Radius != r.Radii.Selection || p.Gutter != r.Space.S4 || p.Header != r.Lines.HeaderH {
+		t.Errorf("compact pane %+v", p)
+	}
+	if c := r.Surface(SurfaceToolbarCapsule, false); c.Radius != 24 {
+		t.Errorf("compact capsule radius %v, want half the compact capsule", c.Radius)
+	}
+	r.Mix(1)
+	if p := r.Surface(SurfacePane, false); p.Stroke != r.Colors[Label2] {
+		t.Error("the profiles did not follow the mode")
+	}
+	if n := testing.AllocsPerRun(100, func() { _ = r.Surface(SurfacePane, true) }); n != 0 {
+		t.Errorf("Surface allocates %v times", n)
 	}
 }

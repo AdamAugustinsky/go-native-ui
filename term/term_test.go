@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unsafe"
@@ -251,18 +252,27 @@ func TestMouseFocusPaste(t *testing.T) {
 	if !tm.MouseTracking() || tm.Modes().Mouse != term.MousePress || !tm.Modes().SGRMouse {
 		t.Errorf("modes %+v", tm.Modes())
 	}
-	if got := mouse(term.MousePressed, term.MouseLeft, 2, 3); got != "\x1b[<0;3;4M" {
-		t.Errorf("SGR press = %q", got)
-	}
-	if got := mouse(term.MouseReleased, term.MouseLeft, 2, 3); got != "\x1b[<0;3;4m" {
-		t.Errorf("SGR release = %q", got)
-	}
-	if got := mouse(term.MousePressed, term.WheelUp, 0, 0); got != "\x1b[<64;1;1M" {
-		t.Errorf("SGR wheel = %q", got)
-	}
-	tm.Write([]byte("\x1b[?1006l"))
-	if got := mouse(term.MousePressed, term.MouseRight, 1, 1); got != "\x1b[M\x22\x22\x22" {
-		t.Errorf("X10 press = %q", got)
+	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
+		// D74's limit: the encoder takes a float pair by value, which clib
+		// cannot pass on windows/arm64, so mouse reporting is off there.
+		if got := mouse(term.MousePressed, term.MouseLeft, 2, 3); got != "" {
+			t.Errorf("a press on windows/arm64 = %q, want none", got)
+		}
+		tm.Write([]byte("\x1b[?1006l"))
+	} else {
+		if got := mouse(term.MousePressed, term.MouseLeft, 2, 3); got != "\x1b[<0;3;4M" {
+			t.Errorf("SGR press = %q", got)
+		}
+		if got := mouse(term.MouseReleased, term.MouseLeft, 2, 3); got != "\x1b[<0;3;4m" {
+			t.Errorf("SGR release = %q", got)
+		}
+		if got := mouse(term.MousePressed, term.WheelUp, 0, 0); got != "\x1b[<64;1;1M" {
+			t.Errorf("SGR wheel = %q", got)
+		}
+		tm.Write([]byte("\x1b[?1006l"))
+		if got := mouse(term.MousePressed, term.MouseRight, 1, 1); got != "\x1b[M\x22\x22\x22" {
+			t.Errorf("X10 press = %q", got)
+		}
 	}
 
 	if got := tm.EncodeFocus(nil, true); len(got) != 0 {

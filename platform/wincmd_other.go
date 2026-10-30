@@ -7,8 +7,14 @@ package platform
 // Windows): the window's own state stays as the user and the OS set it, and
 // the commands do nothing.
 
-// SetTitle does nothing here yet.
-func (w *Window) SetTitle(title string) {}
+// Retire does nothing here: no OS waits for a quit answer inside the pump.
+func (w *Window) Retire() {}
+
+// SetRepresentedFile does nothing here: only macOS has a proxy icon.
+func (w *Window) SetRepresentedFile(path string) {}
+
+// SetRepresentedURL does nothing here: only macOS has a proxy icon.
+func (w *Window) SetRepresentedURL(url string) {}
 
 // FrameRect reports no frame here yet (all zero).
 func (w *Window) FrameRect() (x, y, width, height float64) { return 0, 0, 0, 0 }

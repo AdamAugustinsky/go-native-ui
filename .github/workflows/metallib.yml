@@ -1,0 +1,71 @@
+name: metallib
+
+# The precompiled Metal library (docs/design/precompiled-shaders.md). On a
+# macOS runner, which has Xcode's Metal toolchain: compile gpu's shader
+# sources into a fresh shaders.metallib (the `metallib` artifact: unpack it
+# into internal/metallib/lib and commit it), draw with it against the source
+# in gpu's tests, then fail if the committed library is absent or was
+# compiled from other sources than the ones in the tree (stale). Also
+# prints the framework's provenance (docs/design/build-provenance.md).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "gpu/**"
+      - "internal/metallib/**"
+      - "tools/metallib/**"
+      - "provenance/**"
+      - ".github/workflows/metallib.yml"
+  pull_request:
+    paths:
+      - "gpu/**"
+      - "internal/metallib/**"
+      - "tools/metallib/**"
+      - "provenance/**"
+      - ".github/workflows/metallib.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metallib-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  metallib:
+    name: precompiled shaders (macOS)
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: generate
+        run: |
+          xcrun -sdk macosx metal --version
+          go run ./tools/metallib -by ci -out "$RUNNER_TEMP/metallib"
+          { echo '### Generated metallib manifest'; echo '```json'; cat "$RUNNER_TEMP/metallib/manifest.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metallib
+          path: ${{ runner.temp }}/metallib
+      - name: the fresh library loads and draws what the source draws
+        run: GNUI_TEST_METALLIB_DIR="$RUNNER_TEMP/metallib" go test -count=1 -v -run 'ShaderLibrary|ShaderSources|Prewarm' ./gpu
+      - name: the committed library is present and current
+        if: success() || failure()
+        run: go run ./tools/metallib -check
+      - name: provenance
+        if: success() || failure()
+        run: |
+          go run ./cmd/gnui provenance -dir . -json | tee provenance.json
+          { echo '### Provenance'; echo '```json'; cat provenance.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

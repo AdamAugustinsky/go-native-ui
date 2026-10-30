@@ -27,11 +27,27 @@ func Theme() *theme.Theme {
 		Fonts:        fonts,
 		Motion:       motion,
 		SystemAccent: true,
+		// Rex's panes are circular arcs, not macOS's squircle: the corner of
+		// the reference screenshot's pane fits a circle of 10 pt to 0.27 px
+		// and a continuous corner only to 0.56 px (normal distance of the
+		// edge highlight, 104 points of the top left corner of the right pane).
+		Corners:      theme.CornersCircular,
 		Roles:        roles,
+		Text:         textStyles,
 		SystemColors: true,
 		NewChrome:    func() theme.Chrome { return &chrome{} },
 	}
 }
+
+// textStyles are Rex's text styles: macOS's (theme.MacText) with the reference's pane
+// title (12.75 pt, semibold) and tab title (14 pt, the UI font Rex's tabs are
+// set in).
+var textStyles = func() [theme.NumTextStyles]theme.TextSpec {
+	t := theme.MacText
+	t[theme.StylePaneTitle] = theme.TextSpec{Size: 12.75, Line: 16, Weight: theme.WeightSemibold}
+	t[theme.StyleTabTitle] = theme.TextSpec{Size: 14, Line: 17, Weight: theme.WeightRegular}
+	return t
+}()
 
 // ThemeWithField is Theme with its window background, and the glass of its
 // unfocused surfaces, in other colours (FieldColors).

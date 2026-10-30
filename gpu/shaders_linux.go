@@ -41,6 +41,7 @@ layout(location = 6) in uint aBorderColor;
 layout(location = 7) in float aSoft;
 layout(location = 8) in vec2 aFadeX;
 layout(location = 9) in uint aMode;     // 0 shape, 1 mask R8, 2 RGBA
+layout(location = 10) in uint aTex;     // a shape's bit 0: ShapeContinuous
 
 uniform vec2 uViewport;
 
@@ -90,7 +91,7 @@ void main() {
 	vC3 = premul(unpackRGBA(aColor.w));
 	vBorderColor = premul(unpackRGBA(aBorderColor));
 	vParams = vec4(aBorder, aSoft, aFadeX.x, aFadeX.y);
-	vMode = aMode;
+	vMode = aMode | (aMode == 0u ? (aTex & 1u) << 8 : 0u); // ShapeContinuous rides in bit 8
 	vUniformColor = all(equal(aColor, aColor.xxxx)) ? 1u : 0u;
 }
 `
@@ -125,6 +126,35 @@ float rrect_sdf(vec2 p, vec4 rect, vec4 radii) {
 	r = min(r, min(h.x, h.y));
 	vec2 d = abs(q) - h + r;
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+
+// The continuous (squircle) corner of macOS, ShapeContinuous: the corner of
+// radius r reaches CORNER_REACH * r along both edges and follows a
+// superellipse |x|^n + |y|^n = 1 of exponent CORNER_N (drawlist.go; the
+// constants must match). The distance is the norm's first-order estimate,
+// (f - 1) / |grad f|, exact on the straight edges and good to a fraction of
+// a pixel at the edge of the shape, where it is used.
+#define CORNER_REACH 1.52
+#define CORNER_N 3.3
+
+float crect_sdf(vec2 p, vec4 rect, vec4 radii) {
+	vec2 c = (rect.xy + rect.zw) * 0.5;
+	vec2 h = (rect.zw - rect.xy) * 0.5;
+	vec2 q = p - c;
+	float r = q.x < 0.0 ? (q.y < 0.0 ? radii.x : radii.w)
+	                    : (q.y < 0.0 ? radii.y : radii.z);
+	float e = min(CORNER_REACH * r, min(h.x, h.y));
+	if (e <= 0.0) {
+		return rrect_sdf(p, rect, radii);
+	}
+	vec2 d = abs(q) - (h - e);
+	if (d.x <= 0.0 || d.y <= 0.0) {
+		return max(d.x, d.y) - e;
+	}
+	vec2 a = d / e;
+	float f = pow(pow(a.x, CORNER_N) + pow(a.y, CORNER_N), 1.0 / CORNER_N);
+	vec2 g = pow(a, vec2(CORNER_N - 1.0)) / pow(f, CORNER_N - 1.0);
+	return e * (f - 1.0) / max(length(g), 1e-3);
 }
 
 // Gaussian-blurred rounded rectangle, after Evan Wallace, "Fast Rounded
@@ -178,6 +208,8 @@ void main() {
 	float border = vParams.x;
 	float soft = vParams.y;
 	vec2 fadeX = vParams.zw;
+	uint mode = vMode & 255u;
+	bool continuous = (vMode & 256u) != 0u;
 	// Pixel centre, y down from the top (gl_FragCoord's origin is bottom-left).
 	vec2 p = vec2(gl_FragCoord.x, uViewport.y - gl_FragCoord.y);
 
@@ -190,11 +222,11 @@ void main() {
 	}
 
 	vec4 res;
-	if (vMode == 0u) {
+	if (mode == 0u) {
 		if (soft > 0.0) {
 			res = col * rrect_shadow(p, rect, radii, soft);
 		} else {
-			float sd = rrect_sdf(p, rect, radii);
+			float sd = continuous ? crect_sdf(p, rect, radii) : rrect_sdf(p, rect, radii);
 			float outer = clamp(0.5 - sd, 0.0, 1.0);
 			if (border > 0.0) {
 				float inner = clamp(0.5 - (sd + border), 0.0, 1.0);
@@ -209,7 +241,7 @@ void main() {
 		}
 		vec2 texel = uv.xy + (p - rect.xy) * ((uv.zw - uv.xy) / size);
 		vec4 s = texture(uTex, texel / vec2(textureSize(uTex, 0)));
-		res = (vMode == 1u ? col * s.r : s * col.a) * cov;
+		res = (mode == 1u ? col * s.r : s * col.a) * cov;
 	}
 
 	if (any(notEqual(clip, vec4(0.0)))) {

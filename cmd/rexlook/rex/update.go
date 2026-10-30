@@ -3,6 +3,7 @@ package rex
 import (
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/workspace"
 )
 
 // The reference's three tabs. The first holds the three panes of the
@@ -19,20 +20,20 @@ func (r *Rex) initTabs() {
 	t := &r.tabs[0]
 	*t = tab{used: true, uid: r.uid(), name: "Stress-test Snake demo ", path: "| rex-snake", label: "Stress-test Snake demo | rex-snake", style: tabStyles[0]}
 	// (agent over git) beside the game, with the measured ratios.
-	t.setRoot(r.uid(), kindAgent, r.uid())
-	t.splitLeaf(0, ui.AxisX, 0.54638, r.uid(), kindSnake, r.uid(), r.uid())
-	t.splitLeaf(0, ui.AxisY, 0.43302, r.uid(), kindGit, r.uid(), r.uid())
-	t.focus = t.panes[0].uid
+	t.setRoot(r.uid(), kindAgent)
+	t.splitLeaf(0, ui.AxisX, 0.54638, r.uid(), kindSnake)
+	t.splitLeaf(0, ui.AxisY, 0.43302, r.uid(), kindGit)
+	t.ws.SetFocus(workspace.PaneID(t.panes[0].uid))
 
 	t = &r.tabs[1]
 	*t = tab{used: true, uid: r.uid(), name: "Bun ", path: "~/sites/announcement-draft", label: "Bun ~/sites/announcement-draft", style: tabStyles[1]}
-	t.setRoot(r.uid(), kindBun, r.uid())
-	t.splitLeaf(0, ui.AxisX, 0.58, r.uid(), kindShell, r.uid(), r.uid())
-	t.focus = t.panes[0].uid
+	t.setRoot(r.uid(), kindBun)
+	t.splitLeaf(0, ui.AxisX, 0.58, r.uid(), kindShell)
+	t.ws.SetFocus(workspace.PaneID(t.panes[0].uid))
 
 	t = &r.tabs[2]
 	*t = tab{used: true, uid: r.uid(), name: "fish ", path: "~/sites/macos-client-update", label: "fish ~/sites/macos-client-update", style: tabStyles[2]}
-	t.setRoot(r.uid(), kindShell, r.uid())
+	t.setRoot(r.uid(), kindShell)
 	r.active = 0
 }
 
@@ -54,7 +55,7 @@ func (r *Rex) newTab() {
 	}
 	t := &r.tabs[r.nTabs]
 	*t = tab{used: true, uid: r.uid(), name: "fish ", path: "~/Sites", label: "fish ~/Sites", style: tabStyles[2]}
-	t.setRoot(r.uid(), kindShell, r.uid())
+	t.setRoot(r.uid(), kindShell)
 	r.nTabs++
 	r.selectTab(r.nTabs - 1)
 }
@@ -127,44 +128,20 @@ func (r *Rex) update(c *ui.Context) {
 	}
 	t := &r.tabs[r.active]
 
-	// Dividers: the first child follows the pointer within the minimum sizes.
-	if t.max == 0 {
-		for i := range t.nodes {
-			n := &t.nodes[i]
-			if !n.used || n.leaf {
-				continue
-			}
-			s := c.PeekSignal(divKey(n.uid))
-			if s.Pressed {
-				n.press = n.ratio
-			}
-			if s.Dragging || s.Released {
-				ax := 0
-				if n.axis == ui.AxisY {
-					ax = 1
-				}
-				t.dragSplit(int8(i), s.DragDelta[ax])
-				r.glide = false
-			}
-		}
+	// The workspace: a press in a pane focuses it, a divider follows the
+	// pointer (or, focused, the arrow keys) within the minimum sizes, and
+	// ⌘⌥ and the arrows, or F6 and ⇧F6, move the focus between panes.
+	if ev := t.ws.Update(c, workspace.Keys{Dir: ui.ModSuper | ui.ModAlt, Cycle: true}); ev.Moved {
+		r.glide = false
 	}
-
-	for slot := range t.panes {
-		p := &t.panes[slot]
-		if !p.used {
-			continue
-		}
-		if c.PeekSignal(paneKey(p.uid)).Pressed {
-			t.focus = p.uid
-		}
-		if t.focus != p.uid {
-			continue
-		}
-		for b := 0; b < numBtns; b++ {
-			if c.PeekSignal(btnKey(p.uid, b)).Clicked {
-				r.button(t, int8(slot), b)
-				return
-			}
+	if t.ws.Focus() == 0 {
+		return
+	}
+	uid := t.focus()
+	for b := 0; b < numBtns; b++ {
+		if c.PeekSignal(btnKey(t, uid, b)).Clicked {
+			r.button(t, t.slotOf(uid), b)
+			return
 		}
 	}
 }
@@ -181,20 +158,19 @@ func (r *Rex) button(t *tab, slot int8, b int) {
 		if b == btnSplitY {
 			axis = ui.AxisY
 		}
-		t.max = 0
+		t.ws.SetZoom(0)
 		from := r.disp[slot]
-		if np := t.splitLeaf(slot, axis, 0.5, r.uid(), kindShell, r.uid(), r.uid()); np >= 0 {
+		if np := t.splitLeaf(slot, axis, 0.5, r.uid(), kindShell); np >= 0 {
 			t.panes[np].born, t.panes[np].from = true, from
-			t.focus = t.panes[np].uid
+			t.ws.SetFocus(workspace.PaneID(t.panes[np].uid))
 			r.glide = true
 		}
 	case btnMax:
-		if t.max == uid {
-			t.max = 0
+		if t.max() == uid {
+			t.ws.SetZoom(0)
 		} else {
-			t.max = uid
+			t.ws.SetZoom(workspace.PaneID(uid))
 		}
-		t.focus = uid
 	case btnClose:
 		if t.numPanes() > 1 {
 			t.closeLeaf(slot)

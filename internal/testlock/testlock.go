@@ -11,7 +11,7 @@ import (
 
 // Hold takes the lock name for the rest of t, waiting while another process
 // (or test) holds it. The lock is a file in the temporary directory, locked
-// with flock; it is released when t ends.
+// with flock (LockFileEx on Windows); it is released when t ends.
 func Hold(t testing.TB, name string) {
 	t.Helper()
 	f, err := os.OpenFile(filepath.Join(os.TempDir(), "gnui-testlock-"+name), os.O_CREATE|os.O_RDWR, 0o666)

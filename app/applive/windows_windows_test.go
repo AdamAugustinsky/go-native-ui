@@ -21,6 +21,7 @@ import (
 	"gonativeui/app"
 	"gonativeui/app/instance"
 	"gonativeui/gpu"
+	"gonativeui/internal/testlock"
 	"gonativeui/platform"
 	"gonativeui/ui"
 )
@@ -61,10 +62,17 @@ func (r result) int(k string) int {
 	return n
 }
 
+// activation is the tests holding the "activation" lock: a test that runs
+// several children takes it once (a second take would wait for itself).
+var activation sync.Map
+
 // child runs scenario name with env in a child process and waits for it at
 // most limit (a deadlock fails the test).
 func child(t *testing.T, name string, limit time.Duration, env ...string) result {
 	t.Helper()
+	if _, held := activation.LoadOrStore(t, true); !held {
+		testlock.Hold(t, "activation") // other packages' tests open windows too (in parallel processes); once per test
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")
@@ -372,8 +380,19 @@ func TestOpenCloseCyclesLeakNothing(t *testing.T) {
 		return x, y
 	}
 	for _, k := range []string{"gdi", "user", "textures", "surfaces"} {
-		if before, after := pair(k); before != after || r.get(k) == "" {
+		before, after := pair(k)
+		// GDI and USER counts are the process's: the system's own objects in
+		// it come and go by one or two (USER 16 → 14 on windows-2025 in run
+		// 40723882357, 14 → 15 on windows-11-arm in 40731913400). A leak of
+		// the cycles grows them by 19 or more.
+		slack := 0
+		if k == "gdi" || k == "user" {
+			slack = 2
+		}
+		if leak := after > before+slack || after < before-slack; leak || r.get(k) == "" {
 			t.Errorf("%s: %d before 19 more cycles, %d after\n%s", k, before, after, r.out)
+		} else if after != before {
+			t.Logf("%s: %d before 19 more cycles, %d after", k, before, after)
 		}
 	}
 	if r.int("windows") != 1 || r.int("hosts") != 0 {

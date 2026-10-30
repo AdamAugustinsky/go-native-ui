@@ -231,7 +231,7 @@ func (p *post) submit() (res PostResult, wait bool, err error) {
 	si := -1
 	switch {
 	case keyed:
-		si = takeSlot(rec, p.key, p.id, p.n.Thread, time.Now().UnixNano(), p.gen)
+		si = takeSlot(rec, p.key, p.id, p.n.Thread, postClock(), p.gen)
 		res.Reservation, res.Response = Reserved, rec
 	case p.want:
 		res.Reservation = PostedWithoutActions

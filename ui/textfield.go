@@ -326,7 +326,11 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 
 	// The pasted text answers this field's own request.
 	if (owns || (c.fieldOwner == 0 && focused)) && in.HasPaste && in.PasteTag == key && len(in.Paste) > 0 {
-		buf.insertSealed(in.Paste)
+		if owns && !pre { // pasted text is split at the separators, as typed text is
+			c.insertTyped(buf, in.Paste, true, cmdr, seps)
+		} else {
+			buf.insertSealed(in.Paste)
+		}
 		touched = touched || active
 	}
 
@@ -348,7 +352,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 			touched = true
 		}
 		if len(typed) > 0 {
-			c.insertTyped(buf, typed, false)
+			c.insertTyped(buf, typed, false, c.cmdr, c.cmdrSeps)
 			touched = true
 		}
 		if composing {
@@ -370,7 +374,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 				touched = c.editKeys(buf, &res, from, to) || touched
 				from = max(from, to)
 				if c.cmdr != nil {
-					if cmd := editCommand(in.Edit[i], buf); cmd != FieldNone && c.cmdr.FieldCommand(cmd, 0) {
+					if cmd := editCommand(in.Edit[i]); cmd != FieldNone && c.cmdr.FieldCommand(cmd, 0) {
 						touched = true
 						continue
 					}
@@ -641,7 +645,7 @@ func (c *Context) editKeys(buf *TextBuffer, res *TextFieldSignal, from, to int) 
 		bit := uint16(1) << uint(i)
 		if c.cmdr != nil && e.Down && ((c.fieldKeys|c.fieldPeek)&bit != 0 || e.Code == KeyTab && c.claimed&bit == 0) {
 			// the commander is offered the key before the field acts on it
-			if cmd := keyCommand(&e, buf); cmd != FieldNone && c.cmdr.FieldCommand(cmd, 0) {
+			if cmd := keyCommand(&e); cmd != FieldNone && c.cmdr.FieldCommand(cmd, 0) {
 				c.ClaimKey(i)
 				pressed = true
 				continue

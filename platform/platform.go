@@ -37,7 +37,7 @@
 //	(*Window).SetTooltipRegions(r)        native tooltips by content rectangle (macOS; no-op elsewhere); diffed, cheap to call every frame
 //	(*Window).SetTooltipText(f)           where the tooltip text comes from, asked for on demand when the system shows one
 //	(*Window).SetDropKinds(k), SetDragHandler(h), StartDrag(spec)
-//	                                      drag and drop in and out (macOS; ErrDragUnsupported elsewhere), see drag.go
+//	                                      drag and drop in and out (macOS, Windows, X11 and Wayland; ErrDragUnsupported elsewhere), see drag.go
 //	DragThreshold() float32               how far a press moves before it is a drag, in logical units
 //	(*Window).SetAXSource(AXSource) error the app's semantic tree for assistive technologies (a11y.go; macOS; ErrAXUnsupported elsewhere)
 //	(*Window).SyncAX()                    after each frame's build: the bridge, once active, diffs the tree and notifies
@@ -432,6 +432,14 @@ type Options struct {
 	// out of the Dock, the taskbar and the app switcher (see Panel). Open
 	// fails with ErrNoPanels where the OS has none yet (PanelsSupported).
 	Panel *Panel
+
+	// ChildWindows keeps a GDI surface for hosted child windows that draw
+	// with GDI (Win32 controls given to NewHost, such as an EDIT). A window
+	// on Windows normally has none (WS_EX_NOREDIRECTIONBITMAP: what it shows
+	// is its swap chain's), and a GDI child window of such a window shows
+	// nothing (probe P2's no-redirection run); children that present with
+	// DirectX or DirectComposition show either way. Ignored elsewhere.
+	ChildWindows bool
 }
 
 // Backdrop is a system material behind a window's content (Options.Backdrop).

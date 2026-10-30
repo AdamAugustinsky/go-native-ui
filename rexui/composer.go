@@ -581,6 +581,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 			fx = k.Fixed(rc.ExpandedMinH)
 			k.NextHeight(fx)
 		}
+		st.ed.SetColors(rc.Text.RGBA(r), rc.Fill.RGBA(r)) // Windows: the editor's window fills its box
 		ns = k.NativeEditor(st.ed, label)
 		editorPx := st.ed.Height() * sc // after the editor took its signals: this frame's
 		if fx.Value > 0 {
@@ -961,7 +962,7 @@ func composerField(k *base.Kit, st *ComposerState, label string, look base.Look,
 			pc = rc.TextDisabled.RGBA(r)
 		}
 		theme.At(c, padL, 0, 0, h)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(h))
+		c.NextSize(ui.TextSize(0), ui.Px(h))
 		c.NextFont(font)
 		c.NextTextColor(pc)
 		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(ti.WrapKey, 2), base.StrBytes(st.hint))
@@ -1035,7 +1036,7 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 		if a.ID != 0 { // the chip is its attachment's, wherever it sits in the row
 			ck = ui.KeyN(ui.KeyN(rowKey, 0xA8), a.ID)
 		}
-		nameW := theme.Snap(min(k.TextWidth(font, a.Name)+base.LabelSlack, pt(sc, rc.ChipMaxW)))
+		nameW := theme.Snap(min(ui.CeilText(k.TextWidth(font, a.Name)), pt(sc, rc.ChipMaxW)))
 		c.NextBG(rc.Chip.RGBA(r))
 		c.NextRadius(chipH / 2)
 		c.NextAxis(ui.AxisX)

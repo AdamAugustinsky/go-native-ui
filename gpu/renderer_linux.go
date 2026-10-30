@@ -248,6 +248,7 @@ type ringSlot struct {
 type retiredTex struct {
 	name   uint32
 	serial uint64 // the last frame encoded when it was freed
+	bytes  int64  // its memory, for TextureBytes
 }
 
 // Attribute layout of a Quad record (offsets checked against the struct).
@@ -258,16 +259,17 @@ var attribs = [...]struct {
 	off     uintptr
 	integer bool
 }{
-	{0, 4, glFloat, 0, false},        // Rect
-	{1, 4, glFloat, 16, false},       // Clip
-	{2, 4, glFloat, 32, false},       // UV
-	{3, 4, glUnsignedInt, 48, true},  // Color[4]
-	{4, 4, glFloat, 64, false},       // Radii
-	{5, 1, glFloat, 80, false},       // Border
-	{6, 1, glUnsignedInt, 84, true},  // BorderColor
-	{7, 1, glFloat, 88, false},       // Soft
-	{8, 2, glFloat, 92, false},       // FadeX
-	{9, 1, glUnsignedInt, 100, true}, // Mode
+	{0, 4, glFloat, 0, false},         // Rect
+	{1, 4, glFloat, 16, false},        // Clip
+	{2, 4, glFloat, 32, false},        // UV
+	{3, 4, glUnsignedInt, 48, true},   // Color[4]
+	{4, 4, glFloat, 64, false},        // Radii
+	{5, 1, glFloat, 80, false},        // Border
+	{6, 1, glUnsignedInt, 84, true},   // BorderColor
+	{7, 1, glFloat, 88, false},        // Soft
+	{8, 2, glFloat, 92, false},        // FadeX
+	{9, 1, glUnsignedInt, 100, true},  // Mode
+	{10, 1, glUnsignedInt, 104, true}, // Tex (a shape's ShapeContinuous)
 }
 
 var (
@@ -280,12 +282,15 @@ var (
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Soft)-88]
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.FadeX)-92]
 	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Mode)-100]
+	_ = [1]struct{}{}[unsafe.Offsetof(Quad{}.Tex)-104]
 )
 
 // Renderer draws DrawLists with OpenGL. All methods share the package's ffi
 // frame and the thread's current context, so call them from the one locked
 // thread that owns the context (see above).
 type Renderer struct {
+	lossState // DeviceLost, Epoch: see devloss.go
+
 	dpy, ctx     uintptr
 	ownsCtx      bool    // NewOffscreenRenderer: created here, destroyed by Destroy
 	pbuf         uintptr // pbuffer surface made current when the display has no surfaceless support
@@ -299,6 +304,7 @@ type Renderer struct {
 	ids          texTable
 	tex          []uint32 // by index
 	kinds        []TextureKind
+	texW, texH   []int  // by index
 	empty        uint32 // 1×1 transparent texture bound for a freed id
 	retiring     []retiredTex
 	draws        int
@@ -338,6 +344,23 @@ func (r *Renderer) init() error {
 	r.ids = newTexTable()
 	r.tex = make([]uint32, 0, initialTextures)
 	r.kinds = make([]TextureKind, 0, initialTextures)
+	r.texW = make([]int, 0, initialTextures)
+	r.texH = make([]int, 0, initialTextures)
+	if err := r.build(); err != nil {
+		return err
+	}
+	// Texture 0: 1×1 white RGBA texel that shape quads bind.
+	t0 := r.NewTexture(TexRGBA8, 1, 1)
+	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
+	// A GL error during setup is not fatal by itself (the shaders linked and
+	// the buffers exist); TestNoGLErrors reports them. Leave none pending.
+	r.setupGLError = r.glErr()
+	return nil
+}
+
+// build creates what the context holds besides the textures: the program, the
+// vertex array, the instance ring and the texture a freed id samples.
+func (r *Renderer) build() error {
 	if err := loadGLFuncs(); err != nil {
 		return err
 	}
@@ -392,23 +415,94 @@ func (r *Renderer) init() error {
 	for i := range r.slots {
 		s := &r.slots[i]
 		fr.Call2(glx.genBuffers, 1, uintptr(unsafe.Pointer(&gls.u32[0])))
-		s.buf, s.quads = gls.u32[0], initialQuads
+		s.buf, s.quads = gls.u32[0], max(s.quads, initialQuads)
 		fr.Call2(glx.bindBuffer, glArrayBuffer, uintptr(s.buf))
-		fr.Call4(glx.bufferData, glArrayBuffer, initialQuads*quadSize, 0, glStreamDraw)
+		fr.Call4(glx.bufferData, glArrayBuffer, uintptr(s.quads*quadSize), 0, glStreamDraw)
 	}
-	// Texture 0: 1×1 white RGBA texel that shape quads bind.
-	t0 := r.NewTexture(TexRGBA8, 1, 1)
-	r.Upload(t0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
 	// The texture a quad naming a freed texture samples: one transparent texel.
 	r.empty = r.newGLTexture(TexRGBA8, 1, 1)
+	if r.empty == 0 {
+		return errors.New("gpu: texture creation failed")
+	}
 	gls.pinned = &emptyTexel[0]
 	fr.Call2(glx.pixelStorei, glUnpackAlignment, 1)
 	r.subImage(0, 0, 1, 1, glRGBA, unsafe.Pointer(&emptyTexel[0]))
 	gls.pinned = nil
-	// A GL error during setup is not fatal by itself (the shaders linked and
-	// the buffers exist); TestNoGLErrors reports them. Leave none pending.
+	return nil
+}
+
+// DropDevice does nothing on this OS: the old device's objects are released by
+// Rebuild. (Direct3D 11 needs it before Surface.Recover.)
+func (r *Renderer) DropDevice() {}
+
+// Rebuild makes the renderer work again after its context was lost
+// (DeviceLost): device and queue are the EGLDisplay and the new EGLContext
+// (Surface.Device and Surface.Queue after Surface.Recover), which must be
+// current on the calling thread; the caller keeps owning them. A renderer made
+// by NewOffscreenRenderer creates a context of its own again, on the calling
+// thread, and ignores them (pass 0).
+//
+// The program, buffers and sync objects are made again in the new context and
+// every live texture is created again under the same id, size and kind, empty
+// except for texture 0: the owners of the others upload them again when Epoch
+// changes (see devloss.go). Draw lists still name the same ids. On an error
+// the renderer stays lost and Rebuild may be tried again.
+func (r *Renderer) Rebuild(device, queue uintptr) error {
+	if r.destroyed {
+		return errors.New("gpu: Rebuild: the renderer is destroyed")
+	}
+	err := r.rebuild(device, queue)
+	r.lost = err != nil
+	if err == nil {
+		r.epoch++
+	}
+	return err
+}
+
+func (r *Renderer) rebuild(device, queue uintptr) error {
+	r.deleteGLObjects() // only if the old context is still current: a lost one took them with it
+	r.forgetGLObjects()
+	if r.ownsCtx {
+		r.releaseOffscreen()
+		if err := r.openOffscreen(); err != nil {
+			return err
+		}
+	} else {
+		if device == 0 || queue == 0 {
+			return ErrNoDevice
+		}
+		if fr.Call0(eglf.getCurrentContext) != queue {
+			return errors.New("gpu: Rebuild: the context is not current on this thread (call it from the render thread)")
+		}
+		r.dpy, r.ctx = device, queue
+	}
+	if err := r.build(); err != nil {
+		return err
+	}
+	for i := range r.tex {
+		if !r.ids.live[i] {
+			continue
+		}
+		if r.tex[i] = r.newGLTexture(r.kinds[i], r.texW[i], r.texH[i]); r.tex[i] == 0 {
+			return errors.New("gpu: texture creation failed")
+		}
+	}
+	r.Upload(0, 0, 0, 1, 1, []byte{255, 255, 255, 255}, 4)
 	r.setupGLError = r.glErr()
 	return nil
+}
+
+// forgetGLObjects drops the names of the objects of a context that is gone,
+// keeping the ids of the live textures.
+func (r *Renderer) forgetGLObjects() {
+	r.prog, r.vao, r.empty, r.fbo, r.rbo, r.offW, r.offH = 0, 0, 0, 0, 0, 0, 0
+	for i := range r.slots {
+		r.slots[i].buf, r.slots[i].sync = 0, 0
+	}
+	clear(r.tex)
+	clear(r.retiring)
+	r.retiring = r.retiring[:0]
+	r.next, r.done = 0, r.serial
 }
 
 func (r *Renderer) uniform(name string) int32 {
@@ -475,12 +569,18 @@ var emptyTexel [4]byte
 // once.
 func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
 	name := r.newGLTexture(kind, w, h)
+	if name == 0 {
+		panic("gpu: texture creation failed")
+	}
 	i, id := r.ids.add()
 	if i == len(r.tex) {
 		r.tex = append(r.tex, 0)
 		r.kinds = append(r.kinds, 0)
+		r.texW = append(r.texW, 0)
+		r.texH = append(r.texH, 0)
 	}
-	r.tex[i], r.kinds[i] = name, kind
+	r.tex[i], r.kinds[i], r.texW[i], r.texH[i] = name, kind, w, h
+	r.ids.addBytes(i, texBytes(kind, w, h))
 	return id
 }
 
@@ -497,15 +597,27 @@ func (r *Renderer) FreeTexture(t TextureID) {
 	if !ok || i == 0 {
 		return
 	}
-	r.retiring = append(r.retiring, retiredTex{r.tex[i], r.serial})
+	n := r.ids.remove(i)
+	r.retiring = append(r.retiring, retiredTex{r.tex[i], r.serial, n})
 	r.tex[i] = 0
-	r.ids.remove(i)
 	r.collect()
 }
 
 // TextureCounts reports the live textures (texture 0 included) and the freed
 // ones whose deletion still waits for the GPU.
 func (r *Renderer) TextureCounts() (live, retiring int) { return r.ids.n, len(r.retiring) }
+
+// TextureBytes reports the memory of the renderer's textures: the live ones
+// (atlas pages and standalone textures) and the freed ones that wait for the
+// GPU, as width × height × bytes per texel (no mip levels, no driver padding).
+// Texture 0 (4 bytes) is counted; the renderer's own targets are not.
+func (r *Renderer) TextureBytes() int64 {
+	n := r.ids.used
+	for _, x := range r.retiring {
+		n += x.bytes
+	}
+	return n
+}
 
 // syncDone reads a sync object without waiting (a zero timeout, no flush:
 // the swap flushes). A failed wait counts as done.
@@ -554,6 +666,8 @@ func (r *Renderer) fence(s *ringSlot) {
 	s.serial = r.serial
 }
 
+// newGLTexture creates a w×h texture of kind and returns its name, 0 if the
+// context refused.
 func (r *Renderer) newGLTexture(kind TextureKind, w, h int) uint32 {
 	internal, format := uintptr(glRGBA8), uintptr(glRGBA)
 	if kind == TexR8 {
@@ -562,7 +676,7 @@ func (r *Renderer) newGLTexture(kind TextureKind, w, h int) uint32 {
 	fr.Call2(glx.genTextures, 1, uintptr(unsafe.Pointer(&gls.u32[0])))
 	name := gls.u32[0]
 	if name == 0 {
-		panic("gpu: texture creation failed")
+		return 0
 	}
 	fr.Call1(glx.activeTexture, glTexture0)
 	fr.Call2(glx.bindTexture, glTexture2D, uintptr(name))
@@ -829,35 +943,42 @@ func (r *Renderer) Destroy() {
 		return
 	}
 	r.destroyed = true
-	if fr.Call0(eglf.getCurrentContext) == r.ctx && r.ctx != 0 {
-		del := func(fn uintptr, names ...uint32) {
-			for _, n := range names {
-				if n != 0 {
-					gls.u32[0] = n
-					fr.Call2(fn, 1, uintptr(unsafe.Pointer(&gls.u32[0])))
-				}
-			}
-		}
-		for i := range r.slots {
-			del(glx.deleteBuffers, r.slots[i].buf)
-			if s := r.slots[i].sync; s != 0 {
-				fr.Call1(glx.deleteSync, s)
-			}
-		}
-		del(glx.deleteTextures, r.tex...)
-		for _, x := range r.retiring {
-			del(glx.deleteTextures, x.name)
-		}
-		del(glx.deleteTextures, r.empty)
-		del(glx.deleteFramebuffers, r.fbo)
-		del(glx.deleteRenderbuffers, r.rbo)
-		del(glx.deleteVertexArrays, r.vao)
-		if r.prog != 0 {
-			fr.Call1(glx.deleteProgram, uintptr(r.prog))
-		}
-	}
-	r.tex, r.kinds, r.retiring, r.ids = nil, nil, nil, texTable{} // ids freed after Destroy resolve to nothing
+	r.deleteGLObjects()
+	r.tex, r.kinds, r.texW, r.texH, r.retiring, r.ids = nil, nil, nil, nil, nil, texTable{} // ids freed after Destroy resolve to nothing
 	if r.ownsCtx {
 		r.releaseOffscreen()
+	}
+}
+
+// deleteGLObjects deletes the renderer's GL objects if its context is current
+// on this thread.
+func (r *Renderer) deleteGLObjects() {
+	if fr.Call0(eglf.getCurrentContext) != r.ctx || r.ctx == 0 {
+		return
+	}
+	del := func(fn uintptr, names ...uint32) {
+		for _, n := range names {
+			if n != 0 {
+				gls.u32[0] = n
+				fr.Call2(fn, 1, uintptr(unsafe.Pointer(&gls.u32[0])))
+			}
+		}
+	}
+	for i := range r.slots {
+		del(glx.deleteBuffers, r.slots[i].buf)
+		if s := r.slots[i].sync; s != 0 {
+			fr.Call1(glx.deleteSync, s)
+		}
+	}
+	del(glx.deleteTextures, r.tex...)
+	for _, x := range r.retiring {
+		del(glx.deleteTextures, x.name)
+	}
+	del(glx.deleteTextures, r.empty)
+	del(glx.deleteFramebuffers, r.fbo)
+	del(glx.deleteRenderbuffers, r.rbo)
+	del(glx.deleteVertexArrays, r.vao)
+	if r.prog != 0 {
+		fr.Call1(glx.deleteProgram, uintptr(r.prog))
 	}
 }

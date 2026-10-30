@@ -330,3 +330,34 @@ func TestRealWrappedText(t *testing.T) {
 		t.Fatalf("%v allocations per frame with wrapped text", n)
 	}
 }
+
+// A label's box is AppKit's: "Check" in the 13 pt system font is 38.33 pt of
+// text, and NSTextField's intrinsic width for it (tools/appkitref's label
+// probe, macOS 27.2) is 38.5 pt, 77 px at 2x, whatever the box's position.
+func TestRealTextBoxIsAppKitsLabelWidth(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	ts, err := text.New()
+	if err != nil {
+		t.Skip("no text system:", err)
+	}
+	defer ts.Close()
+	font := ts.Font(text.FontDesc{SizePt: 13, Weight: 400, Scale: 2})
+	c := New(ts)
+	var in Input
+	var list gpu.DrawList
+	var label ID
+	for i := 0; i < 3; i++ {
+		c.Begin(&in, 400, 100, 2, 1.0/60)
+		c.PushFont(font)
+		c.NextPos(10.3, 10) // an edge at a fraction of a pixel
+		c.NextSize(TextSize(0), TextSize(0))
+		label = c.Box(DrawText|FloatingX|FloatingY, "Check")
+		c.PopFont()
+		c.End(&list)
+	}
+	r := c.Rect(label)
+	if w := r[2] - r[0]; w != 77 {
+		t.Errorf("the box is %v px wide (text %v), want 77", w, c.boxes[label].textW)
+	}
+}

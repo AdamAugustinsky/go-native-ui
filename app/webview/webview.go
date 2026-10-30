@@ -72,19 +72,30 @@
 //     macOS: they stay denied whatever Allow says. A profile's cookies reach
 //     the disk a moment (about 2 s) after they change.
 //   - Windows: WebView2 (the Evergreen runtime, a Windows component) as a
-//     child window in a host container (D66), loaded without
-//     WebView2Loader.dll (D65); InPrivate for a non-persistent session (H2).
-//     A missing runtime is ErrUnavailable, with RuntimeURL for the app to
-//     offer.
+//     child window the window hosts (D66), loaded without WebView2Loader.dll
+//     (D65), in one environment per process whose data is in
+//     Options.DataDir (H2). A non-persistent session is InPrivate in a
+//     profile of its own, deleted with the view; a named profile is a
+//     WebView2 profile of that name. The engine and each view start
+//     asynchronously: New returns at once, and a URL given to Navigate
+//     before the view is ready loads when it is. WebView2 reports no load
+//     progress: Progress steps through 0.1, 0.4 and 0.7 to 1 (start, content,
+//     DOMContentLoaded, done). Downloads report their bytes about every
+//     500 ms (Chromium's cadence). Location, notifications and clipboard
+//     reads reach the policy too. A missing runtime is ErrUnavailable, with
+//     RuntimeURL for the app to offer. A hidden view (its host not built) is
+//     suspended (TrySuspend) and resumed when shown. Tab out of the page
+//     comes back as the host's EvHostCommand. The window needs no
+//     app.Config.ChildWindows: WebView2 presents with DirectComposition.
 //   - Linux: ErrUnsupported (WebKitGTK would bring GTK, D2).
-//   - Until H2 lands, New returns ErrUnsupported on Windows too (errors.Is
-//     errors.ErrUnsupported).
 package webview
 
 import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"gonativeui/app"
@@ -178,6 +189,13 @@ type Options struct {
 	// CornerRadius rounds the view's corners, in points, so that it sits in
 	// a rounded pane (rexui.WebView's: rexui.WebViewLook.ContentRadius).
 	CornerRadius float32
+	// DataDir is where the engine keeps its data on Windows (WebView2's user
+	// data folder, shared by the process's views: the first New's is used);
+	// "" is WebView2 in the cache folder named for the executable
+	// (app/paths.Cache). An app passes its own, filepath.Join of
+	// paths.Cache(a.ID()) and "WebView2". macOS ignores it: WebKit keeps a
+	// profile's data under ~/Library/WebKit/<bundle id>/.
+	DataDir string
 }
 
 // State is what the view shows now. Its strings are valid until the next
@@ -431,4 +449,46 @@ func validProfile(p string) bool {
 		}
 	}
 	return true
+}
+
+// uniquePath is a file in dir for suggested, unused on disk and not taken by
+// the view's other downloads: "name.ext", then "name (2).ext" …
+func uniquePath(dir, suggested string, taken func(path string) bool) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := cleanName(suggested)
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	for i := 1; i < 10000; i++ {
+		p := filepath.Join(dir, name)
+		if i > 1 {
+			p = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+		}
+		if _, err := os.Lstat(p); err == nil {
+			continue
+		}
+		if !taken(p) {
+			return p, nil
+		}
+	}
+	return "", os.ErrExist
+}
+
+// cleanName is a server's file name made safe to create: its last element,
+// no separators or control characters, not hidden; "download" if nothing is
+// left.
+func cleanName(s string) string {
+	s = filepath.Base(strings.ReplaceAll(s, "\\", "/"))
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F || r == '/' || r == ':' {
+			return '_'
+		}
+		return r
+	}, s)
+	s = strings.TrimLeft(strings.TrimSpace(s), ".")
+	if s == "" {
+		return "download"
+	}
+	return s
 }

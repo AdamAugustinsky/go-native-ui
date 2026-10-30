@@ -3,8 +3,10 @@ package term
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -173,5 +175,53 @@ func TestABI(t *testing.T) {
 	}
 	if lib.cell.cp.width != 21 || lib.cell.style.width != 16 {
 		t.Errorf("cell layout %+v", lib.cell)
+	}
+}
+
+// TestLibraryBesideTheExecutable copies this test binary and the library
+// into a new folder and runs the copy, which must load the library beside
+// itself, as a packaged app does (gnui package puts ghostty-vt.dll beside the
+// .exe on Windows, and installs and updates keep it there), not through
+// GNUI_LIBGHOSTTY_VT, which points nowhere for it.
+func TestLibraryBesideTheExecutable(t *testing.T) {
+	const child = "GNUI_TERM_BESIDE_CHILD"
+	if os.Getenv(child) == "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Available(); err != nil {
+			t.Fatal(err)
+		}
+		a, err1 := os.Stat(LibraryPath())
+		b, err2 := os.Stat(filepath.Join(filepath.Dir(exe), LibraryName))
+		if err1 != nil || err2 != nil || !os.SameFile(a, b) {
+			t.Fatalf("loaded %s, not the library beside %s (%v, %v)", LibraryPath(), exe, err1, err2)
+		}
+		return
+	}
+	needLib(t)
+	dir := t.TempDir()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp := func(src, dst string) {
+		b, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exe := filepath.Join(dir, filepath.Base(self))
+	cp(self, exe)
+	cp(LibraryPath(), filepath.Join(dir, LibraryName))
+	cmd := exec.Command(exe, "-test.run=^TestLibraryBesideTheExecutable$", "-test.v")
+	cmd.Env = append(os.Environ(), child+"=1", EnvLibrary+"="+filepath.Join(dir, "nowhere", LibraryName))
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: TestLibraryBesideTheExecutable") {
+		t.Fatalf("the copy beside the library: %v\n%s", err, out)
 	}
 }

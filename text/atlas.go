@@ -214,6 +214,15 @@ func (a *atlas) dirtyRegion(i int) (x, y, w, h int, pixels []byte, stride int, o
 	return x, y, w, h, p.pix[start:end], stride, true
 }
 
+// markAllDirty marks every page changed in full, for textures that lost their
+// contents (a rebuilt renderer).
+func (a *atlas) markAllDirty() {
+	for _, p := range a.pages {
+		p.dirty = true
+		p.dx0, p.dy0, p.dx1, p.dy1 = 0, 0, p.pack.w, p.pack.h
+	}
+}
+
 func (a *atlas) clearDirty(i int) {
 	if i >= 0 && i < len(a.pages) {
 		a.pages[i].dirty = false

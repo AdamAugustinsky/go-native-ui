@@ -35,14 +35,14 @@ const (
 	GlassInspector
 )
 
-// glassMaterial is the theme material of each area, and glassArea its ui
-// material area.
+// glassSurface is the surface role of each area (theme.SurfaceProfile:
+// its material and fallbacks), and glassArea its ui material area.
 var (
-	glassMaterial = [...]theme.Material{
-		GlassSidebar:        theme.MatSidebar,
-		GlassToolbarCapsule: theme.MatToolbar,
-		GlassTitlebar:       theme.MatScrollEdge,
-		GlassInspector:      theme.MatSidebar,
+	glassSurface = [...]theme.SurfaceRole{
+		GlassSidebar:        theme.SurfaceSidebar,
+		GlassToolbarCapsule: theme.SurfaceToolbarCapsule,
+		GlassTitlebar:       theme.SurfaceTitlebar,
+		GlassInspector:      theme.SurfaceInspector,
 	}
 	glassArea = [...]ui.MaterialArea{
 		GlassSidebar:        ui.AreaSidebar,
@@ -57,23 +57,21 @@ var (
 // there (not under Reduce Transparency). The titlebar band is always a
 // region then, an opaque one.
 func GlassNative(k *base.Kit, area GlassArea) bool {
-	if !k.Materials || int(area) >= len(glassMaterial) {
+	if !k.Materials || int(area) >= len(glassSurface) {
 		return false
 	}
-	return area == GlassTitlebar || k.Theme().Material(glassMaterial[area]).Native
+	return area == GlassTitlebar || glassProfile(k, area).Fill == theme.FillNative
+}
+
+// glassProfile is the surface profile of area in this window's state.
+func glassProfile(k *base.Kit, area GlassArea) theme.SurfaceProfile {
+	return k.Theme().Surface(glassSurface[area], k.Inactive())
 }
 
 // glassFallback is the colour the material of area draws as when the system's
 // does not show: its fallback in an active or inactive window (its opaque
-// Solid under Reduce Transparency, Resolved.Material).
-func glassFallback(k *base.Kit, area GlassArea) uint32 {
-	r := k.Theme()
-	m := r.Material(glassMaterial[area])
-	if k.Inactive() {
-		return r.Colors[m.FillInactive]
-	}
-	return r.Colors[m.Fill]
-}
+// Solid under Reduce Transparency), the profile's Color.
+func glassFallback(k *base.Kit, area GlassArea) uint32 { return glassProfile(k, area).Color }
 
 // GlassFill is the background the box being built for area takes: clear where
 // the system's material shows (GlassNative), else the fallback colour. Mark
@@ -96,5 +94,5 @@ func GlassRegion(k *base.Kit, id ui.ID, area GlassArea, solid uint32) {
 	if solid == 0 {
 		solid = glassFallback(k, area)
 	}
-	k.Context().Material(id, glassArea[area], uint8(glassMaterial[area]), solid|0xFF)
+	k.Context().Material(id, glassArea[area], uint8(glassProfile(k, area).Material), solid|0xFF)
 }

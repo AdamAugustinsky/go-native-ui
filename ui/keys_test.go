@@ -190,6 +190,60 @@ func TestFieldClaimsEditingKeys(t *testing.T) {
 	}
 }
 
+// F10 is the drawn menu bar's (Shift+F10 a context menu's), and Alt with a
+// letter or digit off macOS opens its menu: the field leaves them. Option and
+// a letter types a character on macOS, so the field keeps it there; AltGr
+// (Ctrl+Alt on Windows) still types in the field.
+func TestFieldLeavesTheMenuBarKeys(t *testing.T) {
+	for _, mac := range []bool{false, true} {
+		r := newRig(t, mac)
+		old := altGrIsCtrlAlt
+		altGrIsCtrlAlt = !mac
+		for _, k := range []struct {
+			code      KeyCode
+			mods      Mods
+			mine, mac bool
+		}{
+			{KeyF10, 0, false, false},
+			{KeyF10, ModShift, false, false},
+			{'F', ModAlt, false, true},
+			{'7', ModAlt, false, true},
+			{'F', ModAlt | ModShift, false, true},
+			{KeyLeft, ModAlt, true, true}, // word moves stay the field's
+			{'Q', ModCtrl | ModAlt, true, false},
+			{'F', 0, true, true},
+		} {
+			want := k.mine
+			if mac {
+				want = k.mac
+			}
+			if k.code == 'Q' && mac {
+				continue // Ctrl+Option+Q is no AltGr on macOS
+			}
+			e := KeyEvent{Code: k.code, Mods: k.mods, Down: true}
+			if got := r.c.FieldClaims(e); got != want {
+				t.Errorf("mac=%v: FieldClaims(%q %v) = %v, want %v", mac, rune(k.code), k.mods, got, want)
+			}
+		}
+		altGrIsCtrlAlt = old
+	}
+}
+
+// TakeAltTap reports Input.AltTap once a frame.
+func TestTakeAltTap(t *testing.T) {
+	r := newRig(t, false)
+	r.in.AltTap = true
+	var first, second bool
+	r.harness.frame(func(c *Context) { first, second = c.TakeAltTap(), c.TakeAltTap() })
+	if !first || second {
+		t.Errorf("TakeAltTap: %v then %v, want true then false", first, second)
+	}
+	r.harness.frame(func(c *Context) { first = c.TakeAltTap() })
+	if first {
+		t.Error("the Alt tap outlived its frame")
+	}
+}
+
 func TestFieldKeysNotClaimedWithoutFocus(t *testing.T) {
 	r := newRig(t, true)
 	r.c.SetFocus(0)

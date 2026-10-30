@@ -96,7 +96,7 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 		if id, ok := items[i].Glyph.ID(); ok {
 			iconW[i], _ = k.IconSize(id)
 		}
-		textW[i] = k.TextWidth(font, items[i].Title) + base.LabelSlack
+		textW[i] = ui.CeilText(k.TextWidth(font, items[i].Title))
 		total += iconW[i] + textW[i]
 		if iconW[i] > 0 && textW[i] > 0 {
 			total += gap

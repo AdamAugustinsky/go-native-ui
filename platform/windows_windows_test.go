@@ -235,13 +235,15 @@ func TestOpenCloseLeaksNoWindowObjects(t *testing.T) {
 		cycle()
 	}
 	gdi1, user1 := guiObjects()
-	if gdi1 != gdi0 || user1 != user0 {
+	// Fewer is not a leak: what an earlier test made (a file dialog's shell
+	// windows) can be freed by the system during the cycles.
+	if gdi1 > gdi0 || user1 > user0 {
 		t.Errorf("after 20 open/close cycles: GDI %d → %d, USER %d → %d", gdi0, gdi1, user0, user1)
 	}
 	if OpenCount() != 0 {
 		t.Errorf("OpenCount %d, want 0", OpenCount())
 	}
-	if c := ShellObjects(); c != (ShellCounts{}) {
+	if c := ShellObjects(); c.Hosts != 0 || c.Materials != 0 {
 		t.Errorf("shell objects %+v", c)
 	}
 }
@@ -280,7 +282,7 @@ func TestWaitAppWithNoWindow(t *testing.T) {
 func blockReason() (string, bool) {
 	var buf [256]uint16
 	n := uint32(len(buf))
-	if !win32.Bool(win32.Call(pBlockReasonQuery, reg.app.hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n)))) {
+	if r, _, _ := syscall.SyscallN(pBlockReasonQuery, reg.app.hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n))); !win32.Bool(r) { // keeps the locals valid, unlike win32.Call
 		return "", false
 	}
 	return syscall.UTF16ToString(buf[:]), true

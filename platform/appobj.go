@@ -583,6 +583,22 @@ var openURLs struct {
 	r    *Ring
 }
 
+// openURLFilter is SetOpenURLFilter's function.
+var openURLFilter atomic.Pointer[func(url string) bool]
+
+// SetOpenURLFilter makes fn the first to see the URLs OfferOpenURLs is
+// given: a URL fn takes (returns true for) is not delivered as
+// AppEvOpenURLs (app/notify takes its toasts' activations this way). nil
+// removes it. Any goroutine; fn runs on the offering goroutine and must not
+// block.
+func SetOpenURLFilter(fn func(url string) bool) {
+	if fn == nil {
+		openURLFilter.Store(nil)
+		return
+	}
+	openURLFilter.Store(&fn)
+}
+
 // OfferOpenURLs offers urls, received from outside the process (a second
 // instance's command line), for delivery as AppEvOpenURLs (A the count, the
 // data the URLs NUL-separated), as macOS delivers the URLs it opens with the
@@ -590,6 +606,15 @@ var openURLs struct {
 // refuses, keeping nothing, so the sender can be told "busy"). Any
 // goroutine; it allocates (these offers are rare).
 func OfferOpenURLs(urls []string) bool {
+	if f := openURLFilter.Load(); f != nil {
+		kept := urls[:0:0]
+		for _, u := range urls {
+			if !(*f)(u) {
+				kept = append(kept, u)
+			}
+		}
+		urls = kept
+	}
 	if len(urls) == 0 {
 		return true
 	}

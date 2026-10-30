@@ -253,3 +253,69 @@ func TestContextMenuDrawn(t *testing.T) {
 		t.Errorf("an idle frame allocates %v times", n)
 	}
 }
+
+// The drawn menu's mnemonics: an item's Key without modifiers is its letter
+// (Novo (N)), the others get a free letter of their titles; typing one, with
+// or without Alt, chooses the item (or opens the submenu, whose letters then
+// work), and a disabled item's letter does nothing. Apps need no letter
+// handling of their own.
+func TestContextMenuMnemonics(t *testing.T) {
+	var item int
+	var chosen bool
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		s := rexui.ChatListRow(g.k, "r1", "Ada", "Lunch?", "10:42", rexui.ChatRowOpts{})
+		if i, ok := rexui.ContextMenu(g.k, s.ID, func(m *[]ui.MenuItem) {
+			*m = append(*m,
+				ui.MenuItem{ID: 1, Title: "Novo", Key: 'N'},
+				ui.MenuItem{ID: 2, Title: "Limpar a tela", Key: 'l'},
+				ui.MenuItem{ID: 3, Title: "Arquivar", Key: 'e', Mods: ui.ModCtrl},
+				ui.MenuItem{ID: 4, Title: "Mudo", Disabled: true},
+				ui.MenuSeparator,
+				ui.MenuItem{Title: "Etiquetas", Sub: []ui.MenuItem{{ID: 100, Title: "Família"}, {ID: 101, Title: "Trabalho"}}})
+		}); ok {
+			item, chosen = i, true
+		}
+	}))
+	row := g.node(ui.RoleListItem, "Ada")
+	x, y := centre(row)
+	open := func() {
+		g.click(x, y)
+		g.key(ui.KeyF10, ui.ModShift)
+		g.frame()
+	}
+	letter := func(l byte, mods ui.Mods) {
+		g.in.PushKey(ui.KeyEvent{Code: ui.KeyCode(l), Mods: mods, Down: true, Char: rune(l) + 'a' - 'A'})
+		g.frame()
+	}
+	for _, c := range []struct {
+		keys string
+		mods ui.Mods
+		want int
+	}{
+		{"L", 0, 2},         // its Key
+		{"N", ui.ModAlt, 1}, // with Alt
+		{"A", 0, 3},         // a Key with a modifier is a shortcut's hint: A, its title's first letter
+		{"ET", 0, 101},      // the submenu, then its item
+	} {
+		open()
+		chosen = false
+		for i := range c.keys {
+			letter(c.keys[i], c.mods)
+			g.frame()
+		}
+		if !chosen || item != c.want {
+			t.Errorf("%q with mods %v: chosen %v item %d, want %d", c.keys, c.mods, chosen, item, c.want)
+		}
+		g.frames(2)
+	}
+	open()
+	chosen = false
+	letter('M', 0) // disabled
+	g.frames(2)
+	if chosen {
+		t.Errorf("a disabled item's letter chose %d", item)
+	}
+	if n := testing.AllocsPerRun(20, g.frame); n != 0 {
+		t.Errorf("a frame of the open menu allocates %v times", n)
+	}
+}

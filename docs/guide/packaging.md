@@ -64,7 +64,7 @@ version, a minimum system and a login agent.
 | `icon` | a square PNG, 1024 px recommended, made into an `.icns` | none |
 | `minimumSystem` | `LSMinimumSystemVersion` | `14.0` |
 | `resources`, `frameworks` | files copied into `Contents/Resources` and `Contents/Frameworks` (and signed, nested items first) | none |
-| `nativeLibs` | per-platform library directories (`<dir>/darwin-arm64/*.dylib`, as `tools/libghostty` lays them out): copied into `Contents/Frameworks`, signed with the app, licence into `Contents/Resources/Licenses` | none |
+| `nativeLibs` | per-platform library directories (`<dir>/<goos>-<goarch>/`, as `tools/libghostty` lays them out). macOS: the `darwin-arm64/*.dylib` files are copied into `Contents/Frameworks`, signed with the app, the licence into `Contents/Resources/Licenses`. Windows: the `windows-<arch>/*.dll` files (for that machine type) go beside the executable, signed with it, the licence as `<library>.LICENSE.txt` (§6) | none |
 | `urlSchemes`, `documentTypes`, `exportedTypes` | the URLs and documents the app opens, which arrive as `EvOpenURLs` and `EvOpenFiles` | none |
 | `usage` | the `NS…UsageDescription` texts that the system shows when asking for the camera, microphone, location… | none |
 | `entitlements` | written to a generated entitlements plist and applied to the main bundle | none |
@@ -288,8 +288,24 @@ The `.syso` is written into the main package's folder for the build and removed
 after it (`go build -overlay` does not carry `.syso` files); a main package with a
 `.syso` of its own is refused, since its resources would collide.
 
-The zip holds the one executable, the form `selfupdate.Prepare` takes besides a
-bare `.exe`. The optional `windows` object of `gnui.json` (here the packaging
+**Native libraries.** Each `nativeLibs` directory gives the `.dll` files of its
+`windows-<arch>` folder (at least one; `gnui` checks each is for the target's
+machine type) and, when the directory has a `LICENSE`, that file as
+`<library>.LICENSE.txt` (`ghostty-vt.dll` brings `ghostty-vt.LICENSE.txt`). They
+are copied beside the executable in `dist/windows-<arch>/`, signed with the same
+command as the executable, and named in its version resource as `GnuiFiles`
+(`ghostty-vt.dll|ghostty-vt.LICENSE.txt`). That list is the contract with the
+runtime: `app/install` copies exactly these files with the executable and refuses
+to install without them, `app/selfupdate` requires exactly these beside the new
+executable in an update (each DLL for the same machine and, for a signed app,
+signed by the same publisher) and swaps and rolls them back with it, and
+`term` loads `ghostty-vt.dll` from beside the executable first. The list lives in
+the executable rather than in a file beside it, so it is covered by the
+executable's signature, and a stray DLL in the download folder is never installed.
+
+The zip holds the executable and those files at its top, the form
+`selfupdate.Prepare` takes besides a bare `.exe` (which updates only an app that
+declares no files). The optional `windows` object of `gnui.json` (here the packaging
 test's) holds `publisher`, `aumid`, `description`, `copyright` and `sign`:
 
 ```json cmd/gnui/testdata/winprobe/gnui.json

@@ -40,19 +40,40 @@ const testID = "dev.gonativeui.selfupdatetest"
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-var testApp struct {
+// libName and licName are the files beside the executable that the build
+// of the test app with files declares (winres.FilesKey), as gnui package
+// declares a nativeLibs DLL and its licence.
+const (
+	libName = "sutest-lib.dll"
+	licName = "sutest-lib.LICENSE.txt"
+)
+
+type build struct {
 	once sync.Once
 	b    []byte
 	err  error
 }
 
+var testApps [2]build // without files, with them
+
 // appBytes builds internal/testappwin once, with the version resource
 // linked in.
-func appBytes(t *testing.T) []byte {
+func appBytes(t *testing.T) []byte { return appBuild(t, false) }
+
+// appBuild builds internal/testappwin once per kind, with the version
+// resource linked in; withFiles declares libName and licName beside it.
+func appBuild(t *testing.T, withFiles bool) []byte {
 	t.Helper()
+	testApp := &testApps[0]
+	if withFiles {
+		testApp = &testApps[1]
+	}
 	testApp.once.Do(func() {
-		v := winres.Version{File: [4]uint16{1, 0, 0, 1}, Product: [4]uint16{1, 0, 0, 1},
-			Strings: []winres.KV{{Key: "ProductVersion", Value: "1.0.0"}, {Key: "AppUserModelID", Value: testID}}}
+		strs := []winres.KV{{Key: "ProductVersion", Value: "1.0.0"}, {Key: "AppUserModelID", Value: testID}}
+		if withFiles {
+			strs = append(strs, winres.KV{Key: winres.FilesKey, Value: libName + "|" + licName})
+		}
+		v := winres.Version{File: [4]uint16{1, 0, 0, 1}, Product: [4]uint16{1, 0, 0, 1}, Strings: strs}
 		obj, err := winres.COFF(winres.MachineFor(runtime.GOARCH), []winres.Resource{
 			{Type: winres.TypeVersion, ID: 1, Lang: winres.LangEnUS, Data: v.Encode()}})
 		if err != nil {
@@ -88,12 +109,13 @@ type variant struct {
 	behavior string // "" is healthy
 	machine  uint16 // 0 is the build's
 	id       string // "" is testID; the same length
+	files    bool   // the build that declares libName and licName
 }
 
 // makeExe writes the variant to path.
 func makeExe(t *testing.T, path string, v variant) {
 	t.Helper()
-	b := bytes.Clone(appBytes(t))
+	b := bytes.Clone(appBuild(t, v.files))
 	le := binary.LittleEndian
 	// The fixed file info, found through the resource (the signature's bytes
 	// also occur in winres's code on amd64).
@@ -173,6 +195,92 @@ func zipOf(t *testing.T, exe, zipPath string) {
 		t.Fatal(err)
 	}
 	f.Close()
+}
+
+// makeLib writes a stand-in for a nativeLibs DLL at path: a PE file for
+// machine (0: the runner's) that ends with tag, so a test can tell versions
+// apart. It is never loaded.
+func makeLib(t *testing.T, path, tag string, machine uint16) {
+	t.Helper()
+	b := append(bytes.Clone(appBytes(t)), tag...)
+	if machine != 0 {
+		binary.LittleEndian.PutUint16(b[binary.LittleEndian.Uint32(b[0x3C:])+4:], machine)
+	}
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tagOf is the tag makeLib ended the file at path with (the last n bytes).
+func tagOf(t *testing.T, path string, n int) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b[max(0, len(b)-n):])
+}
+
+// zipFiles writes a zip of the files, under the names given, in order.
+func zipFiles(t *testing.T, zipPath string, entries ...[2]string) {
+	t.Helper()
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for _, e := range entries {
+		w, err := zw.Create(e[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(e[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write(b)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}
+
+// withFiles installs the version with files: the executable at w.exe, the
+// DLL and its licence beside it tagged "lib-v1" and "lic-v1".
+func (w *world) withFiles(t *testing.T, v variant) {
+	t.Helper()
+	v.files = true
+	makeExe(t, w.exe, v)
+	makeLib(t, filepath.Join(filepath.Dir(w.exe), libName), "lib-v1", 0)
+	os.WriteFile(filepath.Join(filepath.Dir(w.exe), licName), []byte("lic-v1"), 0o644)
+}
+
+// updateWithFiles writes the zip gnui package makes for a version with
+// files: the executable, the DLL tagged "lib-v2" and the licence "lic-v2".
+func updateWithFiles(t *testing.T, dir string, v variant) string {
+	t.Helper()
+	v.files = true
+	exe, lib, lic := filepath.Join(dir, "sutest.exe"), filepath.Join(dir, libName), filepath.Join(dir, licName)
+	makeExe(t, exe, v)
+	makeLib(t, lib, "lib-v2", 0)
+	os.WriteFile(lic, []byte("lic-v2"), 0o644)
+	z := filepath.Join(dir, "SUTest-windows.zip")
+	zipFiles(t, z, [2]string{"sutest.exe", exe}, [2]string{libName, lib}, [2]string{licName, lic})
+	return z
+}
+
+// filesAre checks the tags of the DLL and the licence beside w.exe.
+func (w *world) filesAre(t *testing.T, lib, lic string) {
+	t.Helper()
+	dir := filepath.Dir(w.exe)
+	if got := tagOf(t, filepath.Join(dir, libName), len(lib)); got != lib {
+		t.Errorf("%s is %q, want %q", libName, got, lib)
+	}
+	if got := tagOf(t, filepath.Join(dir, licName), len(lic)); got != lic {
+		t.Errorf("%s is %q, want %q", licName, got, lic)
+	}
 }
 
 func digest(t *testing.T, path string) [32]byte {
@@ -338,6 +446,44 @@ func TestUpdateThatDoesNotStartIsRolledBack(t *testing.T) {
 	}
 }
 
+// TestUpdateWithFilesIsInstalledAndKept updates an app that has a DLL and
+// its licence beside it (gnui.json's nativeLibs) from the zip gnui package
+// writes: the executable and both files are replaced together.
+func TestUpdateWithFilesIsInstalledAndKept(t *testing.T) {
+	w := newWorld(t, 20*time.Second, true)
+	w.withFiles(t, variant{version: [4]uint16{1, 0, 0, 1}})
+	z := updateWithFiles(t, filepath.Join(w.root, "download"), variant{version: [4]uint16{1, 1, 0, 1}})
+	sum := digest(t, z)
+	w.update(t, z, &sum)
+	r := w.wait(t, 40*time.Second, "the new version started", func(r report) bool { return r.Event == "started" })
+	if r.Version != "1.1.0.1" || r.Status != "updated" {
+		t.Errorf("the new version: %+v", r)
+	}
+	if got := installedVersion(t, w.exe); got != "1.1.0.1" {
+		t.Errorf("installed version %s after the update", got)
+	}
+	w.filesAre(t, "lib-v2", "lic-v2")
+}
+
+// TestUpdateWithFilesThatDoesNotStartIsRolledBack: the executable, the DLL
+// and the licence are all put back.
+func TestUpdateWithFilesThatDoesNotStartIsRolledBack(t *testing.T) {
+	w := newWorld(t, 3*time.Second, true)
+	w.withFiles(t, variant{version: [4]uint16{1, 0, 0, 1}})
+	z := updateWithFiles(t, filepath.Join(w.root, "download"), variant{version: [4]uint16{2, 0, 0, 0}, behavior: "hang"})
+	sum := digest(t, z)
+	w.update(t, z, &sum)
+	w.wait(t, 30*time.Second, "the new version hanging", func(r report) bool { return r.Event == "hanging" })
+	r := w.wait(t, 40*time.Second, "the old version back", func(r report) bool { return r.Event == "started" })
+	if r.Version != "1.0.0.1" || r.Status != "rolled back" {
+		t.Errorf("after the rollback: %+v", r)
+	}
+	if got := installedVersion(t, w.exe); got != "1.0.0.1" {
+		t.Errorf("installed version %s after the rollback", got)
+	}
+	w.filesAre(t, "lib-v1", "lic-v1")
+}
+
 // TestPrepareRejects stages updates for an installed executable in this
 // process (prepare with the installed copy as self).
 func TestPrepareRejects(t *testing.T) {
@@ -423,6 +569,42 @@ func TestPrepareRejects(t *testing.T) {
 	if _, err := prepare(s, nil, &zSum, false, z, quiet); !errors.Is(err, ErrRejected) {
 		t.Errorf("a zip of two executables: %v", err)
 	}
+	// Updates of a version with files: the good zip, then zips that lack a
+	// declared file, add one it does not declare, hold one in a folder, hold
+	// another kind of file or a DLL for another machine.
+	fdir := filepath.Join(dl, "files")
+	fz := updateWithFiles(t, fdir, variant{version: [4]uint16{1, 3, 0, 0}})
+	fsum := digest(t, fz)
+	if st, err := prepare(s, nil, &fsum, false, fz, quiet); err != nil {
+		t.Errorf("a good update with files: %v", err)
+	} else {
+		st.Discard()
+	}
+	fexe, flib, flic := filepath.Join(fdir, "sutest.exe"), filepath.Join(fdir, libName), filepath.Join(fdir, licName)
+	otherLib := filepath.Join(fdir, "other-machine.dll")
+	makeLib(t, otherLib, "x", other[cur.machine])
+	for name, entries := range map[string][][2]string{
+		"an executable without its files": {{"sutest.exe", fexe}},
+		"no licence":                      {{"sutest.exe", fexe}, {libName, flib}},
+		"an undeclared DLL":               {{"sutest.exe", fexe}, {libName, flib}, {licName, flic}, {"extra.dll", flib}},
+		"a file in a folder":              {{"sutest.exe", fexe}, {"lib/" + libName, flib}, {licName, flic}},
+		"another kind of file":            {{"sutest.exe", fexe}, {libName, flib}, {licName, flic}, {"notes.md", flic}},
+		"a DLL for another machine":       {{"sutest.exe", fexe}, {libName, otherLib}, {licName, flic}},
+		"a file twice":                    {{"sutest.exe", fexe}, {libName, flib}, {licName, flic}, {strings.ToUpper(libName), flib}},
+	} {
+		p := filepath.Join(dl, strings.ReplaceAll(name, " ", "-")+".zip")
+		zipFiles(t, p, entries...)
+		sum := digest(t, p)
+		if _, err := prepare(s, nil, &sum, false, p, quiet); !errors.Is(err, ErrRejected) {
+			t.Errorf("%s: %v, want ErrRejected", name, err)
+		}
+	}
+	// A bare executable that declares files.
+	fsum = digest(t, fexe)
+	if _, err := prepare(s, nil, &fsum, false, fexe, quiet); !errors.Is(err, ErrRejected) {
+		t.Errorf("a bare executable that declares files: %v, want ErrRejected", err)
+	}
+
 	// Nothing is left staged.
 	root, _ := stagingRoot(testID)
 	if ents, _ := os.ReadDir(root); len(ents) != 0 {
@@ -546,10 +728,51 @@ func TestSignedUpdates(t *testing.T) {
 		}
 	}
 
-	// The good update, live, through Prepare.
-	w.update(t, sameSigner, nil)
+	if st, err := prepare(s, pa, nil, false, sameSigner, quiet); err != nil {
+		t.Errorf("the same signer: %v", err)
+	} else {
+		st.Discard()
+	}
+
+	// An update with files: its DLL must be signed by the same publisher.
+	fdir := filepath.Join(dl, "f")
+	fexe, flib, flic := filepath.Join(fdir, "sutest.exe"), filepath.Join(fdir, libName), filepath.Join(fdir, licName)
+	makeExe(t, fexe, variant{version: [4]uint16{1, 1, 0, 0}, files: true})
+	sign(t, fexe, 0)
+	os.WriteFile(flic, []byte("lic-v2"), 0o644)
+	unsignedLib, otherLib := filepath.Join(fdir, "u.dll"), filepath.Join(fdir, "b.dll")
+	makeLib(t, unsignedLib, "lib-u", 0)
+	makeLib(t, otherLib, "lib-b", 0)
+	sign(t, otherLib, 1)
+	for name, lib := range map[string]string{"an unsigned DLL": unsignedLib, "a DLL of another signer": otherLib} {
+		z := filepath.Join(dl, strings.ReplaceAll(name, " ", "-")+".zip")
+		zipFiles(t, z, [2]string{"sutest.exe", fexe}, [2]string{libName, lib}, [2]string{licName, flic})
+		if _, err := prepare(s, pa, nil, false, z, quiet); !errors.Is(err, ErrRejected) {
+			t.Errorf("%s: %v, want ErrRejected", name, err)
+		}
+	}
+	makeLib(t, flib, "lib-v2", 0)
+	sign(t, flib, 0)
+	z := filepath.Join(dl, "SUTest-1.1.0-windows.zip")
+	zipFiles(t, z, [2]string{"sutest.exe", fexe}, [2]string{libName, flib}, [2]string{licName, flic})
+
+	// The good update, live, through Prepare: a version that brings a DLL
+	// and its licence, signed as the app is.
+	w.update(t, z, nil)
 	r := w.wait(t, 40*time.Second, "the new version started", func(r report) bool { return r.Event == "started" })
 	if r.Version != "1.1.0.0" || r.Status != "updated" {
 		t.Errorf("the new version: %+v", r)
 	}
+	if b, err := os.ReadFile(filepath.Join(filepath.Dir(w.exe), libName)); err != nil || !bytes.Equal(b, mustRead(t, flib)) {
+		t.Errorf("the installed %s is not the signed one of the update: %v", libName, err)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

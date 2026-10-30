@@ -38,8 +38,6 @@ func TestCloseDoesNotWaitForTheIconStyleRead(t *testing.T) {
 		return 7
 	}
 	t.Cleanup(func() { iconStyle = old })
-	timer := time.AfterFunc(5*time.Second, release)
-	defer timer.Stop()
 	defer release() // (before the cleanups, whatever way the test ends)
 
 	var wakes atomic.Int32
@@ -53,10 +51,15 @@ func TestCloseDoesNotWaitForTheIconStyleRead(t *testing.T) {
 	if reads.Load() == 0 {
 		t.Fatal("the style was never read")
 	}
-	t0 := time.Now()
-	pl.Close()
-	if d := time.Since(t0); d > time.Second {
-		t.Fatalf("Close took %v with the style read blocked", d)
+	// (Close may take its second to stop the icon cache's workers; what it must
+	// not do is wait for the read, which only this test ends.)
+	closed := make(chan struct{})
+	go func() { pl.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		release()
+		t.Fatal("Close did not return with the style read blocked")
 	}
 	release()
 	time.Sleep(50 * time.Millisecond)
@@ -81,7 +84,11 @@ func TestCloseStopsThePlacesWorker(t *testing.T) {
 	old := iconStyle
 	iconStyle = func() uint64 { return 0 } // (the style worker's own wake is not the one under test)
 	t.Cleanup(func() { iconStyle = old })
-	timer := time.AfterFunc(5*time.Second, release)
+	// The gate's release by time only keeps a failing test from hanging: at
+	// 5 s it opened before the check on a loaded arm64 runner, whose first
+	// frame took that long, and let the next probes through ("3 probes
+	// started", p8-windows-flakes 40825454957).
+	timer := time.AfterFunc(60*time.Second, release)
 	defer timer.Stop()
 	defer release()
 
@@ -96,7 +103,7 @@ func TestCloseStopsThePlacesWorker(t *testing.T) {
 	pl.wake = func() { wakes.Add(1) }
 	o := newOffscreen(t, pl)
 	o.Frame()
-	for n := 0; n < 500 && probes.Load() == 0; n++ {
+	for n := 0; n < 10000 && probes.Load() == 0; n++ {
 		time.Sleep(time.Millisecond)
 	}
 	if probes.Load() != 1 {

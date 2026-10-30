@@ -24,12 +24,14 @@ var _ Uploader = (*gpu.Renderer)(nil)
 // glyph quads need their page's texture id). Atlas resets mark every page
 // dirty, so they are re-uploaded by the next sync.
 //
-// This is not a renderer-recovery API: switching u creates textures but does
-// not restore clean pages, and later partial updates do not restore their
-// untouched glyphs. A replacement renderer needs a fresh Context and shaper
-// atlas. To reuse an existing renderer's text textures in another Context,
-// use ShareAtlas with the existing SharedAtlas instead. The app package
-// does not replace a live Context's renderer on resize or scale changes.
+// Switching to another uploader makes new, blank textures, so every page is
+// uploaded in full, clean ones too (when the shaper can say so: DirtyAll, as
+// text.System does). Later partial updates then keep the new textures
+// current. A renderer that rebuilds in place after a lost device keeps its
+// texture ids and blanks their contents: AtlasRestore uploads the pages
+// again. The app package does not replace a live Context's renderer on resize
+// or scale changes. To reuse an existing renderer's text textures in another
+// Context, use ShareAtlas with the existing SharedAtlas instead.
 func (c *Context) AtlasSync(u Uploader) {
 	if c.shared != nil && c.shared.up != u {
 		c.shared, c.up = nil, nil
@@ -38,8 +40,33 @@ func (c *Context) AtlasSync(u Uploader) {
 		c.up = u
 		c.pageTex = c.pageTex[:0]
 		c.pageUploaded = c.pageUploaded[:0]
+		c.dirtyAll() // the new textures are blank
 	}
 	c.syncAtlas()
+}
+
+// AtlasRestore uploads every page of the text atlas again, in full, now: for
+// a renderer that lost its device and was rebuilt in place (gpu.Renderer.
+// Rebuild), which keeps the atlas's texture ids but not what was in them. It
+// does the work of a first sync, so the pages come back with every glyph the
+// atlas holds, clean pages too. Contexts that share the atlas (ShareAtlas)
+// share the textures: call it on one of them. A shaper that cannot mark its
+// pages dirty (no DirtyAll) restores only what changes after.
+func (c *Context) AtlasRestore() {
+	uploaded := c.pageUploaded
+	if c.shared != nil {
+		uploaded = c.shared.uploaded
+	}
+	clear(uploaded) // no Stage into a texture that was never filled
+	c.dirtyAll()
+	c.syncAtlas()
+}
+
+// dirtyAll has the shaper report every page dirty in full, if it can.
+func (c *Context) dirtyAll() {
+	if d, ok := c.sh.(interface{ DirtyAll() }); ok {
+		d.DirtyAll()
+	}
 }
 
 // SharedAtlas is the textures of the text atlas's pages on one renderer,
@@ -59,12 +86,15 @@ func NewSharedAtlas(u Uploader) *SharedAtlas { return &SharedAtlas{up: u} }
 // ShareAtlas makes c draw its text with the page textures of s (instead of
 // textures of its own) and syncs now: AtlasSync for contexts that share a
 // text system and a renderer. All of them must use the same text system.
-// Reuse their existing s: a new SharedAtlas cannot restore pages whose dirty
-// regions were already consumed (see AtlasSync).
+// A SharedAtlas with no textures yet is blank, so the first context to share
+// it uploads every page in full (AtlasSync); one that has them is joined as is.
 func (c *Context) ShareAtlas(s *SharedAtlas) {
 	c.shared, c.up = s, s.up
 	c.pageTex = c.pageTex[:0]
 	c.pageUploaded = c.pageUploaded[:0]
+	if len(s.tex) == 0 {
+		c.dirtyAll()
+	}
 	c.syncAtlas()
 }
 
@@ -319,6 +349,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 			if draw {
 				q := c.quad(l)
 				q.Rect, q.Clip, q.Radii, q.Color = r, clip, b.radii, colors
+				c.curve(q)
 				if border > 0 {
 					q.Border, q.BorderColor = border, b.col(b.bd.Color)
 				}
@@ -416,7 +447,16 @@ func (c *Context) strip(l *gpu.DrawList, b *box, clip [4]float32) {
 	}
 	q := c.quad(l)
 	q.Rect, q.Clip, q.Radii = b.rect, clip, b.radii
+	c.curve(q)
 	q.Border, q.BorderColor = b.bd.Width, b.col(b.bd.Color)
+}
+
+// curve gives the shape quad q the continuous corners the theme asks for
+// (Theme.ContinuousCorners).
+func (c *Context) curve(q *gpu.Quad) {
+	if c.Theme.ContinuousCorners && q.Radii != [4]float32{} {
+		q.Tex = gpu.ShapeContinuous
+	}
 }
 
 // emitImage draws b's image centred in the padded rectangle (or placed by
@@ -451,6 +491,7 @@ func (c *Context) overlay(l *gpu.DrawList, b *box, clip [4]float32, color uint32
 	col := b.col(scaleAlpha(color, t))
 	q := c.quad(l)
 	q.Rect, q.Clip, q.Color, q.Radii = b.rect, clip, [4]uint32{col, col, col, col}, b.radii
+	c.curve(q)
 }
 
 // emitText draws the display text of b inside its padded rectangle.

@@ -2,25 +2,8 @@
 
 package main
 
-import (
-	"sync"
-
-	"gonativeui/platform"
-)
-
-var appKitOnce sync.Once
-
-// offscreenOnMain runs f on the main thread after AppKit has set up its
-// fonts: a CoreText system font created before the process's first window
-// makes AppKit's later NSFont lookups crash (in the window opened by
-// TestShellPresentsInStep), so a hidden window opens first, as app.Run does.
-func offscreenOnMain(f func()) {
-	onMain(func() {
-		appKitOnce.Do(func() {
-			if w, err := platform.Open(platform.Options{Title: "audit", Width: 100, Height: 100, Hidden: true}); err == nil {
-				w.Close()
-			}
-		})
-		f()
-	})
-}
+// offscreenOnMain runs f on the main thread. The offscreen rigs create
+// CoreText fonts before TestShellPresentsInStep opens the process's first
+// window; text loads AppKit before its first CTFont (loadSyms), so that
+// ordering is safe and no window needs to open first (issue #6).
+func offscreenOnMain(f func()) { onMain(f) }

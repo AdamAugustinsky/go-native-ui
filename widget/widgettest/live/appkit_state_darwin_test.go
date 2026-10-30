@@ -142,6 +142,14 @@ func TestOtherWindows(t *testing.T) {
 		t.Fatalf("%d visible windows with the app's window open", n0)
 	}
 	l.Do(func(a *app.App) { plain = l.OpenPlainWindow("other", 0, 0) })
+	// A failure below must not leave it open for the next test (it broke
+	// TestEditorEditMenuValidatesAndActs on CI).
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			l.Do(func(a *app.App) { plain.Close() })
+		}
+	})
 	l.Do(func(a *app.App) {
 		if n := widgettest.VisibleWindows(); n != n0+1 {
 			t.Errorf("%d visible windows after opening another, want %d", n, n0+1)
@@ -157,14 +165,13 @@ func TestOtherWindows(t *testing.T) {
 		}
 	})
 	l.Do(func(a *app.App) { objc.Send1(plain.Window, objc.Sel("makeKeyAndOrderFront:"), 0) })
-	l.Frames(3)
-	var key bool
-	l.Do(func(a *app.App) { key = objc.SendBool(plain.Window, objc.Sel("isKeyWindow")) })
-	if !key {
-		t.Fatal("the other window did not take the key from the active app")
-	}
+	// AppKit moves the key on its own time, not in three frames.
+	l.Until("the other window takes the key from the active app", 240, func() bool {
+		return objc.SendBool(plain.Window, objc.Sel("isKeyWindow"))
+	})
 	l.Until("the app's window sees it lost the focus", 120, func() bool { return !p.focused })
 	l.Do(func(a *app.App) { plain.Close() })
+	closed = true
 	l.Frames(3)
 	l.Do(func(a *app.App) {
 		if n := widgettest.VisibleWindows(); n != n0 {
@@ -248,7 +255,7 @@ func TestCaptureOfTheLiveWindow(t *testing.T) {
 // its window is on screen. A frame in the half second before the wait or the
 // 0.3 s after it is attributed to the causes the debug overlay recorded (it is
 // turned on here), and fails the test unless the system or another app made
-// it (outsideCause): above all another process taking the activation, which
+// it (widgettest.OutsideCause): above all another process taking the activation, which
 // side by side test runs do all the time.
 func TestIdleAppDrawsNothingBetweenWaits(t *testing.T) {
 	wantOverlay(t, false)

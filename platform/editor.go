@@ -81,6 +81,13 @@ type EditorOptions struct {
 	// in points (the text container's inset; AppKit adds a 5 pt line fragment
 	// padding to the left and right).
 	InsetX, InsetY float32
+	// TextColor is the text's colour (0xRRGGBBAA, alpha ignored; 0: the
+	// system's) and Background the fill behind it (0: the system's window
+	// colour). Windows only so far: there the editor is a child window that
+	// cannot let the app's pixels show through, so the app passes the colour
+	// of the box it sits in. macOS draws its text view transparent, in the
+	// system's text colour.
+	TextColor, Background uint32
 }
 
 // EditorSignals are what happened in an editor since the signals were last
@@ -162,6 +169,16 @@ var (
 	// text view refused it.
 	ErrTooLong = errors.New("platform: editor text over its maximum length")
 )
+
+// editorLines is the most and the fewest lines of options o, defaults
+// applied: MaxLines 6, MinLines 1, MinLines at most MaxLines.
+func editorLines(o EditorOptions) (maxL, minL int) {
+	maxL, minL = o.MaxLines, o.MinLines
+	if maxL <= 0 {
+		maxL = 6
+	}
+	return maxL, min(max(minL, 1), maxL)
+}
 
 // maxCommands is how many completion commands wait for TakeCommand.
 const maxCommands = 16

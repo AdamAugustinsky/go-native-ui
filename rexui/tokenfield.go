@@ -69,7 +69,7 @@ type TokenFieldSignal struct {
 }
 
 // TokenField builds a token field: a text field that turns what is typed into
-// tokens. Enter or a comma ends a token; Backspace (or Left, at the start of an
+// tokens. Enter or a comma ends a token (pasted text is split at its commas); Backspace (or Left, at the start of an
 // empty field) selects the last token and Backspace or Delete removes the
 // selected one; Left and Right move between tokens, Escape and typing leave
 // them. A click selects a token. The field wraps its tokens onto more lines
@@ -169,7 +169,7 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 		}
 		id := c.BoxKeyed(tf, tk, nil)
 		c.Push(id)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(h))
+		c.NextSize(ui.TextSize(0), ui.Px(h))
 		c.NextFont(font)
 		c.NextTextColor(fg)
 		c.BoxKeyed(ui.DrawText, ui.KeyN(tk, 1), base.StrBytes(t))
@@ -222,7 +222,7 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 			pc = fl.TextDisabled.RGBA(r)
 		}
 		theme.At(c, 0, 0, 0, lineH)
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(lineH))
+		c.NextSize(ui.TextSize(0), ui.Px(lineH))
 		c.NextFont(font)
 		c.NextTextColor(pc)
 		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(wkey, 2), base.StrBytes(o.Placeholder))
@@ -254,7 +254,8 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 // of the tokens, as the keys or the system's edit actions, in the order they
 // arrive. Left and Right move between the selected tokens (Left at the start of
 // the text selects the last); Backspace at the start selects the last token
-// and, with one selected, removes it, as does Delete at the end; Escape leaves
+// and, with one selected, removes it wherever the caret is, as does Delete (the
+// text is not touched while a token is selected); Escape leaves
 // a selected token; Enter makes what is typed a token; a comma makes the text
 // before it a token, wherever it is typed and however many come in one batch.
 type tokenCmd TokenFieldState
@@ -309,7 +310,7 @@ func (s *tokenCmd) FieldCommand(cmd ui.FieldCommand, r rune) bool {
 			st.HasSel = len(*st.tokens) > 0
 			st.Sel = min(st.Sel, len(*st.tokens)-1)
 			return true
-		case cmd == ui.FieldDeleteBackward && len(toks) > 0:
+		case cmd == ui.FieldDeleteBackward && len(toks) > 0 && buf.Caret() == 0 && !buf.HasSelection():
 			st.Sel, st.HasSel = len(toks)-1, true
 			return true
 		}
