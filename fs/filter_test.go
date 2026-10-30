@@ -140,3 +140,34 @@ func BenchmarkFilterChunks(b *testing.B) {
 		}
 	}
 }
+
+func TestFilterBitsStorageChunks(t *testing.T) {
+	l := synth()
+	for i := 0; i < 1000; i++ {
+		name := fmt.Sprintf("file-%04d-KÉ\xff.txt", i)
+		l.Entries = append(l.Entries, Entry{NameOff: uint32(len(l.Names)), NameLen: uint16(len(name))})
+		l.Names = append(l.Names, name...)
+	}
+	Sort(l, SortName, true)
+	var bits []uint64
+	for _, q := range []string{"", "K", "é", "123", "missing", "\xff"} {
+		for start := 0; start < len(l.Entries); start += 37 {
+			bits = FilterBits(l, []byte(q), bits, start, min(start+37, len(l.Entries)))
+		}
+		var got []uint32
+		for _, i := range l.Order {
+			if bits[i/64]&(uint64(1)<<(i%64)) != 0 {
+				got = append(got, i)
+			}
+		}
+		if want := filterArenaASCII(l, []byte(q), nil); !slices.Equal(got, want) {
+			t.Fatalf("query %q: bits differ", q)
+		}
+		if got := Filter(l, []byte(q), nil); !slices.Equal(got, filterArenaASCII(l, []byte(q), nil)) {
+			t.Fatalf("query %q: full filter differs", q)
+		}
+	}
+	if n := testing.AllocsPerRun(50, func() { bits = FilterBits(l, []byte("K"), bits, 0, len(l.Entries)) }); n != 0 {
+		t.Fatalf("warm bitset: %v allocs", n)
+	}
+}

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -26,7 +27,11 @@ import (
 // Result together with a lease number. From then on the caller owns it, and
 // gives it back with Release(listing, lease) when it is replaced or no
 // longer shown, so buffers are reused and nothing is allocated per listing
-// once the pool is warm. A Listing must not be used after Release.
+// once the pool is warm. A Listing must not be used after Release. Spare
+// buffers have an 8 MiB budget, raised to four times the recent working size
+// (at most 256 MiB). An exceptional buffer over 2 MiB and twice the recent
+// working size is dropped on release; repeated large listings still reuse.
+// After 30 seconds without a release, oversized spare buffers are reclaimed.
 //
 // The lease identifies one hand-out of a pooled Listing: the same *Listing
 // is handed out again after a Release, and a stale duplicate Release of the
@@ -44,26 +49,32 @@ type Service struct {
 	timer *time.Timer
 	wg    sync.WaitGroup
 
-	// UI-thread scratch.
+	// Control-goroutine scratch.
 	changes []Change
 
 	// mu is a core.Mutex: a contended sync.Mutex parks its waiter on a runtime
 	// sudog, which is heap-allocated when the P's cache and the central list
 	// are empty (see core.Parker). Nothing under mu does I/O or blocks.
-	mu      core.Mutex
-	closed  bool
-	nextReq uint64
-	ids     map[uint32]*idState
-	queue   []uint32 // ids with a queued job
-	qhead   int
+	mu       core.Mutex
+	closed   bool
+	nextReq  uint64
+	ids      map[uint32]*idState
+	dirtyIDs map[uint32]*idState
+	queue    []uint32 // ids with a queued job
+	qhead    int
 
-	all      []*Listing // pool, indexed by slot
-	busy     []bool     // slot is owned by a worker, the ring or the caller
-	lease    []uint32   // current hand-out number of each busy slot
-	free     []int32
-	slotOf   map[*Listing]int32
-	leaseSeq uint32
-	ignored  uint64 // Release calls that did not match a lease
+	all         []*Listing // pool, indexed by slot
+	busy        []bool     // slot is owned by a worker, the ring or the caller
+	pins        []uint32   // read-only worker/control references after Release
+	pooledBytes int
+	poolDue     time.Time
+	recentBytes [9]int
+	recentPos   int
+	lease       []uint32 // current hand-out number of each busy slot
+	free        []int32
+	slotOf      map[*Listing]int32
+	leaseSeq    uint32
+	ignored     uint64 // Release calls that did not match a lease
 
 	seq    uint64 // orders list starts against watch activations
 	wgens  uint64 // watch generations
@@ -75,13 +86,14 @@ type Service struct {
 	// a P that has none). idle[i] says worker i is (about to be) parked and
 	// has not been woken since; it is guarded by mu, and a wake that arrives
 	// before the Park is kept by the Parker.
-	parks   [numWorkers]*core.Parker
-	idle    [numWorkers]bool
-	ctlPark *core.Parker
+	parks    [numWorkers]*core.Parker
+	idle     [numWorkers]bool
+	ctlPark  *core.Parker
+	ringWait [numWorkers]bool
 
 	ops   []ctlOp
 	w     watcher
-	werrs []Result // watch and open errors waiting for Poll
+	werrs []pendingResult // watch and open errors waiting for Poll
 }
 
 // resMsg is what travels on the ring: slots and numbers, no pointers.
@@ -91,7 +103,22 @@ type resMsg struct {
 	req  uint64
 }
 
+type pendingResult struct {
+	result Result
+	gen    uint64 // zero for Open; watch generation otherwise
+}
+
 type idState struct {
+	id            uint32
+	latest        int32
+	latestLease   uint32
+	latestPath    string
+	syncReq       uint64
+	syncGen       uint64
+	running       bool
+	resortRefresh bool // a refresh superseded by a resort still has to run
+	resort        *Listing
+	resortSlot    int32
 	// current list request (also the job, until a worker takes it)
 	path    string
 	key     SortKey
@@ -101,12 +128,14 @@ type idState struct {
 	refresh bool // the pending job came from a watch event
 	user    bool // a List result is still owed to the caller
 
-	watched   bool
-	watchPath string
-	wgen      uint64 // generation of the latest Watch/Unwatch; older ops, errors and events are obsolete
-	wactive   bool   // the OS watch of generation wgen is established
-	dirty     bool
-	dirtyAt   time.Time
+	watched    bool
+	watchPath  string
+	wgen       uint64 // generation of the latest Watch/Unwatch; older ops, errors and events are obsolete
+	wactive    bool   // the OS watch of generation wgen is established
+	dirty      bool
+	dirtyAt    time.Time
+	dirtyDue   time.Time
+	structural bool
 
 	// A change between a listing and the moment the OS watch became active
 	// is in neither the listing nor the event stream. The directory's mtime
@@ -125,6 +154,9 @@ type idState struct {
 }
 
 type ctlOp struct {
+	sync bool
+	slot int32
+	req  uint64
 	add  bool
 	id   uint32
 	path string
@@ -163,9 +195,14 @@ type Result struct {
 }
 
 const (
-	numWorkers      = 2
-	ringCapacity    = 1024
-	defaultDebounce = 50 * time.Millisecond
+	numWorkers       = 2
+	ringCapacity     = 1024
+	defaultDebounce  = 50 * time.Millisecond
+	contentQuiet     = 250 * time.Millisecond
+	contentMaxWait   = time.Second
+	listingPoolBytes = 8 << 20
+	listingSlotBytes = 2 << 20
+	listingPoolIdle  = 30 * time.Second
 )
 
 // NewService starts a Service. wake is called, from any goroutine, when
@@ -190,17 +227,18 @@ func newService(wake func(), list func(string, *Listing) error, nw func(func()) 
 	}
 	s := &Service{
 		wake: wake, listFn: list, newWatcher: nw, debounce: debounce, openFn: openPath,
-		t0:     time.Now(),
-		ring:   core.NewRing[resMsg](ringCapacity),
-		ids:    make(map[uint32]*idState),
-		slotOf: make(map[*Listing]int32),
+		t0:       time.Now(),
+		ring:     core.NewRing[resMsg](ringCapacity),
+		ids:      make(map[uint32]*idState),
+		dirtyIDs: make(map[uint32]*idState),
+		slotOf:   make(map[*Listing]int32),
 	}
 	for i := range s.parks {
 		s.parks[i] = core.NewParker()
 	}
 	prewarmScratch(numWorkers + 1) // the workers and the watcher's stats may overlap
 	s.ctlPark = core.NewParker()
-	s.timer = time.AfterFunc(time.Hour, wake)
+	s.timer = time.AfterFunc(time.Hour, s.kick)
 	s.timer.Stop()
 	for i := 0; i < numWorkers; i++ {
 		s.wg.Add(1)
@@ -215,7 +253,7 @@ func newService(wake func(), list func(string, *Listing) error, nw func(func()) 
 func (s *Service) state(id uint32) *idState {
 	st := s.ids[id]
 	if st == nil {
-		st = new(idState)
+		st = &idState{id: id, latest: -1, resortSlot: -1}
 		s.ids[id] = st
 	}
 	return st
@@ -226,6 +264,10 @@ func (s *Service) state(id uint32) *idState {
 // Poll.
 func (s *Service) List(id uint32, path string, key SortKey, desc bool) (req uint64) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return 0
+	}
 	st := s.state(id)
 	st.user = true
 	req = s.enqueueLocked(id, st, path, key, desc, false)
@@ -234,6 +276,8 @@ func (s *Service) List(id uint32, path string, key SortKey, desc bool) (req uint
 }
 
 func (s *Service) enqueueLocked(id uint32, st *idState, path string, key SortKey, desc, refresh bool) uint64 {
+	s.dropResortLocked(st)
+	st.resortRefresh = false
 	s.nextReq++
 	st.req, st.path, st.key, st.desc, st.refresh = s.nextReq, path, key, desc, refresh
 	if !st.pending {
@@ -260,6 +304,8 @@ func (s *Service) wakeWorkerLocked() {
 // queue entry is skipped), a running or already finished one is discarded
 // when it reaches the ring or Poll.
 func (s *Service) invalidateLocked(st *idState) {
+	s.dropResortLocked(st)
+	delete(s.dirtyIDs, st.id)
 	s.nextReq++
 	st.req, st.pending, st.user, st.dirty = s.nextReq, false, false, false
 }
@@ -271,17 +317,24 @@ func (s *Service) Cancel(id uint32) {
 	if st := s.ids[id]; st != nil {
 		s.invalidateLocked(st)
 		s.unwatchLocked(id, st)
+		delete(s.ids, id)
 	}
 	s.mu.Unlock()
 	s.kick()
 }
 
 // Watch makes the Service relist id (with its last List parameters) when
-// the directory path changes on disk, debounced to one relist per ~50 ms.
+// the directory path changes on disk. Structural changes coalesce for 50 ms;
+// content changes wait for 250 ms quiet, bounded by one second.
 // A previous watch of id is replaced. Setting up the OS watch happens off
 // the calling thread.
 func (s *Service) Watch(id uint32, path string) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.dirtyIDs, id)
 	st := s.state(id)
 	s.wgens++
 	st.watched, st.watchPath, st.dirty, st.wactive, st.watchMTK, st.wgen = true, path, false, false, false, s.wgens
@@ -306,6 +359,7 @@ func (s *Service) unwatchLocked(id uint32, st *idState) {
 	if !st.watched {
 		return
 	}
+	delete(s.dirtyIDs, id)
 	s.wgens++
 	st.watched, st.wactive, st.dirty, st.wgen = false, false, false, s.wgens
 	s.ops = append(s.ops, ctlOp{id: id, gen: st.wgen})
@@ -330,9 +384,9 @@ func (s *Service) Open(id uint32, path string) {
 		return
 	}
 	if s.opens >= maxOpens {
-		s.werrs = append(s.werrs, Result{Kind: ResultOpenError, ID: id, Err: errOpenBusy})
+		s.werrs = append(s.werrs, pendingResult{result: Result{Kind: ResultOpenError, ID: id, Err: errOpenBusy}})
 		s.mu.Unlock()
-		s.wake()
+		s.signal()
 		return
 	}
 	s.opens++
@@ -344,11 +398,11 @@ func (s *Service) Open(id uint32, path string) {
 		s.opens--
 		report := err != nil && !s.closed
 		if report {
-			s.werrs = append(s.werrs, Result{Kind: ResultOpenError, ID: id, Err: err})
+			s.werrs = append(s.werrs, pendingResult{result: Result{Kind: ResultOpenError, ID: id, Err: err}})
 		}
 		s.mu.Unlock()
 		if report {
-			s.wake()
+			s.signal()
 		}
 	}()
 }
@@ -395,6 +449,7 @@ func (s *Service) getListingLocked() (*Listing, int32) {
 		s.busy[slot] = true
 		s.lease[slot] = s.leaseSeq
 		l := s.all[slot]
+		s.pooledBytes -= l.bufferBytes()
 		l.Reset()
 		return l, slot
 	}
@@ -402,6 +457,7 @@ func (s *Service) getListingLocked() (*Listing, int32) {
 	slot := int32(len(s.all))
 	s.all = append(s.all, l)
 	s.busy = append(s.busy, true)
+	s.pins = append(s.pins, 0)
 	s.lease = append(s.lease, s.leaseSeq)
 	s.slotOf[l] = slot
 	if cap(s.free) < len(s.all) {
@@ -413,7 +469,143 @@ func (s *Service) getListingLocked() (*Listing, int32) {
 func (s *Service) freeSlotLocked(slot int32) {
 	s.busy[slot] = false
 	s.lease[slot] = 0
+	if s.pins[slot] == 0 {
+		s.recycleLocked(slot)
+	}
+}
+
+func (s *Service) unpinLocked(slot int32) {
+	s.pins[slot]--
+	if s.pins[slot] == 0 && !s.busy[slot] {
+		s.recycleLocked(slot)
+	}
+}
+
+func (s *Service) recycleLocked(slot int32) {
+	l := s.all[slot]
+	s.recentBytes[s.recentPos] = len(l.Entries)*24 + len(l.Names) + len(l.Order)*4
+	s.recentPos = (s.recentPos + 1) % len(s.recentBytes)
+	recent := s.recentBytes
+	slices.Sort(recent[:])
+	working := recent[len(recent)*3/4]
+	budget := min(256<<20, max(listingPoolBytes, 4*working))
+	limit := min(budget, max(listingSlotBytes, 2*working))
+	// A one-off large folder does not set the retained working set forever.
+	// Repeated large listings warm normally, including the 1M-entry bench.
+	for _, spare := range s.free {
+		x := s.all[spare]
+		if n := x.bufferBytes(); n > limit || s.pooledBytes+n > budget {
+			s.pooledBytes -= n
+			x.Entries, x.Names, x.Order = nil, nil, nil
+		}
+	}
+	if n := l.bufferBytes(); n > limit || n > budget-s.pooledBytes {
+		l.Entries, l.Names, l.Order = nil, nil, nil
+	}
+	l.Reset()
+	s.pooledBytes += l.bufferBytes()
 	s.free = append(s.free, slot)
+	if s.pooledBytes > listingPoolBytes {
+		s.poolDue = time.Now().Add(listingPoolIdle)
+		s.kick()
+	} else {
+		s.poolDue = time.Time{}
+	}
+}
+
+// trimPoolLocked returns an idle pool to the ordinary navigation budget.
+// Live leases and pinned snapshots are never touched.
+func (s *Service) trimPoolLocked() {
+	for _, slot := range s.free {
+		l := s.all[slot]
+		if n := l.bufferBytes(); n > listingSlotBytes || s.pooledBytes > listingPoolBytes {
+			s.pooledBytes -= n
+			l.Entries, l.Names, l.Order = nil, nil, nil
+		}
+	}
+	s.recentBytes = [9]int{}
+	s.poolDue = time.Time{}
+}
+
+// SetWake changes the result notification target after a window is created.
+// The callback must not block and may be called from any goroutine.
+func (s *Service) SetWake(wake func()) {
+	if wake == nil {
+		wake = func() {}
+	}
+	s.mu.Lock()
+	s.wake = wake
+	s.mu.Unlock()
+}
+
+func (s *Service) signal() {
+	s.mu.Lock()
+	wake, closed := s.wake, s.closed
+	s.mu.Unlock()
+	if !closed {
+		wake()
+	}
+}
+
+// Resort requests a new order of a held listing without reading the directory.
+// The caller keeps its read-only listing and lease until replacing it. A worker
+// copies it into a pooled result, so the displayed order never changes mid-frame.
+// A stale or foreign nonzero lease is rejected (request 0); lease 0 accepts an
+// immutable caller-owned listing, which must stay unchanged until the result.
+func (s *Service) Resort(id uint32, l *Listing, lease uint32, key SortKey, desc bool) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || l == nil {
+		return 0
+	}
+	slot, own := s.slotOf[l]
+	if lease != 0 && (!own || !s.busy[slot] || s.lease[slot] != lease) {
+		return 0
+	}
+	if own && (lease == 0 || !s.busy[slot] || s.lease[slot] != lease) {
+		return 0
+	}
+	if own {
+		s.pins[slot]++
+	} else {
+		slot = -1
+	}
+	st := s.state(id)
+	st.user = true
+	if st.path == "" {
+		st.path = st.watchPath
+	}
+	fresh := own && st.latest == slot && st.latestLease == lease
+	refresh := st.watched && (st.dirty || st.pending || st.running || st.resortRefresh || !fresh && st.latest >= 0)
+	req := s.enqueueLocked(id, st, st.path, key, desc, false)
+	st.resort, st.resortSlot = l, slot
+	st.resortRefresh = refresh
+	return req
+}
+
+func (s *Service) dropResortLocked(st *idState) {
+	if st.resort != nil && st.resortSlot >= 0 {
+		s.unpinLocked(st.resortSlot)
+	}
+	st.resort, st.resortSlot = nil, -1
+}
+
+func (s *Service) syncListingLocked(id uint32, st *idState, slot int32) {
+	if !st.watched || st.path != st.watchPath {
+		return
+	}
+	if s.w != nil {
+		if _, ok := s.w.(listingWatcher); !ok {
+			return
+		}
+	}
+	if st.syncReq == st.req && st.syncGen == st.wgen {
+		return
+	}
+	st.syncReq, st.syncGen = st.req, st.wgen
+	s.pins[slot]++
+	s.ops = append(s.ops, ctlOp{sync: true, id: id, gen: st.wgen, slot: slot, req: st.req})
+	s.kick()
 }
 
 func (s *Service) worker(i int) {
@@ -442,11 +634,13 @@ func (s *Service) worker(i int) {
 			s.queue, s.qhead = s.queue[:0], 0
 		}
 		st := s.ids[id]
-		if !st.pending { // cancelled or invalidated while queued
+		if st == nil || !st.pending { // cancelled or invalidated while queued
 			s.mu.Unlock()
 			continue
 		}
-		st.pending = false
+		st.pending, st.running = false, true
+		source, sourceSlot := st.resort, st.resortSlot
+		st.resort, st.resortSlot = nil, -1
 		path, key, desc, req := st.path, st.key, st.desc, st.req
 		s.seq++
 		startSeq := s.seq
@@ -455,38 +649,69 @@ func (s *Service) worker(i int) {
 
 		// The directory's mtime before the listing begins, whatever the
 		// watch state: Watch may be requested after the listing is shown.
-		mt, mtOK := dirMTime(path)
-		l.Err = s.listFn(path, l)
-		Sort(l, key, desc)
+		var mt int64
+		var mtOK bool
+		if source == nil {
+			mt, mtOK = dirMTime(path)
+			l.Err = s.listFn(path, l)
+			Sort(l, key, desc)
+		} else {
+			l.Entries = append(l.Entries, source.Entries...)
+			l.Names = append(l.Names, source.Names...)
+			l.Err, l.sorted, l.sortKey, l.desc = source.Err, source.sorted, source.sortKey, source.desc
+			if l.sorted && l.sortKey == key {
+				l.Order = append(l.Order, source.Order...)
+				l.reverse(desc)
+			} else {
+				Sort(l, key, desc)
+			}
+		}
 
 		s.mu.Lock()
-		stale := st.req != req
+		if source != nil && sourceSlot >= 0 {
+			s.unpinLocked(sourceSlot)
+		}
+		stale := s.closed || s.ids[id] != st || st.req != req
 		if stale {
 			s.freeSlotLocked(slot)
 		} else {
-			st.lastPath, st.lastMT, st.lastSeq, st.lastOK = path, mt, startSeq, mtOK && l.Err == nil
-			s.gapLocked(st)
+			st.running = false
+			st.latest, st.latestLease, st.latestPath = slot, s.lease[slot], path
+			if source == nil {
+				st.lastPath, st.lastMT, st.lastSeq, st.lastOK = path, mt, startSeq, mtOK && l.Err == nil
+				s.gapLocked(st)
+			}
+			if source == nil || st.syncGen != st.wgen {
+				s.syncListingLocked(id, st, slot)
+			}
 		}
 		s.mu.Unlock()
 		if stale {
 			continue
 		}
 		msg := resMsg{id: id, slot: slot, req: req}
-		for !s.ring.TryPush(msg) { // the UI is behind: wait, never drop
-			s.mu.Lock()
-			closed := s.closed
+		s.mu.Lock()
+		for !s.closed && !s.ring.TryPush(msg) {
+			s.ringWait[i] = true
 			s.mu.Unlock()
-			if closed {
-				return
-			}
-			time.Sleep(200 * time.Microsecond)
+			park.Park()
+			s.mu.Lock()
+			s.ringWait[i] = false
 		}
-		s.wake()
+		closed := s.closed
+		if closed {
+			s.freeSlotLocked(slot)
+		}
+		s.mu.Unlock()
+		if closed {
+			return
+		}
+		s.signal()
 	}
 }
 
-// control applies Watch and Unwatch to the OS watcher, which may take a
-// while (FSEvents rebuilds its stream), off the UI thread.
+// control applies watches and synchronizes their file sets off the UI thread;
+// opening handles and registering watches may block on the file system.
 func (s *Service) control() {
 	defer s.wg.Done()
 	for {
@@ -506,22 +731,41 @@ func (s *Service) control() {
 				break
 			}
 			op := s.ops[0]
-			s.ops = append(s.ops[:0], s.ops[1:]...)
-			if op.add && !s.currentLocked(op.id, op.gen) { // replaced or removed meanwhile
+			copy(s.ops, s.ops[1:])
+			s.ops[len(s.ops)-1] = ctlOp{}
+			s.ops = s.ops[:len(s.ops)-1]
+			if (op.add || op.sync) && !s.currentLocked(op.id, op.gen) { // replaced or removed meanwhile
+				if op.sync {
+					s.unpinLocked(op.slot)
+				}
 				s.mu.Unlock()
 				continue
 			}
 			w, closed := s.w, s.closed
+			var listing *Listing
+			if op.sync {
+				listing = s.all[op.slot]
+			}
 			s.mu.Unlock()
 			if closed {
+				if op.sync {
+					s.mu.Lock()
+					s.unpinLocked(op.slot)
+					s.mu.Unlock()
+				}
 				return
 			}
 			if w == nil {
 				if !op.add {
+					if op.sync {
+						s.mu.Lock()
+						s.unpinLocked(op.slot)
+						s.mu.Unlock()
+					}
 					continue
 				}
 				var err error
-				if w, err = s.newWatcher(s.wake); err != nil {
+				if w, err = s.newWatcher(s.kick); err != nil {
 					s.watchFailed(op.id, op.gen, err)
 					continue
 				}
@@ -534,6 +778,15 @@ func (s *Service) control() {
 				s.w = w
 				s.mu.Unlock()
 			}
+			if op.sync {
+				if lw, ok := w.(listingWatcher); ok {
+					lw.syncListing(op.id, op.gen, op.req, listing)
+				}
+				s.mu.Lock()
+				s.unpinLocked(op.slot)
+				s.mu.Unlock()
+				continue
+			}
 			w.remove(op.id) // the removed watch delivers nothing from here on (watcher contract)
 			if op.add {
 				// Events of this generation are accepted from now on, so none
@@ -543,13 +796,37 @@ func (s *Service) control() {
 					s.ids[op.id].wactive = true
 				}
 				s.mu.Unlock()
-				if err := w.add(op.id, op.path); err != nil {
+				var err error
+				if lw, ok := w.(listingWatcher); ok {
+					err = lw.addListingWatch(op.id, op.path, op.gen)
+				} else {
+					err = w.add(op.id, op.path)
+				}
+				if err != nil {
 					s.watchFailed(op.id, op.gen, err)
 				} else {
 					s.watchActive(op.id, op.gen, op.path)
+					if _, ok := w.(listingWatcher); ok {
+						s.mu.Lock()
+						if s.currentLocked(op.id, op.gen) {
+							st := s.ids[op.id]
+							slot := st.latest
+							if slot >= 0 && s.busy[slot] && s.lease[slot] == st.latestLease && st.latestPath == op.path {
+								s.syncListingLocked(op.id, st, slot)
+							} else if !st.pending && !st.running && (st.syncReq != st.req || st.syncGen != st.wgen) {
+								path := st.path
+								if path == "" {
+									path = op.path
+								}
+								s.enqueueLocked(op.id, st, path, st.key, st.desc, !st.user)
+							}
+						}
+						s.mu.Unlock()
+					}
 				}
 			}
 		}
+		s.processChanges()
 	}
 }
 
@@ -557,7 +834,7 @@ func (s *Service) control() {
 // watch is wanted. s.mu held.
 func (s *Service) currentLocked(id uint32, gen uint64) bool {
 	st := s.ids[id]
-	return st != nil && st.watched && st.wgen == gen
+	return !s.closed && st != nil && st.watched && st.wgen == gen
 }
 
 // watchActive runs after the OS watch for id (generation gen) is established.
@@ -580,7 +857,7 @@ func (s *Service) watchActive(id uint32, gen uint64, path string) {
 	}
 	s.mu.Unlock()
 	if woke {
-		s.wake()
+		s.kick()
 	}
 }
 
@@ -600,7 +877,8 @@ func (s *Service) gapLocked(st *idState) bool {
 	if st.lastMT == st.watchMT || st.dirty {
 		return false
 	}
-	st.dirty, st.dirtyAt = true, time.Now()
+	s.dirtyLocked(st, time.Now(), false)
+	s.kick()
 	return true
 }
 
@@ -612,101 +890,159 @@ func (s *Service) watchFailed(id uint32, gen uint64, err error) {
 	}
 	st := s.ids[id]
 	st.watched, st.wactive, st.dirty = false, false, false
-	s.werrs = append(s.werrs, Result{Kind: ResultWatchError, ID: id, Err: err})
+	delete(s.dirtyIDs, id)
+	s.werrs = append(s.werrs, pendingResult{result: Result{Kind: ResultWatchError, ID: id, Err: err}, gen: gen})
 	s.mu.Unlock()
-	s.wake()
+	s.signal()
 }
 
-// Poll appends finished results to dst and returns it. Call it on the UI
-// thread after a wake; pass dst[:0] of a reused slice and it allocates
-// nothing once warm. Poll also drains the OS watcher, so it must be called
-// after wakes caused by file system changes too (they use the same wake).
-func (s *Service) Poll(dst []Result) []Result {
-	now := time.Now()
-
+// processChanges owns the watch drain and debounce clock. Neither raw changes
+// nor timer expirations wake the UI: only a result does.
+func (s *Service) processChanges() {
 	s.mu.Lock()
-	w := s.w
+	w, closed := s.w, s.closed
 	s.mu.Unlock()
+	if closed {
+		return
+	}
 	if w != nil {
 		s.changes = w.drain(s.changes[:0])
 	}
-
+	now := time.Now()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	notify := false
 	for _, c := range s.changes {
 		switch c.Kind {
-		case ChangeDir:
-			s.markDirtyLocked(c.ID, now)
+		case ChangeDir, ChangeContent:
+			s.markDirtyLocked(c.ID, now, c.Kind == ChangeContent)
 		case ChangeOverflow:
 			for id := range s.ids {
-				s.markDirtyLocked(id, now)
+				s.markDirtyLocked(id, now, false)
 			}
 		case ChangeGone:
 			st := s.ids[c.ID]
-			if st == nil || !st.watched || !st.wactive { // from a watch that is no longer current
+			if st == nil || !st.watched || !st.wactive {
 				continue
 			}
-			// Whatever is queued, running or finished for the vanished
-			// directory is obsolete; a request for another path stands.
 			if st.path == st.watchPath || st.path == "" {
 				s.invalidateLocked(st)
 			}
 			s.unwatchLocked(c.ID, st)
+			s.werrs = append(s.werrs, pendingResult{result: Result{Kind: ResultGone, ID: c.ID}, gen: st.wgen})
 			s.kick()
-			dst = append(dst, Result{Kind: ResultGone, ID: c.ID})
+			notify = true
 		}
 	}
 	s.changes = s.changes[:0]
-
-	// Relist the directories whose debounce window has passed; arm the
-	// timer for the earliest of the rest.
 	var next time.Duration
-	for id, st := range s.ids {
-		if !st.dirty {
-			continue
-		}
-		if wait := st.dirtyAt.Add(s.debounce).Sub(now); wait > 0 {
+	for id, st := range s.dirtyIDs {
+		if wait := st.dirtyDue.Sub(now); wait > 0 {
 			if next == 0 || wait < next {
 				next = wait
 			}
 			continue
 		}
+		delete(s.dirtyIDs, id)
 		st.dirty = false
 		if st.path == "" {
 			st.path = st.watchPath
 		}
 		s.enqueueLocked(id, st, st.path, st.key, st.desc, !st.user)
 	}
+	if !s.poolDue.IsZero() {
+		if wait := s.poolDue.Sub(now); wait <= 0 {
+			s.trimPoolLocked()
+		} else if next == 0 || wait < next {
+			next = wait
+		}
+	}
 	if next > 0 {
 		s.timer.Reset(next)
+	} else {
+		s.timer.Stop()
 	}
-
-	if len(s.werrs) > 0 {
-		dst = append(dst, s.werrs...)
-		s.werrs = s.werrs[:0]
+	s.mu.Unlock()
+	if notify {
+		s.signal()
 	}
+}
 
+// Poll appends finished results to dst. Call it on the UI thread after a
+// wake; pass dst[:0] of a reused slice to allocate nothing once warm.
+func (s *Service) Poll(dst []Result) []Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.werrs {
+		st := s.ids[p.result.ID]
+		if p.gen == 0 || st != nil && st.wgen == p.gen {
+			dst = append(dst, p.result)
+		}
+	}
+	clear(s.werrs)
+	s.werrs = s.werrs[:0]
+	popped := false
 	for {
 		m, ok := s.ring.Pop()
 		if !ok {
 			break
 		}
+		popped = true
 		st := s.ids[m.id]
-		if st == nil || st.req != m.req { // superseded after the worker finished
+		if st == nil || st.req != m.req {
 			s.freeSlotLocked(m.slot)
 			continue
 		}
 		refresh := st.refresh
 		st.user = false
 		dst = append(dst, Result{Kind: ResultListing, ID: m.id, Req: m.req, Refresh: refresh, Listing: s.all[m.slot], Lease: s.lease[m.slot]})
+		if st.resortRefresh {
+			st.resortRefresh = false
+			s.markDirtyLocked(m.id, time.Now(), false)
+			s.kick()
+		}
+	}
+	if popped {
+		for i, waiting := range s.ringWait {
+			if waiting {
+				s.parks[i].Unpark()
+			}
+		}
 	}
 	return dst
 }
 
-func (s *Service) markDirtyLocked(id uint32, now time.Time) {
-	if st := s.ids[id]; st != nil && st.watched && st.wactive && !st.dirty {
-		st.dirty, st.dirtyAt = true, now
+func (s *Service) markDirtyLocked(id uint32, now time.Time, content bool) {
+	if st := s.ids[id]; st != nil && st.watched && st.wactive {
+		s.dirtyLocked(st, now, content)
 	}
+}
+
+func (s *Service) dirtyLocked(st *idState, now time.Time, content bool) {
+	if !st.dirty {
+		st.dirty, st.dirtyAt, st.structural = true, now, !content
+		s.dirtyIDs[st.id] = st
+		st.dirtyDue = now.Add(s.debounce)
+		if content {
+			st.dirtyDue = now.Add(contentQuiet)
+		}
+	} else if !content && !st.structural {
+		st.structural = true
+		st.dirtyDue = minTime(st.dirtyDue, now.Add(s.debounce))
+	}
+	if content && !st.structural {
+		st.dirtyDue = minTime(now.Add(contentQuiet), st.dirtyAt.Add(contentMaxWait))
+	}
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 // closeWait bounds how long Close waits for goroutines that are stuck in the
@@ -723,6 +1059,24 @@ func (s *Service) Close() {
 		return
 	}
 	s.closed = true
+	for _, st := range s.ids {
+		s.dropResortLocked(st)
+	}
+	for _, op := range s.ops {
+		if op.sync {
+			s.unpinLocked(op.slot)
+		}
+	}
+	clear(s.ops)
+	s.ops = s.ops[:0]
+	clear(s.dirtyIDs)
+	for {
+		m, ok := s.ring.Pop()
+		if !ok {
+			break
+		}
+		s.freeSlotLocked(m.slot)
+	}
 	for _, p := range s.parks {
 		p.Unpark()
 	}

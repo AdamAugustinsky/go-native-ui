@@ -152,7 +152,7 @@ type Pilot struct {
 	probeStop  guard             // ends the places worker's publishing at Close
 	probeWG    sync.WaitGroup    // the places worker, for whoever wants to know it ended
 	probed     chan placesProbed // the worker's places, until they are taken
-	wake       func()            // wakes the loop (platform.Wake)
+	wake       func()            // Window.Wake after Init; platform.Wake before it
 
 	init     [2]<-chan Ready
 	listedAt [2]int64
@@ -204,6 +204,12 @@ var _ app.Initer = (*Pilot)(nil)
 // first listings.
 func (pl *Pilot) Init(a *app.App) error {
 	pl.a = a
+	if a.Win != nil {
+		pl.wake = a.Win.Wake
+		if src, ok := pl.src.(interface{ SetWake(func()) }); ok {
+			src.SetWake(pl.wake)
+		}
+	}
 	pl.k = widget.NewKit(a.UI, a.Text, look(pl.opt.Mono))
 	pl.bk = pl.k.Kit
 	pl.bk.SetPreference(pl.opt.Preference)

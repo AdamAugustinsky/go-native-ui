@@ -9,7 +9,10 @@ import (
 // Filter appends to dst the indices (in l.Order order) of the entries whose
 // name contains query, ignoring case, and returns it. An empty query
 // matches every entry. Pass dst[:0] to reuse a buffer; with enough capacity
-// it allocates nothing.
+// it allocates nothing once the shared match scratch is warm. A complete
+// listing is scanned in storage order into match bits, then in Order order;
+// partial Orders inspect only their own entries. FilterBits supports a caller's
+// incremental scan without rescanning the arena for each chunk.
 //
 // Case folding is the one Sort uses: unicode.ToLower per rune, with an
 // ASCII fast path for names without non-ASCII bytes. A query longer than 128 bytes takes a slower path that
@@ -18,38 +21,75 @@ func Filter(l *Listing, query []byte, dst []uint32) []uint32 {
 	if len(query) == 0 {
 		return append(dst, l.Order...)
 	}
-	if len(query) <= len(asciiQuery{}) && isASCII(query) {
-		var q asciiQuery
-		for i, c := range query {
-			q[i] = foldTable[c]
-		}
-		qb := q[:len(query)]
-		// Order may be a small chunk of a much larger arena; only inspect its names.
-		for _, idx := range l.Order {
-			e := &l.Entries[idx]
-			name := l.Names[e.NameOff : e.NameOff+uint32(e.NameLen)]
-			// A name with any non-ASCII byte takes the rune path: some runes
-			// fold to ASCII (U+212A KELVIN SIGN lowercases to 'k'), which a byte
-			// comparison cannot see.
-			var ok bool
-			if isASCII(name) {
-				ok = containsFoldASCII(name, qb)
-			} else {
-				ok = containsFoldRunes(name, qb)
-			}
-			if ok {
-				dst = append(dst, idx)
+	// A partial Order can be a tiny chunk of a large arena. Inspect only it;
+	// complete listings use a sequential pass followed by the permutation.
+	if len(l.Order) != len(l.Entries) || len(l.Entries) < 256 {
+		m := makeMatcher(query)
+		for _, i := range l.Order {
+			if m.matches(l.Name(int(i))) {
+				dst = append(dst, i)
 			}
 		}
 		return dst
 	}
-	for _, idx := range l.Order {
-		e := &l.Entries[idx]
-		if containsFoldRunes(l.Names[e.NameOff:e.NameOff+uint32(e.NameLen)], query) {
-			dst = append(dst, idx)
+	s := getSorter()
+	s.bits = FilterBits(l, query, s.bits, 0, len(l.Entries))
+	for _, i := range l.Order {
+		if s.bits[i/64]&(uint64(1)<<(i%64)) != 0 {
+			dst = append(dst, i)
+		}
+	}
+	putSorter(s)
+	return dst
+}
+
+// FilterBits sets the match bits for Entries[start:end] in storage order,
+// using Filter's case folding. Bits outside the range are unchanged. Pass the
+// returned slice again to reuse it; it grows to one bit per entry as needed.
+// Callers can split the scan across frames, then visit Order once to emit rows.
+func FilterBits(l *Listing, query []byte, dst []uint64, start, end int) []uint64 {
+	n := (len(l.Entries) + 63) / 64
+	if cap(dst) < n {
+		dst = make([]uint64, n)
+	}
+	dst = dst[:n]
+	m := makeMatcher(query)
+	for i := start; i < end; i++ {
+		bit := uint64(1) << uint(i%64)
+		if len(query) == 0 || m.matches(l.Name(i)) {
+			dst[i/64] |= bit
+		} else {
+			dst[i/64] &^= bit
 		}
 	}
 	return dst
+}
+
+type matcher struct {
+	query  []byte
+	folded asciiQuery
+	ascii  bool
+}
+
+func makeMatcher(query []byte) matcher {
+	m := matcher{query: query, ascii: len(query) <= len(asciiQuery{}) && isASCII(query)}
+	if m.ascii {
+		for i, c := range query {
+			m.folded[i] = foldTable[c]
+		}
+	}
+	return m
+}
+
+func (m *matcher) matches(name []byte) bool {
+	if m.ascii {
+		q := m.folded[:len(m.query)]
+		if isASCII(name) {
+			return containsFoldASCII(name, q)
+		}
+		return containsFoldRunes(name, q)
+	}
+	return containsFoldRunes(name, m.query)
 }
 
 type asciiQuery [128]byte

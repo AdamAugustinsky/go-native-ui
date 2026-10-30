@@ -18,8 +18,9 @@ func TestMemoryViewExcludesBenchmarkPrewarm(t *testing.T) {
 		return int64(after.HeapAlloc) - int64(before.HeapAlloc)
 	}
 	view, fixture := live(false), live(true)
-	// The ten-listing fixture must remain distinct, not merely relabelled.
-	if fixture-view < 20<<20 {
+	// Prewarming retains a bounded pool of spare listings, still distinct
+	// from the two visible listings. It no longer retains all ten peak buffers.
+	if fixture-view < 4<<20 {
 		t.Fatalf("view=%d fixture=%d: benchmark prewarm was not separated", view, fixture)
 	}
 }

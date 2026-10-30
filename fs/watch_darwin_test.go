@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -253,10 +254,11 @@ func TestKqueueReplaceEventOrder(t *testing.T) {
 
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	f := d.files["a"]
-	if f == nil {
+	idx := d.fileIndex([]byte("a"))
+	if idx < 0 || d.files[idx].fd < 0 {
 		t.Fatal(`no watch on "a" after its old file went away`)
 	}
+	f := &d.files[idx]
 	var fst, pst syscall.Stat_t
 	if err := syscall.Fstat(f.fd, &fst); err != nil {
 		t.Fatal(err)
@@ -269,5 +271,96 @@ func TestKqueueReplaceEventOrder(t *testing.T) {
 	}
 	if len(d.files) != 2 {
 		t.Errorf("%d file watches, want 2", len(d.files))
+	}
+}
+
+func TestServiceWatcherReusesListing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int64
+	s := newService(func() {}, func(path string, l *Listing) error { calls.Add(1); return listDir(path, l) }, newWatcher, defaultDebounce)
+	defer s.Close()
+	s.List(1, dir, SortName, false)
+	s.Watch(1, dir)
+	var held []Result
+	collect := func(want int64) {
+		waitFor(t, "listing and file watches", 2*time.Second, func() bool {
+			held = s.Poll(held)
+			s.mu.Lock()
+			w := s.w
+			s.mu.Unlock()
+			if w == nil {
+				return false
+			}
+			k := w.(*kqWatcher)
+			k.mu.Lock()
+			defer k.mu.Unlock()
+			return len(held) > 0 && int64(k.nfiles) == want
+		})
+		for _, r := range held {
+			if r.Kind != ResultListing || r.Listing.Err != nil {
+				t.Fatalf("unexpected result: %+v", r)
+			}
+			s.Release(r.Listing, r.Lease)
+		}
+		held = held[:0]
+	}
+	collect(1)
+	if calls.Load() != 1 {
+		t.Fatalf("initial listing ran %d times", calls.Load())
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	collect(2)
+	if calls.Load() != 2 {
+		t.Fatalf("structural change ran %d listings", calls.Load()-1)
+	}
+	s.mu.Lock()
+	k := s.w.(*kqWatcher)
+	s.mu.Unlock()
+	if k.lst.bufferBytes() != 0 {
+		t.Fatal("service watcher retained its own listing")
+	}
+}
+
+func TestKqueueFileRegistrationReusesScratch(t *testing.T) {
+	dir := tempDirWith(t, 40)
+	var l Listing
+	if err := ListDir(dir, &l); err != nil {
+		t.Fatal(err)
+	}
+	k, err := newKq(func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(k.done); k.close() }()
+	if err := k.addListingWatch(1, dir, 1); err != nil {
+		t.Fatal(err)
+	}
+	k.mu.Lock()
+	d := k.dirs[1]
+	register := func() {
+		for i := range d.files {
+			f := &d.files[i]
+			if f.fd >= 0 {
+				syscall.Close(f.fd)
+				delete(k.byFD, f.fd)
+				f.fd = -1
+				k.nfiles--
+				d.nfiles--
+			}
+		}
+		k.syncLocked(d, &l)
+	}
+	register()
+	register()
+	n := testing.AllocsPerRun(30, register)
+	files := d.nfiles
+	k.mu.Unlock()
+	if files != 40 || n != 0 {
+		t.Fatalf("registration: %d files, %v allocations", files, n)
 	}
 }
