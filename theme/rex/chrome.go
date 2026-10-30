@@ -62,14 +62,9 @@ func (ch *chrome) Background(c *ui.Context, r *theme.Resolved) {
 		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(keyBG, 1<<20), nil)
 		return
 	}
-	kg := theme.KeyGen{Base: keyBG}
-	f := &ch.fld
-	for i := 0; i < f.ncells; i++ {
-		cell := &f.cells[i]
-		theme.At(c, cell.r[0], cell.r[1], cell.r[2]-cell.r[0], cell.r[3]-cell.r[1])
-		c.NextBG4(cell.c[0], cell.c[1], cell.c[2], cell.c[3])
-		c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
-	}
+	w, h := c.Size()
+	theme.At(c, 0, 0, float32(w), float32(h))
+	c.Mesh(fl, keyBG, ch.fld.cells[:ch.fld.ncells])
 }
 
 // SurfaceShadow builds the two shadow layers of a pane: a tight one and an
@@ -102,15 +97,8 @@ func (ch *chrome) drawFill(c *ui.Context, r *theme.Resolved, s theme.Surface, kg
 	// the glass samples the background where the surface is in the window
 	win := [4]float32{d[0] + s.Origin[0], d[1] + s.Origin[1], d[2] + s.Origin[0], d[3] + s.Origin[1]}
 	m.Update(&ch.fld, win, r.Px.RadiusLarge)
-	to := r.Pal.Surface | 0xFF
-	for i := 0; i < m.n; i++ {
-		cell := &m.cells[i]
-		theme.At(c, cell.r[0]-win[0], cell.r[1]-win[1], cell.r[2]-cell.r[0], cell.r[3]-cell.r[1])
-		c.NextBG4(theme.MixRGBA(cell.c[0], to, ft), theme.MixRGBA(cell.c[1], to, ft),
-			theme.MixRGBA(cell.c[2], to, ft), theme.MixRGBA(cell.c[3], to, ft))
-		c.NextRadii(cell.radii[0], cell.radii[1], cell.radii[2], cell.radii[3])
-		c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
-	}
+	theme.At(c, 0, 0, d[2]-d[0], d[3]-d[1])
+	c.Mesh(fl, kg.Next(), m.fillQuads(ft, r.Pal.Surface|0xFF))
 }
 
 // BeginSurface opens the glass pane: it pushes the opacity, builds the clipping

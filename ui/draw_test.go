@@ -344,3 +344,87 @@ func (r *resettingShaper) Glyph(f text.FaceID, gid uint16, sub uint8) text.Glyph
 	}
 	return r.fakeShaper.Glyph(f, gid, sub)
 }
+
+func TestMeshOrderClipAndStyle(t *testing.T) {
+	h := newHarness(t, 200, 100)
+	src := []gpu.Quad{{Rect: [4]float32{1, 2, 21, 22}, Clip: [4]float32{2, 3, 18, 19},
+		FadeX: [2]float32{8, 18}, Color: [4]uint32{0x102030FF, 0x20304080, 0x30405040, 0x40506000},
+		Border: 2, BorderColor: 0x506070FF, Radii: [4]float32{2, 3, 4, 5}}}
+	original := src[0]
+	h.frame(func(c *Context) {
+		c.NextPos(10, 20)
+		c.NextSize(Px(60), Px(40))
+		c.NextFadeEnd(20)
+		c.Push(c.Box(FloatingX|FloatingY|Clip, "parent"))
+		c.NextPos(5, 6)
+		c.NextSize(Px(16), Px(15))
+		c.NextOpacity(.5)
+		c.NextTint(0xFFFFFFFF, 1)
+		c.Mesh(FloatingX|FloatingY|Clip, 11, src)
+		c.NextSize(Px(3), Px(3))
+		c.NextBG(0x010203FF)
+		c.Box(DrawBackground, "normal")
+		c.NextPos(1, 1)
+		c.NextSize(Px(2), Px(2))
+		c.NextBG(0x040506FF)
+		c.Box(DrawBackground|FloatingX|FloatingY, "later")
+		c.Pop()
+	})
+	qs := h.list.Quads
+	if len(qs) != 3 {
+		t.Fatalf("%d quads, want normal, mesh, later", len(qs))
+	}
+	if qs[0].Color[0] != 0x010203FF || qs[2].Color[0] != 0x040506FF {
+		t.Fatalf("floating order: %+v", qs)
+	}
+	want := original
+	want.Rect, want.Clip, want.FadeX = [4]float32{16, 28, 36, 48}, [4]float32{17, 29, 31, 41}, [2]float32{23, 33}
+	want.Color, want.BorderColor = [4]uint32{0xFFFFFF80, 0xFFFFFF40, 0xFFFFFF20, 0xFFFFFF00}, 0xFFFFFF80
+	if qs[1] != want {
+		t.Fatalf("mesh %+v, want %+v", qs[1], want)
+	}
+	if src[0] != original {
+		t.Fatal("emission changed the caller's mesh")
+	}
+	if len(h.c.mesh.recs) != 0 || h.c.mesh.recs[:cap(h.c.mesh.recs)][0].quads != nil {
+		t.Fatal("End retained the borrowed mesh")
+	}
+	h.frame(func(c *Context) { c.NextSize(Px(20), Px(20)); c.BoxKeyed(0, 11, nil) })
+	if len(h.list.Quads) != 0 {
+		t.Fatal("a reused box kept last frame's mesh")
+	}
+}
+
+func TestMeshCopiesSingleQuadsAndReleasesClippedMeshes(t *testing.T) {
+	h := newHarness(t, 200, 100)
+	src := []gpu.Quad{{Rect: [4]float32{0, 0, 10, 10}, Color: [4]uint32{0xFFFFFFFF}}}
+	build := func(c *Context) {
+		for i := 0; i < 64; i++ {
+			c.NextPos(float32(i), 0)
+			c.NextSize(Px(10), Px(10))
+			q := src[0]
+			q.Color[0] = uint32(i)
+			c.Quad(FloatingX|FloatingY, Key(i+1), q)
+		}
+		c.NextPos(300, 0)
+		c.NextSize(Px(20), Px(20))
+		c.Mesh(FloatingX|FloatingY|Clip, 100, src)
+	}
+	h.frame(build)
+	if len(h.list.Quads) != 64 {
+		t.Fatalf("%d quads, want 64", len(h.list.Quads))
+	}
+	for i, q := range h.list.Quads {
+		if q.Rect[0] != float32(i) || q.Color[0] != uint32(i) {
+			t.Fatalf("quad %d corrupted after growth: %+v", i, q)
+		}
+	}
+	for _, r := range h.c.mesh.recs[:cap(h.c.mesh.recs)] {
+		if r.quads != nil {
+			t.Fatal("clipped mesh retained")
+		}
+	}
+	if a := testing.AllocsPerRun(50, func() { h.frame(build) }); a != 0 {
+		t.Fatalf("warm meshes allocate %v times", a)
+	}
+}

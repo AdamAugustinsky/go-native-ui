@@ -205,6 +205,7 @@ type Context struct {
 	nextFade   float32    // the next box's children's fade at its end (NextFadeEnd)
 	emitFade   [2]float32 // while emitting: the fade of the boxes round this one (NextFadeEnd)
 	bd         backdrops  // this frame's backdrops and the next box's (NextBackdrop)
+	mesh       meshes     // this frame's borrowed quad meshes (mesh.go)
 
 	flowHidden bool // a flow hid children this layout (flow.go)
 
