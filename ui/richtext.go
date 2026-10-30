@@ -842,10 +842,8 @@ func (c *Context) richCursors(dst []CursorRegion, b *box, clip [4]float32) []Cur
 	if r == nil || !r.links || b.flags&Disabled != 0 || empty(clip) {
 		return dst
 	}
-	pv, ok := c.prevRich(b)
-	if !ok {
-		return dst
-	}
+	// emit collects the regions of the frame it draws: its cached view
+	pv := c.richView(b, r)
 	for i := range pv.Spans {
 		if pv.Spans[i].Flags&spanHit == 0 {
 			continue
