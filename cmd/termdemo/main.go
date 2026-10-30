@@ -14,6 +14,17 @@
 //	                              view offscreen in light and dark and write
 //	                              dir/<name>-light.png and dir/<name>-dark.png
 //
+// The program runs in a term/session session, in this process unless a flag
+// asks for the session daemon, which termdemo launches from its own
+// executable (-sessiond) when none is running:
+//
+//	termdemo -daemon              the program runs in the daemon
+//	termdemo -persist             …and outlives the window; it prints the session's ID
+//	termdemo -attach ID           a window on a daemon session again (its output replays)
+//	termdemo -sessions            list the daemon's sessions
+//	termdemo -kill ID             end one
+//	termdemo -shutdown            end them all, and the daemon
+//
 // The library is looked up beside the executable (Contents/Frameworks in the
 // bundle `gnui package` makes from gnui.json), then in GNUI_LIBGHOSTTY_VT;
 // `go run ./tools/libghostty` builds it into .cache/libghostty-vt.
@@ -29,13 +40,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"gonativeui/app"
 	"gonativeui/platform"
 	"gonativeui/rexui"
 	"gonativeui/term"
+	"gonativeui/term/session"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
@@ -48,7 +59,6 @@ type demo struct {
 	argv  []string
 	mode  theme.Preference
 	s     *rexui.TerminalState
-	p     *pty
 	title string
 	size  string // the grid's size, for the header
 
@@ -56,10 +66,15 @@ type demo struct {
 	win          *app.Win // nil offscreen
 	focus        bool
 
-	mu     sync.Mutex
-	in     []byte // read from the program, for the UI thread
-	exited bool
-	buf    []byte
+	sess session.Service
+	att  session.Attachment
+	out  termSink // the program's output, for the UI thread
+	buf  []byte
+
+	daemon  bool   // the session runs in the daemon
+	persist bool   // and outlives the window
+	attach  string // attach to this daemon session instead of starting one
+	dir     string // the daemon's directory
 
 	// -shot
 	shot  bool
@@ -76,7 +91,29 @@ func main() {
 	wait := flag.Duration("wait", 2500*time.Millisecond, "with -shot: how long the program runs before the picture")
 	keys := flag.String("keys", "", "with -shot: text typed into the program halfway through (Go escapes: \\r, \\x1b)")
 	size := flag.String("size", "1440x900", "with -shot: the picture's size in pixels (at scale 2)")
+	daemon := flag.Bool("daemon", false, "run the program in the session daemon, launched if it is not running")
+	persist := flag.Bool("persist", false, "the program outlives the window (implies -daemon)")
+	attach := flag.String("attach", "", "a window on this daemon session")
+	list := flag.Bool("sessions", false, "list the daemon's sessions")
+	kill := flag.String("kill", "", "end this daemon session")
+	shutdown := flag.Bool("shutdown", false, "end the daemon and its sessions")
+	sessiond := flag.Bool("sessiond", false, "be the session daemon (what -daemon launches)")
+	dir := flag.String("session-dir", session.DefaultDir("termdemo"), "the session daemon's directory")
 	flag.Parse()
+	if *sessiond {
+		if err := session.RunDaemon(*dir, session.ServeOptions{IdleExit: time.Minute}); err != nil {
+			fmt.Fprintln(os.Stderr, "termdemo:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *list || *kill != "" || *shutdown {
+		if err := control(*dir, *list, *kill, *shutdown); err != nil {
+			fmt.Fprintln(os.Stderr, "termdemo:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	argv := flag.Args()
 	if len(argv) == 0 {
 		sh := os.Getenv("SHELL")
@@ -112,17 +149,50 @@ func main() {
 		}
 		return
 	}
-	d := &demo{argv: argv, transparency: *transparency}
+	d := &demo{argv: argv, transparency: *transparency, persist: *persist, attach: *attach, dir: *dir}
+	d.daemon = *daemon || *persist || *attach != ""
 	switch *mode {
 	case "light":
 		d.mode = theme.ForceLight
 	case "dark":
 		d.mode = theme.ForceDark
 	}
-	if err := app.Run(app.Config{Title: "Terminal", Width: 820, Height: 520, MinWidth: 320, Backdrop: platform.BackdropGlass}, d); err != nil {
+	err := app.Run(app.Config{Title: "Terminal", Width: 820, Height: 520, MinWidth: 320, Backdrop: platform.BackdropGlass}, d)
+	d.close()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "termdemo:", err)
 		os.Exit(1)
 	}
+}
+
+// control runs -sessions, -kill and -shutdown against a running daemon.
+func control(dir string, list bool, kill string, shutdown bool) error {
+	c, err := session.Dial(dir)
+	if err != nil {
+		return fmt.Errorf("no session daemon at %s: %w", dir, err)
+	}
+	defer c.Close()
+	switch {
+	case list:
+		l, err := c.List()
+		if err != nil {
+			return err
+		}
+		for _, in := range l {
+			state := "detached"
+			switch {
+			case in.Exited:
+				state = fmt.Sprintf("exited %d", in.ExitCode)
+			case in.Attached:
+				state = "attached"
+			}
+			fmt.Printf("%s\t%d\t%s\t%s\n", in.ID, in.Pid, state, strings.Join(in.Argv, " "))
+		}
+		return nil
+	case kill != "":
+		return c.Kill(kill)
+	}
+	return c.Shutdown()
 }
 
 // Init implements app.Initer: it makes the terminal and starts the program.
@@ -136,33 +206,66 @@ func (d *demo) Init(a *app.App) error {
 		return err
 	}
 	d.s = s
-	cols, rows := s.T.Size()
-	p, err := startPTY(d.argv, cols, rows)
+	return d.start()
+}
+
+// start runs the program in a session, or finds the session to attach to,
+// and attaches the terminal to it.
+func (d *demo) start() error {
+	cols, rows := d.s.T.Size()
+	sz := session.Size{Cols: cols, Rows: rows}
+	if d.daemon {
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		d.sess, err = session.DialOrLaunch(d.dir, []string{exe, "-sessiond", "-session-dir", d.dir}, 5*time.Second)
+		if err != nil {
+			return err
+		}
+	} else {
+		d.sess = session.NewLocal(session.Config{})
+	}
+	id := d.attach
+	if id == "" {
+		in, err := d.sess.Create(session.Options{Argv: d.argv, Size: sz, Persist: d.persist,
+			Env: []string{"TERM=xterm-256color", "COLORTERM=truecolor", "TERM_PROGRAM=termdemo"}})
+		if err != nil {
+			return err
+		}
+		id = in.ID
+		if d.persist {
+			fmt.Fprintf(os.Stderr, "termdemo: session %s; termdemo -attach %s opens it again\n", id, id)
+		}
+	} else if l, err := d.sess.List(); err == nil {
+		for _, in := range l {
+			if in.ID == id {
+				d.argv = in.Argv
+			}
+		}
+	}
+	if d.win != nil {
+		d.out.wake = d.win.Wake
+	}
+	att, err := d.sess.Attach(id, &d.out, sz)
 	if err != nil {
 		return err
 	}
-	d.p = p
-	go d.read()
+	d.att = att
+	if d.win != nil {
+		go func() { <-att.Done(); d.win.Wake() }()
+	}
 	return nil
 }
 
-// read copies the program's output for the UI thread and wakes it.
-func (d *demo) read() {
-	b := make([]byte, 64<<10)
-	for {
-		n, err := d.p.f.Read(b)
-		d.mu.Lock()
-		d.in = append(d.in, b[:n]...)
-		if err != nil {
-			d.exited = true
-		}
-		d.mu.Unlock()
-		if d.win != nil {
-			d.win.Wake()
-		}
-		if err != nil {
-			return
-		}
+// close ends the window's hold on the session: a persistent one goes on in
+// the daemon, any other is hung up.
+func (d *demo) close() {
+	if d.att != nil {
+		d.att.Close()
+	}
+	if d.sess != nil {
+		d.sess.Close()
 	}
 }
 
@@ -200,7 +303,7 @@ func (d *demo) Build(c *ui.Context) {
 	k.End()
 	if sig.Resized {
 		cw, ch := d.s.CellSize()
-		d.p.resize(sig.Cols, sig.Rows, int(cw)*sig.Cols, int(ch)*sig.Rows)
+		d.att.Resize(session.Size{Cols: sig.Cols, Rows: sig.Rows, Width: int(cw) * sig.Cols, Height: int(ch) * sig.Rows})
 		d.size = fmt.Sprintf("%d × %d", sig.Cols, sig.Rows)
 	}
 	if len(sig.Link) > 0 {
@@ -208,7 +311,7 @@ func (d *demo) Build(c *ui.Context) {
 	}
 	if sig.Input {
 		d.buf = d.s.TakeInput(d.buf[:0])
-		d.p.f.Write(d.buf)
+		d.att.Write(d.buf)
 	}
 	if t := d.s.T.Title(); t != d.title && d.win != nil {
 		d.title = t
@@ -234,15 +337,16 @@ func boolTo1(b bool) float32 {
 	return 0
 }
 
-// take feeds what the program wrote since the last frame.
+// take feeds what the program wrote since the last frame, and reports
+// whether it has exited (its last output is in by then).
 func (d *demo) take() (exited bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.in) > 0 {
-		d.s.Feed(d.in)
-		d.in = d.in[:0]
+	select {
+	case <-d.att.Done():
+		exited = true
+	default:
 	}
-	return d.exited
+	d.out.take(d.s.Feed)
+	return exited
 }
 
 // Script implements app.Scripter for -shot: frames are spaced in real time
@@ -251,7 +355,7 @@ func (d *demo) Script(frame int, in *ui.Input) bool {
 	in.Inside, in.Focused = true, true
 	time.Sleep(16 * time.Millisecond)
 	if frame == d.total/2 && len(d.keys) > 0 {
-		d.p.f.Write(d.keys)
+		d.att.Write(d.keys)
 	}
 	return frame < d.total
 }
@@ -259,11 +363,7 @@ func (d *demo) Script(frame int, in *ui.Input) bool {
 // shoot runs argv for wait and writes the view offscreen as a PNG.
 func shoot(argv []string, pref theme.Preference, path string, w, h int, wait time.Duration, keys []byte) error {
 	d := &demo{argv: argv, mode: pref, shot: true, keys: keys, total: int(wait / (16 * time.Millisecond))}
-	defer func() {
-		if d.p != nil {
-			d.p.close()
-		}
-	}()
+	defer d.close()
 	img, err := app.RenderOffscreen(app.Config{}, w, h, 2, d, d.total+1)
 	if err != nil {
 		return err
