@@ -8,12 +8,16 @@ package core
 //
 // Any uint64 is a valid key, including 0.
 type Table struct {
-	keys  []uint64
-	vals  []uint32
-	used  []bool
+	slots []tableSlot
 	n     int
 	limit int // maximum entries before growth
 	shift uint
+}
+
+// val is the stored value plus one. The extra bit keeps MaxUint32 usable.
+type tableSlot struct {
+	key uint64
+	val uint64
 }
 
 const tableLoad = 7 // out of 10
@@ -32,16 +36,14 @@ func (t *Table) resize(capacity int) {
 		slots *= 2
 		bits++
 	}
-	oldK, oldV, oldU := t.keys, t.vals, t.used
-	t.keys = make([]uint64, slots)
-	t.vals = make([]uint32, slots)
-	t.used = make([]bool, slots)
+	old := t.slots
+	t.slots = make([]tableSlot, slots)
 	t.limit = slots * tableLoad / 10
 	t.shift = 64 - bits
 	t.n = 0
-	for i, u := range oldU {
-		if u {
-			t.insert(oldK[i], oldV[i])
+	for _, s := range old {
+		if s.val != 0 {
+			t.insert(s.key, uint32(s.val-1))
 		}
 	}
 }
@@ -50,16 +52,16 @@ func (t *Table) slot(k uint64) int { return int((k * 0x9E3779B97F4A7C15) >> t.sh
 
 // insert assumes there is room.
 func (t *Table) insert(k uint64, v uint32) {
-	mask := len(t.keys) - 1
+	mask := len(t.slots) - 1
 	i := t.slot(k)
-	for t.used[i] {
-		if t.keys[i] == k {
-			t.vals[i] = v
+	for t.slots[i].val != 0 {
+		if t.slots[i].key == k {
+			t.slots[i].val = uint64(v) + 1
 			return
 		}
 		i = (i + 1) & mask
 	}
-	t.keys[i], t.vals[i], t.used[i] = k, v, true
+	t.slots[i] = tableSlot{k, uint64(v) + 1}
 	t.n++
 }
 
@@ -76,18 +78,26 @@ func (t *Table) Reserve(n int) {
 	}
 }
 
+// Trim releases excess capacity, keeping every entry and room for n entries.
+// It allocates only when n and Len are below a quarter of the capacity.
+func (t *Table) Trim(n int) {
+	if n = max(n, t.n); n < t.limit/4 {
+		t.resize(n)
+	}
+}
+
 // Clear removes every entry and keeps the capacity.
 func (t *Table) Clear() {
-	clear(t.used)
+	clear(t.slots)
 	t.n = 0
 }
 
 // Get returns the value stored for k.
 func (t *Table) Get(k uint64) (uint32, bool) {
-	mask := len(t.keys) - 1
-	for i := t.slot(k); t.used[i]; i = (i + 1) & mask {
-		if t.keys[i] == k {
-			return t.vals[i], true
+	mask := len(t.slots) - 1
+	for i := t.slot(k); t.slots[i].val != 0; i = (i + 1) & mask {
+		if t.slots[i].key == k {
+			return uint32(t.slots[i].val - 1), true
 		}
 	}
 	return 0, false
@@ -96,10 +106,10 @@ func (t *Table) Get(k uint64) (uint32, bool) {
 // Put stores v for k. It reports whether the table had to grow (which
 // allocates); a table pre-sized with NewTable or Reserve never does.
 func (t *Table) Put(k uint64, v uint32) (grew bool) {
-	mask := len(t.keys) - 1
-	for i := t.slot(k); t.used[i]; i = (i + 1) & mask {
-		if t.keys[i] == k {
-			t.vals[i] = v
+	mask := len(t.slots) - 1
+	for i := t.slot(k); t.slots[i].val != 0; i = (i + 1) & mask {
+		if t.slots[i].key == k {
+			t.slots[i].val = uint64(v) + 1
 			return false
 		}
 	}
@@ -113,13 +123,13 @@ func (t *Table) Put(k uint64, v uint32) (grew bool) {
 
 // Delete removes k and reports whether it was present.
 func (t *Table) Delete(k uint64) bool {
-	mask := len(t.keys) - 1
+	mask := len(t.slots) - 1
 	i := t.slot(k)
 	for ; ; i = (i + 1) & mask {
-		if !t.used[i] {
+		if t.slots[i].val == 0 {
 			return false
 		}
-		if t.keys[i] == k {
+		if t.slots[i].key == k {
 			break
 		}
 	}
@@ -129,12 +139,12 @@ func (t *Table) Delete(k uint64) bool {
 		j := i
 		for {
 			j = (j + 1) & mask
-			if !t.used[j] {
-				t.used[i] = false
+			if t.slots[j].val == 0 {
+				t.slots[i] = tableSlot{}
 				t.n--
 				return true
 			}
-			h := t.slot(t.keys[j])
+			h := t.slot(t.slots[j].key)
 			var between bool
 			if i <= j {
 				between = i < h && h <= j
@@ -145,7 +155,7 @@ func (t *Table) Delete(k uint64) bool {
 				break
 			}
 		}
-		t.keys[i], t.vals[i] = t.keys[j], t.vals[j]
+		t.slots[i] = t.slots[j]
 		i = j
 	}
 }

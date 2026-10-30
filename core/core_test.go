@@ -95,6 +95,50 @@ func TestFrame(t *testing.T) {
 	}
 }
 
+func TestFrameResetAndArenaTrim(t *testing.T) {
+	var f Frame
+	f.Reset()
+	f.Cur().Reserve(1 << 20)
+	s := f.Cur().AppendString("kept")
+	f.Cur().Trim(1024)
+	if f.Cur().Cap() != 1024 || f.Cur().String(s) != "kept" || f.a[1].Cap() != 0 {
+		t.Fatal("trim lost bytes or single-frame reset allocated a previous arena")
+	}
+	if n := testing.AllocsPerRun(100, func() { f.Reset(); f.Cur().AppendString("frame") }); n != 0 {
+		t.Fatalf("single-arena reset allocated %g times", n)
+	}
+}
+
+func TestTableTrimAndAllValues(t *testing.T) {
+	tb := NewTable(50000)
+	for i, v := range []uint32{0, 1, 1<<32 - 1} {
+		tb.Put(uint64(i), v)
+	}
+	tb.Trim(16)
+	if tb.Cap() > 32 {
+		t.Fatal("table retained peak capacity")
+	}
+	for i, want := range []uint32{0, 1, 1<<32 - 1} {
+		if got, ok := tb.Get(uint64(i)); !ok || got != want {
+			t.Fatalf("value %d: got %d, %v", want, got, ok)
+		}
+	}
+}
+
+func BenchmarkTableFrame(b *testing.B) {
+	tb := NewTable(4096)
+	for i := uint64(0); i < 4096; i++ {
+		tb.Put(i*0x9e3779b97f4a7c15, uint32(i))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		k := uint64(i&4095) * 0x9e3779b97f4a7c15
+		v, _ := tb.Get(k)
+		tb.Put(k, v+1)
+	}
+}
+
 // A peak frame grows only the arena of its turn; the next frame gives the
 // other one the same room, so the same peak on the other's turn does not
 // allocate, and repeated peaks do not grow either arena further.
