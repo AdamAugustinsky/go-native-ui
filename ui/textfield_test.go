@@ -834,3 +834,30 @@ func TestTextFieldZeroAllocs(t *testing.T) {
 		t.Errorf("%v allocations per frame while typing, moving and selecting", n)
 	}
 }
+
+func TestTextFieldCaretIndexGeneration(t *testing.T) {
+	r := newRig(t, true)
+	r.buf.SetString("office e\u0301 日本")
+	r.frame()
+	sh := r.c.sh.(*editShaper)
+	ref := r.c.fieldRun
+	// Reuse the same run handle with different geometry, as cache eviction
+	// and scale changes may do. A generation change must rebuild the index.
+	run := &sh.slots[ref-1]
+	for i := range run.x[:run.n] {
+		run.x[i] *= 2
+	}
+	run.adv *= 2
+	sh.gen++
+	r.frame()
+	for off := 0; off <= r.buf.Len(); off++ {
+		if got, want := r.c.fieldCarets.CaretX(off), sh.Run(ref).CaretX(off); got != want {
+			t.Fatalf("after run reuse, caret %d = %g, want %g", off, got, want)
+		}
+	}
+	r.buf.SetCaret(3)
+	r.frame()
+	if got, want := r.c.imeRect[0], float32(rigPad)+sh.Run(ref).CaretX(3)-r.buf.scroll; got != want {
+		t.Fatalf("moving the caret: IME x %g, want %g", got, want)
+	}
+}

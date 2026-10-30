@@ -461,26 +461,35 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		disp = c.fmtA.Tail(start)
 	}
 	pos := maskedOff(secure, buf.b, lo)
-	v := c.sh.Run(c.sh.Shape(font, disp))
+	run := c.sh.Shape(font, disp)
+	v := c.sh.Run(run)
 	textW := v.Advance
 	caretOff := pos
 	if composing {
 		caretOff = pos + maskedOff(secure, preText, in.PreeditSel[0])
 	}
-	cx := v.CaretX(caretOff)
+	var cx float32
+	if focused {
+		gen := c.sh.RunGeneration()
+		if run == 0 || c.fieldRun != run || c.fieldRunGen != gen {
+			c.fieldCarets.Build(v)
+			c.fieldRun, c.fieldRunGen = run, gen
+		}
+		cx = c.fieldCarets.CaretX(caretOff)
+	}
 	var sx0, sx1, px0, px1, ph0, ph1 float32
 	hasSel := active && !composing && buf.HasSelection()
 	if hasSel {
 		lo, hi := buf.Selection()
-		sx0, sx1 = v.CaretX(maskedOff(secure, buf.b, lo)), v.CaretX(maskedOff(secure, buf.b, hi))
+		sx0, sx1 = c.fieldCarets.CaretX(maskedOff(secure, buf.b, lo)), c.fieldCarets.CaretX(maskedOff(secure, buf.b, hi))
 		if sx0 > sx1 {
 			sx0, sx1 = sx1, sx0
 		}
 	}
 	if composing {
 		ps0, ps1 := in.PreeditSel[0], in.PreeditSel[0]+in.PreeditSel[1]
-		px0, px1 = v.CaretX(pos), v.CaretX(pos+maskedOff(secure, preText, len(preText)))
-		ph0, ph1 = v.CaretX(pos+maskedOff(secure, preText, ps0)), v.CaretX(pos+maskedOff(secure, preText, ps1))
+		px0, px1 = c.fieldCarets.CaretX(pos), c.fieldCarets.CaretX(pos+maskedOff(secure, preText, len(preText)))
+		ph0, ph1 = c.fieldCarets.CaretX(pos+maskedOff(secure, preText, ps0)), c.fieldCarets.CaretX(pos+maskedOff(secure, preText, ps1))
 	}
 
 	// Scroll to keep the caret in view.

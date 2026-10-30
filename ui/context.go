@@ -150,7 +150,10 @@ type Context struct {
 	ap  appearance  // system appearance in, the shown mode out (appearance.go)
 	win windowState // the window's decorations and buttons in, requests out (window.go)
 
-	sh Shaper
+	sh          Shaper
+	fieldCarets text.CaretIndex // the focused field's geometry, independent of run-cache storage
+	fieldRun    text.RunRef
+	fieldRunGen uint32
 
 	boxes     []box
 	pool      *core.Pool
