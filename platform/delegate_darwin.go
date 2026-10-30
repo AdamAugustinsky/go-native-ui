@@ -11,14 +11,14 @@ import (
 // occlusion and live-resize notifications.
 
 var (
-	selShouldClose      = objc.Sel("windowShouldClose:")
-	selDidResize        = objc.Sel("windowDidResize:")
-	selDidChangeBacking = objc.Sel("windowDidChangeBackingProperties:")
-	selDidBecomeKey     = objc.Sel("windowDidBecomeKey:")
-	selDidResignKey     = objc.Sel("windowDidResignKey:")
-	selDidChangeOcclus  = objc.Sel("windowDidChangeOcclusionState:")
-	selWillStartLive    = objc.Sel("windowWillStartLiveResize:")
-	selDidEndLive       = objc.Sel("windowDidEndLiveResize:")
+	selShouldClose      = objc.SelZ("windowShouldClose:\x00")
+	selDidResize        = objc.SelZ("windowDidResize:\x00")
+	selDidChangeBacking = objc.SelZ("windowDidChangeBackingProperties:\x00")
+	selDidBecomeKey     = objc.SelZ("windowDidBecomeKey:\x00")
+	selDidResignKey     = objc.SelZ("windowDidResignKey:\x00")
+	selDidChangeOcclus  = objc.SelZ("windowDidChangeOcclusionState:\x00")
+	selWillStartLive    = objc.SelZ("windowWillStartLiveResize:\x00")
+	selDidEndLive       = objc.SelZ("windowDidEndLiveResize:\x00")
 )
 
 func registerWindowDelegate(d *objc.ClassDef) {

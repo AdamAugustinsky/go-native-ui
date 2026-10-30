@@ -14,16 +14,16 @@ import (
 // text) is in textinput_darwin.go.
 
 var (
-	selKeyCode          = objc.Sel("keyCode")
-	selIsARepeat        = objc.Sel("isARepeat")
-	selArrayWithObject  = objc.Sel("arrayWithObject:")
-	selInterpretKeys    = objc.Sel("interpretKeyEvents:")
-	selAcceptsFirstResp = objc.Sel("acceptsFirstResponder")
-	selKeyDown          = objc.Sel("keyDown:")
-	selKeyUp            = objc.Sel("keyUp:")
-	selFlagsChanged     = objc.Sel("flagsChanged:")
-	selPerformKeyEquiv  = objc.Sel("performKeyEquivalent:")
-	selCharsNoMods      = objc.Sel("charactersIgnoringModifiers")
+	selKeyCode          = objc.SelZ("keyCode\x00")
+	selIsARepeat        = objc.SelZ("isARepeat\x00")
+	selArrayWithObject  = objc.SelZ("arrayWithObject:\x00")
+	selInterpretKeys    = objc.SelZ("interpretKeyEvents:\x00")
+	selAcceptsFirstResp = objc.SelZ("acceptsFirstResponder\x00")
+	selKeyDown          = objc.SelZ("keyDown:\x00")
+	selKeyUp            = objc.SelZ("keyUp:\x00")
+	selFlagsChanged     = objc.SelZ("flagsChanged:\x00")
+	selPerformKeyEquiv  = objc.SelZ("performKeyEquivalent:\x00")
+	selCharsNoMods      = objc.SelZ("charactersIgnoringModifiers\x00")
 )
 
 func registerViewKeyboard(v *objc.ClassDef) {

@@ -42,11 +42,12 @@ import (
 var (
 	fakeOnce sync.Once
 	fakeInfo struct {
-		pb     objc.ID
-		x, y   float64
-		mask   uintptr
-		seq    int64
-		source objc.ID
+		pb        objc.ID
+		pbQueries int
+		x, y      float64
+		mask      uintptr
+		seq       int64
+		source    objc.ID
 	}
 	fakeInfoObj objc.ID
 
@@ -64,7 +65,7 @@ func fakeInfoInit() {
 	fakeOnce.Do(func() {
 		def := objc.Define("GNUIFakeDragInfo", objc.Cls("NSObject"), nil)
 		def.Method(selDragLocation, "{CGPoint=dd}@:", func(c *ffi.CB) { c.RetF64(0, fakeInfo.x); c.RetF64(1, fakeInfo.y) })
-		def.Method(selDragPasteboard, "@@:", func(c *ffi.CB) { c.Ret(uintptr(fakeInfo.pb)) })
+		def.Method(selDragPasteboard, "@@:", func(c *ffi.CB) { fakeInfo.pbQueries++; c.Ret(uintptr(fakeInfo.pb)) })
 		def.Method(selDragSourceMask, "Q@:", func(c *ffi.CB) { c.Ret(fakeInfo.mask) })
 		def.Method(selDragSeq, "q@:", func(c *ffi.CB) { c.Ret(uintptr(fakeInfo.seq)) })
 		def.Method(selDragSource, "@@:", func(c *ffi.CB) { c.Ret(uintptr(fakeInfo.source)) })
@@ -2343,4 +2344,30 @@ func TestReceptionsAreBounded(t *testing.T) {
 		t.Error("closing the window left the receptions in place")
 	}
 	r.w.closeDrag()
+}
+
+func TestDragCachesTypesBySequence(t *testing.T) {
+	r := newDragRig(t)
+	r.w.SetDropKinds(DragText | DragFiles)
+	r.answer(DragAnswer{Accept: DragText | DragFiles, Op: DragOpCopy})
+	r.put(map[string][]byte{"public.utf8-plain-text": []byte("hello")})
+	r.send(selDragEntered)
+	queries := fakeInfo.pbQueries
+	r.send(selDragUpdated)
+	r.send(selDragUpdated)
+	if fakeInfo.pbQueries != queries {
+		t.Error("drag update re-read the pasteboard")
+	}
+	// A new sequence refreshes metadata even if AppKit supplies updated first.
+	r.put(map[string][]byte{"public.file-url": []byte("file:///tmp/item")})
+	fakeInfo.seq++
+	r.send(selDragUpdated)
+	if fakeInfo.pbQueries != queries+1 || r.w.drag.offered&DragFiles == 0 {
+		t.Error("new sequence kept old offered kinds")
+	}
+	queries = fakeInfo.pbQueries
+	r.send(selDragEntered)
+	if fakeInfo.pbQueries != queries+1 {
+		t.Error("entry did not refresh its metadata")
+	}
 }

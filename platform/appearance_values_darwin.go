@@ -68,13 +68,13 @@ func svSetup() {
 	}
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
-	selCurrentAppearance, selSetCurrentApp = objc.Sel("currentAppearance"), objc.Sel("setCurrentAppearance:")
-	selAlpha, selObjectAtIndex, selCount = objc.Sel("alphaComponent"), objc.Sel("objectAtIndex:"), objc.Sel("count")
-	selReduceMotion = objc.Sel("accessibilityDisplayShouldReduceMotion")
-	selReduceTransparency = objc.Sel("accessibilityDisplayShouldReduceTransparency")
-	selIncreaseContrast = objc.Sel("accessibilityDisplayShouldIncreaseContrast")
-	selScrollerStyle = objc.Sel("preferredScrollerStyle")
-	selRespondsToSelector = objc.Sel("respondsToSelector:")
+	selCurrentAppearance, selSetCurrentApp = objc.SelZ("currentAppearance\x00"), objc.SelZ("setCurrentAppearance:\x00")
+	selAlpha, selObjectAtIndex, selCount = objc.SelZ("alphaComponent\x00"), objc.SelZ("objectAtIndex:\x00"), objc.SelZ("count\x00")
+	selReduceMotion = objc.SelZ("accessibilityDisplayShouldReduceMotion\x00")
+	selReduceTransparency = objc.SelZ("accessibilityDisplayShouldReduceTransparency\x00")
+	selIncreaseContrast = objc.SelZ("accessibilityDisplayShouldIncreaseContrast\x00")
+	selScrollerStyle = objc.SelZ("preferredScrollerStyle\x00")
+	selRespondsToSelector = objc.SelZ("respondsToSelector:\x00")
 	for i, n := range SystemColorNames {
 		svSel[i] = objc.Sel(n)
 		svHas[i] = objc.SendBool1(apClsColor, selRespondsToSelector, uintptr(svSel[i]))
@@ -86,9 +86,9 @@ func svSetup() {
 			}
 		}
 	}
-	svView = objc.Send(objc.Send(objc.Cls("NSView"), selAlloc), objc.Sel("init"))
-	selSetViewAppearance = objc.Sel("setAppearance:")
-	svWorkspace = objc.Retain(objc.Send(objc.Cls("NSWorkspace"), objc.Sel("sharedWorkspace")))
+	svView = objc.Send(objc.Send(objc.Cls("NSView"), selAlloc), objc.SelZ("init\x00"))
+	selSetViewAppearance = objc.SelZ("setAppearance:\x00")
+	svWorkspace = objc.Retain(objc.Send(objc.Cls("NSWorkspace"), objc.SelZ("sharedWorkspace\x00")))
 	svClsScroller = objc.Cls("NSScroller")
 }
 

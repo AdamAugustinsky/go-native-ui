@@ -21,10 +21,10 @@ import "gonativeui/internal/objc"
 // app is left as it is. Registered, not set: nothing is written to the app's
 // preferences. Main thread, before finishLaunching.
 func skipStateRestoration() {
-	if objc.Send(objc.Send(objc.Cls("NSBundle"), objc.Sel("mainBundle")), objc.Sel("bundleIdentifier")) != 0 {
+	if objc.Send(objc.Send(objc.Cls("NSBundle"), objc.SelZ("mainBundle\x00")), objc.SelZ("bundleIdentifier\x00")) != 0 {
 		return
 	}
-	yes := objc.Send1(objc.Cls("NSNumber"), objc.Sel("numberWithBool:"), 1)
-	defaults := objc.Send2(objc.Cls("NSDictionary"), objc.Sel("dictionaryWithObject:forKey:"), uintptr(yes), uintptr(objc.Str("ApplePersistenceIgnoreState")))
-	objc.Send1(objc.Send(objc.Cls("NSUserDefaults"), objc.Sel("standardUserDefaults")), objc.Sel("registerDefaults:"), uintptr(defaults))
+	yes := objc.Send1(objc.Cls("NSNumber"), objc.SelZ("numberWithBool:\x00"), 1)
+	defaults := objc.Send2(objc.Cls("NSDictionary"), objc.SelZ("dictionaryWithObject:forKey:\x00"), uintptr(yes), uintptr(objc.Str("ApplePersistenceIgnoreState")))
+	objc.Send1(objc.Send(objc.Cls("NSUserDefaults"), objc.SelZ("standardUserDefaults\x00")), objc.SelZ("registerDefaults:\x00"), uintptr(defaults))
 }

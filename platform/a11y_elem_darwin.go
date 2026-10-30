@@ -107,7 +107,7 @@ func axResolve() {
 	for i := range axElementMethods {
 		axElementMethods[i].s = objc.Sel(axElementMethods[i].sel)
 	}
-	selAXFrameForRange = objc.Sel("accessibilityFrameForRange:")
+	selAXFrameForRange = objc.SelZ("accessibilityFrameForRange:\x00")
 }
 
 // meets reports whether node n meets requirement r.

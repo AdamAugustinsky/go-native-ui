@@ -84,20 +84,20 @@ func apSetup() {
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
 
-	selEffectiveAppearance, selBestMatch = objc.Sel("effectiveAppearance"), objc.Sel("bestMatchFromAppearancesWithNames:")
-	selIsEqualString = objc.Sel("isEqualToString:")
-	selControlAccent, selUsingSpace, selSRGBSpace = objc.Sel("controlAccentColor"), objc.Sel("colorUsingColorSpace:"), objc.Sel("sRGBColorSpace")
-	selRed, selGreen, selBlue = objc.Sel("redComponent"), objc.Sel("greenComponent"), objc.Sel("blueComponent")
-	selSetAppearance, selAppearance, selAppearanceNamed = objc.Sel("setAppearance:"), objc.Sel("appearance"), objc.Sel("appearanceNamed:")
-	selAppearanceChanged = objc.Sel("gnuiAppearanceChanged:")
-	selObserveValue = objc.Sel("observeValueForKeyPath:ofObject:change:context:")
+	selEffectiveAppearance, selBestMatch = objc.SelZ("effectiveAppearance\x00"), objc.SelZ("bestMatchFromAppearancesWithNames:\x00")
+	selIsEqualString = objc.SelZ("isEqualToString:\x00")
+	selControlAccent, selUsingSpace, selSRGBSpace = objc.SelZ("controlAccentColor\x00"), objc.SelZ("colorUsingColorSpace:\x00"), objc.SelZ("sRGBColorSpace\x00")
+	selRed, selGreen, selBlue = objc.SelZ("redComponent\x00"), objc.SelZ("greenComponent\x00"), objc.SelZ("blueComponent\x00")
+	selSetAppearance, selAppearance, selAppearanceNamed = objc.SelZ("setAppearance:\x00"), objc.SelZ("appearance\x00"), objc.SelZ("appearanceNamed:\x00")
+	selAppearanceChanged = objc.SelZ("gnuiAppearanceChanged:\x00")
+	selObserveValue = objc.SelZ("observeValueForKeyPath:ofObject:change:context:\x00")
 
 	apClsAppearance, apClsColor, apClsSpace = objc.Cls("NSAppearance"), objc.Cls("NSColor"), objc.Cls("NSColorSpace")
 	apAquaName = objc.Retain(stringConstant(appKit, "NSAppearanceNameAqua"))
 	apDarkName = objc.Retain(stringConstant(appKit, "NSAppearanceNameDarkAqua"))
 	if apAquaName != 0 && apDarkName != 0 {
 		apNameArr = [2]objc.ID{apAquaName, apDarkName}
-		apNames = objc.Retain(objc.Send2(objc.Cls("NSArray"), objc.Sel("arrayWithObjects:count:"), uintptr(unsafe.Pointer(&apNameArr)), 2))
+		apNames = objc.Retain(objc.Send2(objc.Cls("NSArray"), objc.SelZ("arrayWithObjects:count:\x00"), uintptr(unsafe.Pointer(&apNameArr)), 2))
 	}
 	apApp = objc.Send(objc.Cls("NSApplication"), selSharedApplication)
 
@@ -105,13 +105,13 @@ func apSetup() {
 	changed := func(*ffi.CB) { apChanged() }
 	observer.Method(selAppearanceChanged, "v@:@", changed)
 	observer.Method(selObserveValue, "v@:@@@^v", changed)
-	apObserver = objc.Send(objc.Send(observer.Register(), selAlloc), objc.Sel("init"))
+	apObserver = objc.Send(objc.Send(observer.Register(), selAlloc), objc.SelZ("init\x00"))
 	if apApp != 0 {
-		objc.Send4(apApp, objc.Sel("addObserver:forKeyPath:options:context:"), uintptr(apObserver), uintptr(objc.Str("effectiveAppearance")), 0, 0)
+		objc.Send4(apApp, objc.SelZ("addObserver:forKeyPath:options:context:\x00"), uintptr(apObserver), uintptr(objc.Str("effectiveAppearance")), 0, 0)
 	}
 	// Arguments are evaluated before the call is assembled: they share objc.F.
-	selAddObserver := objc.Sel("addObserver:selector:name:object:")
-	center := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+	selAddObserver := objc.SelZ("addObserver:selector:name:object:\x00")
+	center := objc.Send(objc.Cls("NSNotificationCenter"), objc.SelZ("defaultCenter\x00"))
 	observe := func(center, name objc.ID) {
 		if center == 0 || name == 0 {
 			return
@@ -124,13 +124,13 @@ func apSetup() {
 	// the accessibility display options; the latter are posted on the
 	// workspace's own centre.
 	observe(center, stringConstant(appKit, "NSPreferredScrollerStyleDidChangeNotification"))
-	if ws := objc.Send(objc.Cls("NSWorkspace"), objc.Sel("sharedWorkspace")); ws != 0 {
-		observe(objc.Send(ws, objc.Sel("notificationCenter")), stringConstant(appKit, "NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"))
+	if ws := objc.Send(objc.Cls("NSWorkspace"), objc.SelZ("sharedWorkspace\x00")); ws != 0 {
+		observe(objc.Send(ws, objc.SelZ("notificationCenter\x00")), stringConstant(appKit, "NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"))
 	}
 	// The distributed center delivers while the app is in the background too
 	// (NSNotificationSuspensionBehaviorDeliverImmediately).
-	dist := objc.Send(objc.Cls("NSDistributedNotificationCenter"), objc.Sel("defaultCenter"))
-	selAddDist := objc.Sel("addObserver:selector:name:object:suspensionBehavior:")
+	dist := objc.Send(objc.Cls("NSDistributedNotificationCenter"), objc.SelZ("defaultCenter\x00"))
+	selAddDist := objc.SelZ("addObserver:selector:name:object:suspensionBehavior:\x00")
 	for _, n := range []string{"AppleInterfaceThemeChangedNotification", "AppleColorPreferencesChangedNotification"} {
 		name := objc.Str(n)
 		objc.F.Reset().Arg(uintptr(dist)).Arg(uintptr(selAddDist)).

@@ -20,7 +20,7 @@ import (
 // what the frame reads.
 
 var (
-	selFullKeyboardAccess = objc.Sel("isFullKeyboardAccessEnabled")
+	selFullKeyboardAccess = objc.SelZ("isFullKeyboardAccessEnabled\x00")
 	// readFullKeyboardAccess asks the system, and says whether it could: ok is
 	// false while there is no NSApplication yet (AppKit is not loaded before
 	// Open or the first appearance read), and then the answer is no answer. A
@@ -74,13 +74,13 @@ func initKeynav() {
 		return
 	}
 	keynav.observing = true
-	sel := objc.Sel("gnuiKeynavBecomeActive:")
+	sel := objc.SelZ("gnuiKeynavBecomeActive:\x00")
 	def := objc.Define("GNUIKeynavObserver", objc.Cls("NSObject"), nil)
 	def.Method(sel, "v@:@", func(*ffi.CB) { refreshKeynav() })
 	obs := objc.Send(objc.Send(def.Register(), selAlloc), selInitPlain)
-	nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+	nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.SelZ("defaultCenter\x00"))
 	name := objc.Str("NSApplicationDidBecomeActiveNotification") // (before the call: Str uses the shared frame)
-	objc.Send4(nc, objc.Sel("addObserver:selector:name:object:"), uintptr(obs), uintptr(sel), uintptr(name), 0)
+	objc.Send4(nc, objc.SelZ("addObserver:selector:name:object:\x00"), uintptr(obs), uintptr(sel), uintptr(name), 0)
 }
 
 // refreshKeynav reads the setting again, if anyone has asked for it yet.

@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -342,4 +343,87 @@ func TestEditorLinesAndReadOnly(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestEditorSplicesProcessedEdits(t *testing.T) {
+	onMain(func() {
+		w, err := Open(Options{Title: "editor splice", Width: 300, Height: 200, Hidden: true})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		e, err := w.NewEditor(EditorOptions{})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer e.Release()
+		e.SetAutocorrect(false)
+		want := strings.Repeat("aé😀z", 1000)
+		if err := e.SetText([]byte(want)); err != nil {
+			t.Error(err)
+			return
+		}
+		for _, edit := range []struct {
+			r    TextRange
+			text string
+		}{
+			{TextRange{8000, 8000}, "é😀"},
+			{TextRange{64, 72}, "x"},
+			{TextRange{0, 3}, "😀a"},
+			{TextRange{0, 0}, "start"},
+		} {
+			want = want[:edit.r.Start] + edit.text + want[edit.r.End:]
+			end := edit.r.Start + len(edit.text)
+			if err := e.Replace(edit.r, []byte(edit.text), TextRange{end, end}); err != nil {
+				t.Error(err)
+				return
+			}
+			if got := string(e.Text()); got != want {
+				t.Errorf("splice %v: snapshot differs", edit.r)
+				return
+			}
+			var m u16map
+			m.build(e.text)
+			if e.m.n16 != m.n16 || !slices.Equal(e.m.cp, m.cp) {
+				t.Errorf("splice %v: UTF-16 map differs", edit.r)
+			}
+		}
+	})
+}
+
+func BenchmarkEditorSnapshot(b *testing.B) {
+	for _, splice := range []bool{false, true} {
+		name := "full"
+		if splice {
+			name = "splice"
+		}
+		b.Run(name, func(b *testing.B) {
+			onMain(func() {
+				pool := objc.F.Call0(objc.PoolPush)
+				defer objc.F.Call1(objc.PoolPop, pool)
+				loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
+				text := strings.Repeat("aé😀z", 12500)
+				storage := objc.Send1(objc.Send(objc.Cls("NSTextStorage"), selAlloc), objc.Sel("initWithString:"), uintptr(objc.Str(text)))
+				defer objc.Release(storage)
+				e := &Editor{}
+				e.Reserve(300000)
+				e.text = append(e.text, text...)
+				e.m.build(e.text)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if splice {
+						e.spliceText(storage, e.m.n16-1, 1, 0)
+					} else {
+						e.text = objc.AppendUTF8(e.text[:0], objc.Send(storage, selString))
+						e.m.build(e.text)
+					}
+				}
+			})
+		})
+	}
 }

@@ -2,6 +2,8 @@
 
 package platform
 
+import "sync/atomic"
+
 // Window commands (wincmd_darwin.go, wincmd_windows.go) on Linux, where the
 // OS has one window per app so far (D30 and D68 are built for macOS and
 // Windows): the window's own state stays as the user and the OS set it, and
@@ -62,5 +64,11 @@ func CancelAttention(id int) {}
 // Wake wakes the loop for the window: with one window per app, Wake.
 func (w *Window) Wake() { Wake() }
 
-// WakeLoop makes the loop turn once: with one window per app, Wake.
-func WakeLoop() { Wake() }
+// WakeLoop turns the loop without queuing an EvWake for the window.
+func WakeLoop() {
+	if loopWake.CompareAndSwap(false, true) {
+		osWake()
+	}
+}
+
+var loopWake atomic.Bool

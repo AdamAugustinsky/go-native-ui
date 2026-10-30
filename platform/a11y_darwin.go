@@ -19,7 +19,8 @@ import (
 // accessibilityFocusedUIElement: the first of these calls, which only an
 // assistive technology (or the Accessibility API on its behalf) makes,
 // activates the bridge. Until then nothing is exported, no element exists,
-// and SyncAX returns at once.
+// and SyncAX returns at once. After 30 seconds without a query, frame
+// exports stop until the next query; existing element identities survive.
 //
 // Elements. Each node of the tree is a GNUIAXElement (an
 // NSAccessibilityElement whose attributes are Go methods), made when it is
@@ -39,35 +40,36 @@ import (
 // position, and the app's zoom, which only changes the pixels ui lays out).
 
 var (
-	selAXChildren      = objc.Sel("accessibilityChildren")
-	selAXHitTest       = objc.Sel("accessibilityHitTest:")
-	selAXFocused       = objc.Sel("accessibilityFocusedUIElement")
-	selSetAXParent     = objc.Sel("setAccessibilityParent:")
-	selConvertFromScrn = objc.Sel("convertPointFromScreen:")
-	selConvertFromView = objc.Sel("convertPoint:fromView:")
-	selArrayWithObjs   = objc.Sel("arrayWithObjects:count:")
-	selNumberDouble    = objc.Sel("numberWithDouble:")
-	selDoubleValue     = objc.Sel("doubleValue")
-	selDictWithObjs    = objc.Sel("dictionaryWithObjects:forKeys:count:")
-	selInitWithString  = objc.Sel("initWithString:")
-	selIsEqualToString = objc.Sel("isEqualToString:")
-	selAXCount         = objc.Sel("count")
-	selAXObjectAt      = objc.Sel("objectAtIndex:")
+	selAXChildren      = objc.SelZ("accessibilityChildren\x00")
+	selAXHitTest       = objc.SelZ("accessibilityHitTest:\x00")
+	selAXFocused       = objc.SelZ("accessibilityFocusedUIElement\x00")
+	selSetAXParent     = objc.SelZ("setAccessibilityParent:\x00")
+	selConvertFromScrn = objc.SelZ("convertPointFromScreen:\x00")
+	selConvertFromView = objc.SelZ("convertPoint:fromView:\x00")
+	selArrayWithObjs   = objc.SelZ("arrayWithObjects:count:\x00")
+	selNumberDouble    = objc.SelZ("numberWithDouble:\x00")
+	selDoubleValue     = objc.SelZ("doubleValue\x00")
+	selDictWithObjs    = objc.SelZ("dictionaryWithObjects:forKeys:count:\x00")
+	selInitWithString  = objc.SelZ("initWithString:\x00")
+	selIsEqualToString = objc.SelZ("isEqualToString:\x00")
+	selAXCount         = objc.SelZ("count\x00")
+	selAXObjectAt      = objc.SelZ("objectAtIndex:\x00")
 )
 
 // axDarwin is the bridge's state. It is the package's, tied to the one
 // window it serves (SetAXSource: the first that sets its source).
 type axDarwin struct {
-	core    axCore
-	w       *Window
-	src     AXSource
-	elemDef *objc.ClassDef
-	elem    objc.ID // GNUIAXElement
-	kids    []uintptr
-	nodes   []int32
-	tmp     []byte
-	posted  int // notifications posted (tests)
-	ready   bool
+	core      axCore
+	w         *Window
+	src       AXSource
+	elemDef   *objc.ClassDef
+	elem      objc.ID // GNUIAXElement
+	kids      []uintptr
+	nodes     []int32
+	tmp       []byte
+	posted    int // notifications posted (tests)
+	ready     bool
+	lastQuery int64
 }
 
 var ax axDarwin
@@ -118,15 +120,29 @@ func (w *Window) SetAXSource(s AXSource) error {
 	return nil
 }
 
-// AXActive reports whether an assistive technology has activated the bridge.
-func (w *Window) AXActive() bool { return ax.w == w && ax.core.active }
+// AXActive reports whether an assistive technology queried the bridge in
+// the last 30 seconds. It expires on frames or queries, without a timer.
+func (w *Window) AXActive() bool {
+	if ax.w != w || !ax.core.active {
+		return false
+	}
+	ax.expire(Now())
+	return ax.core.active
+}
+
+// expire piggybacks on frames and queries: inactivity schedules no wakeup.
+func (b *axDarwin) expire(now int64) {
+	if b.core.active && now-b.lastQuery >= 30e9 {
+		b.core.active = false
+	}
+}
 
 // SyncAX brings the bridge up to date with the app's tree, once per frame
 // after the build (app.Run calls it). Inactive, it does nothing; active, it
 // exports the tree, diffs it with the last one and posts the notifications.
 // An unchanged tree allocates nothing and calls nothing in AppKit.
 func (w *Window) SyncAX() {
-	if ax.w != w || !ax.core.active || ax.src == nil {
+	if !w.AXActive() || ax.src == nil {
 		return
 	}
 	ax.core.sync(ax.src.AXExport)
@@ -142,9 +158,18 @@ func axActivate() *Window {
 	if w == nil || !w.registered || ax.src == nil {
 		return nil
 	}
+	now := Now()
+	ax.expire(now)
+	ax.lastQuery = now
 	if !ax.core.active {
 		axSetup()
-		ax.core.begin(ax.src.AXExport)
+		if ax.core.byKey == nil {
+			ax.core.begin(ax.src.AXExport)
+		} else {
+			ax.core.active = true
+			ax.core.sync(ax.src.AXExport)
+			ax.post()
+		}
 	}
 	return w
 }
@@ -201,8 +226,8 @@ func axSetup() {
 	for _, m := range axElementMethods {
 		d.Method(m.s, m.types, m.h)
 	}
-	d.Method(objc.Sel("accessibilityFrame"), "{CGRect={CGPoint=dd}{CGSize=dd}}@:", elemFrame)
-	d.Method(objc.Sel("accessibilityFrameForRange:"), "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}", elemFrameForRange)
+	d.Method(objc.SelZ("accessibilityFrame\x00"), "{CGRect={CGPoint=dd}{CGSize=dd}}@:", elemFrame)
+	d.Method(objc.SelZ("accessibilityFrameForRange:\x00"), "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}", elemFrameForRange)
 	ax.elemDef, ax.elem = d, d.Register()
 }
 
@@ -250,7 +275,7 @@ func (b *axDarwin) element(s int32) objc.ID {
 
 // elemSlot is the slot of element self, -1 when it is stale.
 func elemSlot(self objc.ID) int32 {
-	if ax.elemDef == nil || ax.w == nil || !ax.w.registered {
+	if ax.elemDef == nil || axActivate() == nil {
 		return -1
 	}
 	v := ax.elemDef.Index().Get(self)

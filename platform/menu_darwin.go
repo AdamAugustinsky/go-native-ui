@@ -36,80 +36,80 @@ import (
 // menu, cached and rebuilt only when its items change (PopUpMenu).
 
 var (
-	selInitWithTitle       = objc.Sel("initWithTitle:")
-	selInitItem            = objc.Sel("initWithTitle:action:keyEquivalent:")
-	selInitPlain           = objc.Sel("init")
-	selAddItem             = objc.Sel("addItem:")
-	selSeparatorItem       = objc.Sel("separatorItem")
-	selSetSubmenu          = objc.Sel("setSubmenu:")
-	selSetKeyMask          = objc.Sel("setKeyEquivalentModifierMask:")
-	selSetKeyEquiv         = objc.Sel("setKeyEquivalent:")
-	selSetState            = objc.Sel("setState:")
-	selState               = objc.Sel("state")
-	selAction              = objc.Sel("action")
-	selMenuOfItem          = objc.Sel("menu")
-	selIndexOfItem         = objc.Sel("indexOfItem:")
-	selItemAtIndex         = objc.Sel("itemAtIndex:")
-	selNumberOfItems       = objc.Sel("numberOfItems")
-	selSetMainMenu         = objc.Sel("setMainMenu:")
-	selSetServicesMenu     = objc.Sel("setServicesMenu:")
-	selSetWindowsMenu      = objc.Sel("setWindowsMenu:")
-	selSetHelpMenu         = objc.Sel("setHelpMenu:")
-	selServicesMenu        = objc.Sel("servicesMenu")
-	selSupermenu           = objc.Sel("supermenu")
-	selIndexWithSubmenu    = objc.Sel("indexOfItemWithSubmenu:")
-	selWindows             = objc.Sel("windows")
-	selWinTitle            = objc.Sel("title")
-	selArrCount            = objc.Sel("count")
-	selArrAt               = objc.Sel("objectAtIndex:")
-	selExcludedFromWinMenu = objc.Sel("isExcludedFromWindowsMenu")
-	selIsVisible           = objc.Sel("isVisible")
-	selCanBecomeMain       = objc.Sel("canBecomeMainWindow")
-	selIsMiniaturized      = objc.Sel("isMiniaturized")
-	selAddWindowsItem      = objc.Sel("addWindowsItem:title:filename:")
-	selSetMinWidth         = objc.Sel("setMinimumWidth:")
-	selSetMenuFont         = objc.Sel("setFont:")
-	selSystemFontSize      = objc.Sel("systemFontOfSize:")
-	selPopUpMenu           = objc.Sel("popUpMenuPositioningItem:atLocation:inView:")
-	selProcessInfo         = objc.Sel("processInfo")
-	selProcessName         = objc.Sel("processName")
-	selInitBytesStr        = objc.Sel("initWithBytes:length:encoding:")
-	selValidateItem        = objc.Sel("validateMenuItem:")
-	selMenuWillOpen        = objc.Sel("menuWillOpen:")
-	selMenuDidClose        = objc.Sel("menuDidClose:")
-	selGnuiCommand         = objc.Sel("gnuiCommand:")
-	selGnuiChoose          = objc.Sel("gnuiChoose:")
-	selGnuiQuit            = objc.Sel("gnuiQuit:")
-	selGnuiWillSend        = objc.Sel("gnuiMenuWillSend:")
-	selTargetForAction     = objc.Sel("targetForAction:to:from:")
-	selSendActionTo        = objc.Sel("sendAction:to:from:")
-	selValidateUIItem      = objc.Sel("validateUserInterfaceItem:")
-	selSetAutoenables      = objc.Sel("setAutoenablesItems:")
-	selSetAttrTitle        = objc.Sel("setAttributedTitle:")
-	selInitAttrString      = objc.Sel("initWithString:attributes:")
-	selDictWithObject      = objc.Sel("dictionaryWithObject:forKey:")
-	selSystemRedColor      = objc.Sel("systemRedColor")
+	selInitWithTitle       = objc.SelZ("initWithTitle:\x00")
+	selInitItem            = objc.SelZ("initWithTitle:action:keyEquivalent:\x00")
+	selInitPlain           = objc.SelZ("init\x00")
+	selAddItem             = objc.SelZ("addItem:\x00")
+	selSeparatorItem       = objc.SelZ("separatorItem\x00")
+	selSetSubmenu          = objc.SelZ("setSubmenu:\x00")
+	selSetKeyMask          = objc.SelZ("setKeyEquivalentModifierMask:\x00")
+	selSetKeyEquiv         = objc.SelZ("setKeyEquivalent:\x00")
+	selSetState            = objc.SelZ("setState:\x00")
+	selState               = objc.SelZ("state\x00")
+	selAction              = objc.SelZ("action\x00")
+	selMenuOfItem          = objc.SelZ("menu\x00")
+	selIndexOfItem         = objc.SelZ("indexOfItem:\x00")
+	selItemAtIndex         = objc.SelZ("itemAtIndex:\x00")
+	selNumberOfItems       = objc.SelZ("numberOfItems\x00")
+	selSetMainMenu         = objc.SelZ("setMainMenu:\x00")
+	selSetServicesMenu     = objc.SelZ("setServicesMenu:\x00")
+	selSetWindowsMenu      = objc.SelZ("setWindowsMenu:\x00")
+	selSetHelpMenu         = objc.SelZ("setHelpMenu:\x00")
+	selServicesMenu        = objc.SelZ("servicesMenu\x00")
+	selSupermenu           = objc.SelZ("supermenu\x00")
+	selIndexWithSubmenu    = objc.SelZ("indexOfItemWithSubmenu:\x00")
+	selWindows             = objc.SelZ("windows\x00")
+	selWinTitle            = objc.SelZ("title\x00")
+	selArrCount            = objc.SelZ("count\x00")
+	selArrAt               = objc.SelZ("objectAtIndex:\x00")
+	selExcludedFromWinMenu = objc.SelZ("isExcludedFromWindowsMenu\x00")
+	selIsVisible           = objc.SelZ("isVisible\x00")
+	selCanBecomeMain       = objc.SelZ("canBecomeMainWindow\x00")
+	selIsMiniaturized      = objc.SelZ("isMiniaturized\x00")
+	selAddWindowsItem      = objc.SelZ("addWindowsItem:title:filename:\x00")
+	selSetMinWidth         = objc.SelZ("setMinimumWidth:\x00")
+	selSetMenuFont         = objc.SelZ("setFont:\x00")
+	selSystemFontSize      = objc.SelZ("systemFontOfSize:\x00")
+	selPopUpMenu           = objc.SelZ("popUpMenuPositioningItem:atLocation:inView:\x00")
+	selProcessInfo         = objc.SelZ("processInfo\x00")
+	selProcessName         = objc.SelZ("processName\x00")
+	selInitBytesStr        = objc.SelZ("initWithBytes:length:encoding:\x00")
+	selValidateItem        = objc.SelZ("validateMenuItem:\x00")
+	selMenuWillOpen        = objc.SelZ("menuWillOpen:\x00")
+	selMenuDidClose        = objc.SelZ("menuDidClose:\x00")
+	selGnuiCommand         = objc.SelZ("gnuiCommand:\x00")
+	selGnuiChoose          = objc.SelZ("gnuiChoose:\x00")
+	selGnuiQuit            = objc.SelZ("gnuiQuit:\x00")
+	selGnuiWillSend        = objc.SelZ("gnuiMenuWillSend:\x00")
+	selTargetForAction     = objc.SelZ("targetForAction:to:from:\x00")
+	selSendActionTo        = objc.SelZ("sendAction:to:from:\x00")
+	selValidateUIItem      = objc.SelZ("validateUserInterfaceItem:\x00")
+	selSetAutoenables      = objc.SelZ("setAutoenablesItems:\x00")
+	selSetAttrTitle        = objc.SelZ("setAttributedTitle:\x00")
+	selInitAttrString      = objc.SelZ("initWithString:attributes:\x00")
+	selDictWithObject      = objc.SelZ("dictionaryWithObject:forKey:\x00")
+	selSystemRedColor      = objc.SelZ("systemRedColor\x00")
 
 	// the selectors of the standard actions, by MenuAction
 	actionSel = [...]objc.SEL{
-		MenuAbout:              objc.Sel("orderFrontStandardAboutPanel:"),
-		MenuHide:               objc.Sel("hide:"),
-		MenuHideOthers:         objc.Sel("hideOtherApplications:"),
-		MenuShowAll:            objc.Sel("unhideAllApplications:"),
+		MenuAbout:              objc.SelZ("orderFrontStandardAboutPanel:\x00"),
+		MenuHide:               objc.SelZ("hide:\x00"),
+		MenuHideOthers:         objc.SelZ("hideOtherApplications:\x00"),
+		MenuShowAll:            objc.SelZ("unhideAllApplications:\x00"),
 		MenuQuit:               selGnuiQuit,
-		MenuUndo:               objc.Sel("undo:"),
-		MenuRedo:               objc.Sel("redo:"),
-		MenuCut:                objc.Sel("cut:"),
-		MenuCopy:               objc.Sel("copy:"),
-		MenuPaste:              objc.Sel("paste:"),
-		MenuPasteAndMatchStyle: objc.Sel("pasteAsPlainText:"),
-		MenuDelete:             objc.Sel("delete:"),
-		MenuSelectAll:          objc.Sel("selectAll:"),
-		MenuMinimize:           objc.Sel("performMiniaturize:"),
-		MenuZoom:               objc.Sel("performZoom:"),
-		MenuClose:              objc.Sel("performClose:"),
-		MenuBringAllToFront:    objc.Sel("arrangeInFront:"),
-		MenuFullScreen:         objc.Sel("toggleFullScreen:"),
+		MenuUndo:               objc.SelZ("undo:\x00"),
+		MenuRedo:               objc.SelZ("redo:\x00"),
+		MenuCut:                objc.SelZ("cut:\x00"),
+		MenuCopy:               objc.SelZ("copy:\x00"),
+		MenuPaste:              objc.SelZ("paste:\x00"),
+		MenuPasteAndMatchStyle: objc.SelZ("pasteAsPlainText:\x00"),
+		MenuDelete:             objc.SelZ("delete:\x00"),
+		MenuSelectAll:          objc.SelZ("selectAll:\x00"),
+		MenuMinimize:           objc.SelZ("performMiniaturize:\x00"),
+		MenuZoom:               objc.SelZ("performZoom:\x00"),
+		MenuClose:              objc.SelZ("performClose:\x00"),
+		MenuBringAllToFront:    objc.SelZ("arrangeInFront:\x00"),
+		MenuFullScreen:         objc.SelZ("toggleFullScreen:\x00"),
 	}
 
 	menuTargetClass                                      objc.ID
@@ -204,9 +204,9 @@ func ensureMenuTarget() {
 		// Every item's action, ours or AppKit's (hide:, performClose: …),
 		// tells us it is sent, so that the key-down of its key equivalent is
 		// not delivered as well (handle).
-		nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+		nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.SelZ("defaultCenter\x00"))
 		name := objc.Str("NSMenuWillSendActionNotification")
-		objc.Send4(nc, objc.Sel("addObserver:selector:name:object:"), uintptr(nativeMenus.target), uintptr(selGnuiWillSend), uintptr(name), 0)
+		objc.Send4(nc, objc.SelZ("addObserver:selector:name:object:\x00"), uintptr(nativeMenus.target), uintptr(selGnuiWillSend), uintptr(name), 0)
 		pi := objc.Send(objc.Cls("NSProcessInfo"), selProcessInfo)
 		nativeMenus.appName = string(objc.AppendUTF8(nil, objc.Send(pi, selProcessName)))
 	}

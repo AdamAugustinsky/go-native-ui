@@ -185,7 +185,7 @@ func Open(o Options) (*Window, error) {
 	w.pfd[1] = pollfd{fd: int32(w.efd), events: pollIn}
 	w.repW, w.repH, w.repS = w.pw, w.ph, w.s120
 	wakeFD.Store(int32(w.efd))
-	if wakePending.Load() { // a Wake raced ahead of Open
+	if wakePending.Load() || loopWake.Load() { // a wake raced ahead of Open
 		osWake()
 	}
 	return w, nil
@@ -325,6 +325,7 @@ func (w *Window) drainWake() {
 		return
 	}
 	syscall.Read(w.efd, w.efdb[:])
+	loopWake.Store(false)
 	if takeWake() {
 		w.q.push(Event{Kind: EvWake, Time: nanotime()})
 	}

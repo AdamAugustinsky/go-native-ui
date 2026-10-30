@@ -45,7 +45,7 @@ func keyAssumed(w *Window) bool { return w != nil && assumedKey.Load() == w }
 // window's view's for a drawn field. A window AppKit made key keeps its own
 // chain.
 
-var selNextResponder = objc.Sel("nextResponder")
+var selNextResponder = objc.SelZ("nextResponder\x00")
 
 // registerAssumedEdit gives GNUIAppDelegate the edit actions.
 func registerAssumedEdit(d *objc.ClassDef) {

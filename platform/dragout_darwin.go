@@ -42,9 +42,9 @@ var (
 		return objc.Send3(view, selBeginDragging, uintptr(items), uintptr(event), uintptr(source))
 	}
 
-	selFileURLPath = objc.Sel("fileURLWithPath:")
-	selIconForType = objc.Sel("iconForFileType:")
-	selImageSize   = objc.Sel("size")
+	selFileURLPath = objc.SelZ("fileURLWithPath:\x00")
+	selIconForType = objc.SelZ("iconForFileType:\x00")
+	selImageSize   = objc.SelZ("size\x00")
 )
 
 // promiseRec is one promised file of a drag out. The delegate's thread, the

@@ -97,60 +97,60 @@ var (
 	dragSource                                            objc.ID // the GNUIDragSource, retained for the process
 	promiseQueue                                          objc.ID // the NSOperationQueue of the promise delegate
 
-	selRegisterTypes   = objc.Sel("registerForDraggedTypes:")
-	selUnregisterTypes = objc.Sel("unregisterDraggedTypes")
-	selDragEntered     = objc.Sel("draggingEntered:")
-	selDragUpdated     = objc.Sel("draggingUpdated:")
-	selDragExited      = objc.Sel("draggingExited:")
-	selPrepareDrag     = objc.Sel("prepareForDragOperation:")
-	selPerformDrag     = objc.Sel("performDragOperation:")
-	selConcludeDrag    = objc.Sel("concludeDragOperation:")
-	selDragEnded       = objc.Sel("draggingEnded:")
-	selWantsPeriodic   = objc.Sel("wantsPeriodicDraggingUpdates")
-	selDragLocation    = objc.Sel("draggingLocation")
-	selDragPasteboard  = objc.Sel("draggingPasteboard")
-	selDragSourceMask  = objc.Sel("draggingSourceOperationMask")
-	selDragSeq         = objc.Sel("draggingSequenceNumber")
+	selRegisterTypes   = objc.SelZ("registerForDraggedTypes:\x00")
+	selUnregisterTypes = objc.SelZ("unregisterDraggedTypes\x00")
+	selDragEntered     = objc.SelZ("draggingEntered:\x00")
+	selDragUpdated     = objc.SelZ("draggingUpdated:\x00")
+	selDragExited      = objc.SelZ("draggingExited:\x00")
+	selPrepareDrag     = objc.SelZ("prepareForDragOperation:\x00")
+	selPerformDrag     = objc.SelZ("performDragOperation:\x00")
+	selConcludeDrag    = objc.SelZ("concludeDragOperation:\x00")
+	selDragEnded       = objc.SelZ("draggingEnded:\x00")
+	selWantsPeriodic   = objc.SelZ("wantsPeriodicDraggingUpdates\x00")
+	selDragLocation    = objc.SelZ("draggingLocation\x00")
+	selDragPasteboard  = objc.SelZ("draggingPasteboard\x00")
+	selDragSourceMask  = objc.SelZ("draggingSourceOperationMask\x00")
+	selDragSeq         = objc.SelZ("draggingSequenceNumber\x00")
 
-	selInitWithRTF = objc.Sel("initWithRTF:documentAttributes:")
+	selInitWithRTF = objc.SelZ("initWithRTF:documentAttributes:\x00")
 
-	selAvailableType  = objc.Sel("availableTypeFromArray:")
-	selPBItems        = objc.Sel("pasteboardItems")
-	selDataForType    = objc.Sel("dataForType:")
-	selIsEqualStr     = objc.Sel("isEqualToString:")
-	selURLWithString  = objc.Sel("URLWithString:")
-	selFilePathURL    = objc.Sel("filePathURL")
-	selBytes          = objc.Sel("bytes")
-	selDataLength     = objc.Sel("length")
-	selDataWithBytes  = objc.Sel("dataWithBytes:length:")
-	selInitWithData   = objc.Sel("initWithData:")
-	selRepresentation = objc.Sel("representationUsingType:properties:")
-	selDictionary     = objc.Sel("dictionary")
-	selArrayClass     = objc.Sel("array")
-	selPressedButtons = objc.Sel("pressedMouseButtons")
-	selUTF8           = objc.Sel("UTF8String")
-	selDragSource     = objc.Sel("draggingSource")
+	selAvailableType  = objc.SelZ("availableTypeFromArray:\x00")
+	selPBItems        = objc.SelZ("pasteboardItems\x00")
+	selDataForType    = objc.SelZ("dataForType:\x00")
+	selIsEqualStr     = objc.SelZ("isEqualToString:\x00")
+	selURLWithString  = objc.SelZ("URLWithString:\x00")
+	selFilePathURL    = objc.SelZ("filePathURL\x00")
+	selBytes          = objc.SelZ("bytes\x00")
+	selDataLength     = objc.SelZ("length\x00")
+	selDataWithBytes  = objc.SelZ("dataWithBytes:length:\x00")
+	selInitWithData   = objc.SelZ("initWithData:\x00")
+	selRepresentation = objc.SelZ("representationUsingType:properties:\x00")
+	selDictionary     = objc.SelZ("dictionary\x00")
+	selArrayClass     = objc.SelZ("array\x00")
+	selPressedButtons = objc.SelZ("pressedMouseButtons\x00")
+	selUTF8           = objc.SelZ("UTF8String\x00")
+	selDragSource     = objc.SelZ("draggingSource\x00")
 
-	selBeginDragging    = objc.Sel("beginDraggingSessionWithItems:event:source:")
-	selInitWriter       = objc.Sel("initWithPasteboardWriter:")
-	selSetDragFrame     = objc.Sel("setDraggingFrame:contents:")
-	selSetDragFrameOnly = objc.Sel("setDraggingFrame:")
-	selSetData          = objc.Sel("setData:forType:")
-	selSetSize          = objc.Sel("setSize:")
-	selIconForFile      = objc.Sel("iconForFile:")
-	selInitFilePromise  = objc.Sel("initWithFileType:delegate:")
-	selSetUserInfo      = objc.Sel("setUserInfo:")
-	selUserInfo         = objc.Sel("userInfo")
-	selNumberWithU64    = objc.Sel("numberWithUnsignedLongLong:")
-	selU64Value         = objc.Sel("unsignedLongLongValue")
-	selErrorWithDomain  = objc.Sel("errorWithDomain:code:userInfo:")
-	selSetMaxConcurrent = objc.Sel("setMaxConcurrentOperationCount:")
+	selBeginDragging    = objc.SelZ("beginDraggingSessionWithItems:event:source:\x00")
+	selInitWriter       = objc.SelZ("initWithPasteboardWriter:\x00")
+	selSetDragFrame     = objc.SelZ("setDraggingFrame:contents:\x00")
+	selSetDragFrameOnly = objc.SelZ("setDraggingFrame:\x00")
+	selSetData          = objc.SelZ("setData:forType:\x00")
+	selSetSize          = objc.SelZ("setSize:\x00")
+	selIconForFile      = objc.SelZ("iconForFile:\x00")
+	selInitFilePromise  = objc.SelZ("initWithFileType:delegate:\x00")
+	selSetUserInfo      = objc.SelZ("setUserInfo:\x00")
+	selUserInfo         = objc.SelZ("userInfo\x00")
+	selNumberWithU64    = objc.SelZ("numberWithUnsignedLongLong:\x00")
+	selU64Value         = objc.SelZ("unsignedLongLongValue\x00")
+	selErrorWithDomain  = objc.SelZ("errorWithDomain:code:userInfo:\x00")
+	selSetMaxConcurrent = objc.SelZ("setMaxConcurrentOperationCount:\x00")
 
-	selSrcMask     = objc.Sel("draggingSession:sourceOperationMaskForDraggingContext:")
-	selSrcEnded    = objc.Sel("draggingSession:endedAtPoint:operation:")
-	selPromiseName = objc.Sel("filePromiseProvider:fileNameForType:")
-	selPromiseWrit = objc.Sel("filePromiseProvider:writePromiseToURL:completionHandler:")
-	selPromiseQ    = objc.Sel("operationQueueForFilePromiseProvider:")
+	selSrcMask     = objc.SelZ("draggingSession:sourceOperationMaskForDraggingContext:\x00")
+	selSrcEnded    = objc.SelZ("draggingSession:endedAtPoint:operation:\x00")
+	selPromiseName = objc.SelZ("filePromiseProvider:fileNameForType:\x00")
+	selPromiseWrit = objc.SelZ("filePromiseProvider:writePromiseToURL:completionHandler:\x00")
+	selPromiseQ    = objc.SelZ("operationQueueForFilePromiseProvider:\x00")
 )
 
 func dragInit() {
@@ -212,6 +212,8 @@ type dragState struct {
 	inside  bool
 	seq     uint64
 	offered DragKinds
+	items   int
+	cached  bool
 	allowed DragOp
 
 	// Image drops being decoded by workers (each holds one place until its
@@ -366,7 +368,12 @@ func dragUpdate(c *ffi.CB, enter bool) uintptr {
 
 func (w *Window) dragMoved(info objc.ID, enter bool) uintptr {
 	d := &w.drag
-	offered, items := offeredKinds(objc.Send(info, selDragPasteboard))
+	seq := uint64(objc.Send(info, selDragSeq))
+	if enter || !d.cached || seq != d.seq {
+		d.offered, d.items = offeredKinds(objc.Send(info, selDragPasteboard))
+		d.seq, d.cached = seq, true
+	}
+	offered, items := d.offered, d.items
 	if offered&d.kinds == 0 {
 		w.dragLeft()
 		return 0
@@ -379,7 +386,6 @@ func (w *Window) dragMoved(info objc.ID, enter bool) uintptr {
 		kind = EvDragEnter
 	}
 	d.inside, d.offered, d.allowed = true, offered, allowed
-	d.seq = uint64(objc.Send(info, selDragSeq))
 	w.q.push(Event{Kind: kind, X: x, Y: y, Code: uint32(offered), SelStart: int32(allowed), SelLen: int32(items),
 		Mods: mods(uintptr(objc.Send(clsNSEvent, selModifierFlags))), Tag: d.seq, Time: Now()})
 	w.nudge()

@@ -13,11 +13,11 @@ import (
 // material. The panel itself is main's (panel_darwin.go).
 
 var (
-	selAddChild      = objc.Sel("addChildWindow:ordered:")
-	selRemoveChild   = objc.Sel("removeChildWindow:")
-	selSetMaskImage  = objc.Sel("setMaskImage:")
-	selContentRectFR = objc.Sel("contentRectForFrameRect:")
-	selNSImageSize   = objc.Sel("setSize:")
+	selAddChild      = objc.SelZ("addChildWindow:ordered:\x00")
+	selRemoveChild   = objc.SelZ("removeChildWindow:\x00")
+	selSetMaskImage  = objc.SelZ("setMaskImage:\x00")
+	selContentRectFR = objc.SelZ("contentRectForFrameRect:\x00")
+	selNSImageSize   = objc.SelZ("setSize:\x00")
 )
 
 // panelChild is the child-panel state of a Window.
