@@ -40,9 +40,11 @@
 // thread). CoreText's CTFont and CTLine objects are immutable and documented
 // as thread-safe, but this package's caches, scratch buffers, the ffi.Frame
 // and the CGBitmapContext are not. Shaping off the main thread therefore
-// needs its own System (own Frame, scratch and cache), or a lock; sharing
-// the immutable CTFont objects between Systems would additionally need the
-// face table to be shared and locked. That is a phase-4 decision.
+// uses a Shaper per worker (own Frame, scratch, fonts and bounded cache).
+// ShapedRun owns pointer-free output and retained immutable native faces, or
+// font-file identities on Linux. ImportRun maps those faces into the main
+// System before a frame is built. Prefetcher bounds and cancels speculative
+// work, parks when idle, and wakes the UI only when results arrive.
 //
 // # Lifetimes
 //
