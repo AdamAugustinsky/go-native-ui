@@ -10,6 +10,7 @@ import (
 	"gonativeui/internal/allocsite"
 	"gonativeui/internal/sysinfo"
 	"gonativeui/platform"
+	"gonativeui/text"
 )
 
 // BenchOptions configure RunBench.
@@ -193,6 +194,12 @@ func RunBench(cfg Config, b Builder, o BenchOptions) (BenchReport, error) {
 		return BenchReport{}, err
 	}
 	defer a.closeAll() // the companions too
+	// Apps reserve their usual working set of shaped runs; a bench scrolls
+	// through more distinct text than that, and the cache's growth past it
+	// (a doubling per slab, bounded by the limits) would land in a measured
+	// window or not depending on how far the warm-up got. Reserve the limits
+	// so the measured frames are the steady state.
+	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
 	for i, cb := range o.Companions {
 		if _, err := a.OpenWindow(cfg, cb); err != nil {
 			return BenchReport{}, fmt.Errorf("app: bench companion window %d: %w", i+1, err)
