@@ -71,7 +71,7 @@ func (d Dir) after() bool { return d == Right || d == Down }
 // Limits bound a pane's size, in points along x (0) and y (1). A zero Min
 // takes the Metrics' least size; a zero Max is no bound.
 type Limits struct {
-	Min, Max [2]float32
+	Min, Max [2]float32 // least and greatest size, x and y, in points (see above)
 	// Yield makes the pane give up its room, rather than shrink below Min or
 	// squeeze its neighbour below its own, when the room is too small for
 	// both (Zap's side pane, which shows only while it has 240 pt beside the
