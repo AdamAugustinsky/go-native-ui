@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/fs"
 	"gonativeui/rexui"
 	"gonativeui/ui"
@@ -399,9 +400,18 @@ const (
 	chunk     = 1024 // entries between two looks at the clock
 )
 
-type budget struct{ start time.Time }
+type budget struct {
+	start time.Time
+	units int
+}
 
-func (b *budget) over() bool { return time.Since(b.start) >= workSlice }
+func (b *budget) over() bool {
+	if core.SimulationForTesting() != nil {
+		b.units++
+		return b.units >= 32
+	}
+	return time.Since(b.start) >= workSlice
+}
 
 // startRows (re)builds the visible rows for the current query and hidden
 // setting. Without either the rows are just the listing's order. A job runs

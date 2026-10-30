@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/fs"
 	"gonativeui/internal/allocsite"
 	"gonativeui/ui"
@@ -30,6 +31,31 @@ func TestRelistMissingDirectoryLeavesStaleRows(t *testing.T) {
 		if p.dir != nativePath("/parent") || names(p) != "current" {
 			t.Fatalf("return shows %s: %s", p.dir, names(p))
 		}
+	}
+}
+
+func TestSimulationPaneWorkIgnoresWallTime(t *testing.T) {
+	c, err := core.InstallSimClockForTesting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Restore()
+	var positions [2]int
+	for i := range positions {
+		l := new(fs.Listing)
+		FillSynth(l, 100000, 0)
+		fs.Sort(l, fs.SortName, false)
+		p := newPane(1, nil, "/")
+		p.install("/synth", l, 0, "")
+		b := budget{start: time.Now().Add(-time.Duration(i) * time.Second)}
+		p.rowsStep(&b)
+		positions[i] = p.jobPos
+		if !p.jobBusy || p.jobPos == 0 {
+			t.Fatalf("work not sliced: busy=%v pos=%d", p.jobBusy, p.jobPos)
+		}
+	}
+	if positions[0] != positions[1] {
+		t.Fatalf("simulation followed wall time: rows %d != %d", positions[0], positions[1])
 	}
 }
 
