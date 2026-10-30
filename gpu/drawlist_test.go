@@ -31,6 +31,57 @@ func TestInstanceCapacityHysteresis(t *testing.T) {
 	}
 }
 
+func TestTextureBatchesPreserveOrder(t *testing.T) {
+	quads := make([]Quad, 217)
+	for i := range quads {
+		id := TextureID(100 + i%2)
+		if i >= 200 {
+			id = TextureID(200 + i)
+		}
+		quads[i] = Quad{Mode: ModeMaskR8, Tex: id, Rect: [4]float32{float32(i), 0, float32(i + 1), 1}}
+	}
+	quads[2].Mode = ModeShape // shapes keep Tex (shape flags), and join the run
+	inst := make([]Quad, len(quads))
+	copy(inst, quads)
+	batches := textureBatches(nil, inst[:200])
+	if len(batches) != 1 {
+		t.Fatalf("200 alternating textures: %d batches, want 1", len(batches))
+	}
+	frame := func() {
+		copy(inst, quads)
+		batches = textureBatches(batches, inst)
+	}
+	frame()
+	if len(batches) != 3 {
+		t.Fatalf("table overflow: %d batches, want 3", len(batches))
+	}
+	next := 0
+	for _, b := range batches {
+		if b.first != next || b.count <= 0 || b.n > runTextures {
+			t.Fatalf("invalid batch: %+v", b)
+		}
+		for i := b.first; i < b.first+b.count; i++ {
+			q := inst[i]
+			if q.Mode != ModeShape {
+				if int(q.Tex) >= b.n {
+					t.Fatal("texture slot outside the batch")
+				}
+				q.Tex = b.textures[q.Tex]
+			}
+			if q != quads[i] {
+				t.Fatalf("quad %d changed after resolving its texture slot", i)
+			}
+		}
+		next += b.count
+	}
+	if next != len(quads) {
+		t.Fatal("batching lost quads")
+	}
+	if n := testing.AllocsPerRun(100, frame); n != 0 {
+		t.Fatalf("warm batching: %g allocations", n)
+	}
+}
+
 func TestBackdropHighWaterAfterWarmup(t *testing.T) {
 	for _, warm := range []int{0, 1} {
 		list := DrawList{Quads: make([]Quad, 0, 8)}
