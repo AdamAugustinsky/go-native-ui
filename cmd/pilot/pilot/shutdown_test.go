@@ -11,6 +11,25 @@ import (
 	"gonativeui/ui"
 )
 
+func TestCloseReleasesShownAndReconcilingListings(t *testing.T) {
+	src := new(fakeSrc)
+	pl := New(Options{Src: src, RootTitle: "Root"})
+	for _, p := range pl.panes {
+		p.request(nativePath("/shown"), navUser, "")
+		deliver(p, listing(fs.SortName, false, dirItems...))
+		p.relist()
+		deliver(p, listing(fs.SortName, false, dirItems...))
+	}
+	if len(src.leased) != 4 {
+		t.Fatalf("setup leases=%d", len(src.leased))
+	}
+	pl.Close()
+	pl.Close()
+	if len(src.leased) != 0 || src.ignored != 0 {
+		t.Fatalf("close leases=%d ignored=%d", len(src.leased), src.ignored)
+	}
+}
+
 // waitGroupDone reports whether wg finishes within d.
 func waitGroupDone(wg *sync.WaitGroup, d time.Duration) bool {
 	done := make(chan struct{})

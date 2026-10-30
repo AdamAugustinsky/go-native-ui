@@ -132,3 +132,28 @@ CGO_ENABLED=0 go test -short ./app/simtests/ui -count=1
 GNUI_SIM_SEEDS=200 GNUI_SIM_HOURS=24 CGO_ENABLED=0 go test -short ./app/simtests/ui -count=1 -timeout=45m
 GNUI_SIM_SEED=42 CGO_ENABLED=0 go test -short ./app/simtests/ui -run TestSimUILongReturn -count=1 -v
 ```
+
+Pilot has an application-specific suite in `cmd/pilot/pilot/sim_test.go`.
+It creates its synthetic filesystem service in Init, drives both panes on
+the same folder, and checks source contents, filtered order, selection,
+scroll anchors, focus, filter text/caret and bounded relists after each return.
+Seeded changes include entry removal/rename/addition, `SynthSource.Bump`,
+100k–1M-entry replacements, deletion and recreation, hidden scale changes
+with queued prefetch, device rebuilding, and unchanged return hashes.
+The default runs one 24-hour seed twice. Each replay checks exact warmed-frame
+allocations, memory after a huge folder shrinks, and worker cleanup.
+
+```sh
+CGO_ENABLED=0 go test -short ./cmd/pilot/pilot -run '^TestPilotSim' -count=1 -v
+GNUI_SIM_SEEDS=200 GNUI_SIM_HOURS=24 CGO_ENABLED=0 go test -short ./cmd/pilot/pilot -run '^TestPilotSimLifecycle$' -count=1 -failfast -timeout=30m -v
+GNUI_SIM_SEED=42 CGO_ENABLED=0 go test -short ./cmd/pilot/pilot -run '^TestPilotSimLifecycle$' -count=1 -v
+GNUI_SIM_SEEDS=200 CGO_ENABLED=0 go test -short ./fs -run '^TestSim' -count=1 -v
+```
+
+The fs suite separately injects watcher events into the real control worker,
+advances across debounce deadlines in three-hour sleep-like jumps, and checks
+30-second listing-pool/sorter expiry without UI wakes. Pilot's model work
+uses fixed slices in simulation; production retains its 1 ms time budget.
+Native app activation, watcher delivery, preferences and shell menus still
+need native-platform testing. Icon style and sidebar discovery are pinned;
+actual icon decoding and name-prefetch workers participate in the barrier.

@@ -67,6 +67,6 @@ func entryName(l *fs.Listing, e int32) []byte { return l.Name(int(e)) }
 
 // withSlack is the capacity to make for n elements that a directory may grow
 // by: a refresh that brings a few more entries than the last listing must not
-// reallocate (the buffers only ever grow, so a shrinking and growing directory
-// settles at its largest).
+// reallocate. Ordinary fluctuations reuse storage; a substantially smaller
+// listing releases exceptional model scratch in trimBuffers.
 func withSlack(n int) int { return n + n/8 + 64 }

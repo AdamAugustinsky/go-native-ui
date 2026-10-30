@@ -10,10 +10,78 @@ import (
 	"testing"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/fs"
 	"gonativeui/internal/allocsite"
 	"gonativeui/ui"
 )
+
+func TestRelistMissingDirectoryLeavesStaleRows(t *testing.T) {
+	for _, err := range []error{os.ErrNotExist, syscall.ENOTDIR} {
+		src := new(fakeSrc)
+		p := newPane(1, src, nativePath("/"))
+		p.setInitial(nativePath("/parent/gone"), listing(fs.SortName, false, item{name: "stale", when: "2026-10-17 12:00"}))
+		p.relist()
+		deliver(p, &fs.Listing{Err: err})
+		if !p.nav.pending || p.nav.path != nativePath("/parent") || p.nav.kind != navGone {
+			t.Fatalf("missing folder stayed visible: dir=%s nav=%+v", p.dir, p.nav)
+		}
+		deliver(p, listing(fs.SortName, false, item{name: "current", when: "2026-10-17 12:00"}))
+		settle(t, p)
+		if p.dir != nativePath("/parent") || names(p) != "current" {
+			t.Fatalf("return shows %s: %s", p.dir, names(p))
+		}
+	}
+}
+
+func TestSimulationPaneWorkIgnoresWallTime(t *testing.T) {
+	c, err := core.InstallSimClockForTesting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Restore()
+	var positions [2]int
+	for i := range positions {
+		l := new(fs.Listing)
+		FillSynth(l, 100000, 0)
+		fs.Sort(l, fs.SortName, false)
+		p := newPane(1, nil, "/")
+		p.install("/synth", l, 0, "")
+		b := budget{start: time.Now().Add(-time.Duration(i) * time.Second)}
+		p.rowsStep(&b)
+		positions[i] = p.jobPos
+		if !p.jobBusy || p.jobPos == 0 {
+			t.Fatalf("work not sliced: busy=%v pos=%d", p.jobBusy, p.jobPos)
+		}
+	}
+	if positions[0] != positions[1] {
+		t.Fatalf("simulation followed wall time: rows %d != %d", positions[0], positions[1])
+	}
+}
+
+func TestSmallerDirectoryReleasesReconcileScratch(t *testing.T) {
+	const n = 1_000_000
+	p := newPane(1, nil, "/")
+	l := new(fs.Listing)
+	FillSynth(l, n, 0)
+	fs.Sort(l, fs.SortName, false)
+	p.install("/large", l, 0, "")
+	settle(t, p)
+	p.v.ts.Sel.SelectAll(len(l.Entries))
+	next := new(fs.Listing)
+	FillSynth(next, n, 1)
+	fs.Sort(next, fs.SortName, false)
+	p.startReconcile(next, 0)
+	settle(t, p)
+	if cap(p.rc.m) < n || cap(p.v.rows) < n || cap(p.rc.tab.h) < n {
+		t.Fatal("scratch not grown")
+	}
+	p.install("/small", listing(fs.SortName, false, dirItems...), 0, "")
+	settle(t, p)
+	if cap(p.rc.m) > 65536 || cap(p.rc.rows) > 65536 || cap(p.v.rows) > 65536 || cap(p.rc.tab.h) > 1024 {
+		t.Fatalf("large scratch kept: map=%d back=%d rows=%d names=%d", cap(p.rc.m), cap(p.rc.rows), cap(p.v.rows), cap(p.rc.tab.h))
+	}
+}
 
 // fakeSrc is a Source that records requests; the tests deliver the results. It
 // numbers requests and leases like fs.Service and counts the Release calls that

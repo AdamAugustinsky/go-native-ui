@@ -2,11 +2,15 @@ package pilot
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/fs"
 	"gonativeui/rexui"
 	"gonativeui/ui"
@@ -289,6 +293,11 @@ func (p *pane) onListing(r *fs.Result) {
 	if l.Err != nil {
 		err := l.Err // (before the listing goes back: a worker may reuse it at once)
 		p.release(l, lease)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || onWindows && errors.Is(err, winErrNotDirectory) {
+			// Focus-gain relisting also covers a missed deletion notification.
+			p.onResult(&fs.Result{Kind: fs.ResultGone, ID: p.id})
+			return
+		}
 		p.setMsg(errText(err), true)
 		return
 	}
@@ -354,6 +363,7 @@ func (p *pane) install(dir string, l *fs.Listing, lease uint32, sel string) {
 	p.pendSel = findName(l, sel)
 	p.scrollRow, p.scrollOff = 0, 0
 	p.topEntry, p.topRow, p.reveal = -1, 0, -1
+	p.trimBuffers()
 	p.startRows()
 }
 
@@ -391,9 +401,18 @@ const (
 	chunk     = 1024 // entries between two looks at the clock
 )
 
-type budget struct{ start time.Time }
+type budget struct {
+	start time.Time
+	units int
+}
 
-func (b *budget) over() bool { return time.Since(b.start) >= workSlice }
+func (b *budget) over() bool {
+	if core.SimulationForTesting() != nil {
+		b.units++
+		return b.units >= 32
+	}
+	return time.Since(b.start) >= workSlice
+}
 
 // startRows (re)builds the visible rows for the current query and hidden
 // setting. Without either the rows are just the listing's order. A job runs
@@ -722,7 +741,34 @@ func (p *pane) swapIn() {
 		p.scrollRow, p.scrollOff = rc.topRow, rc.topFrac
 	}
 	p.release(old, oldLease)
+	p.trimBuffers()
 	p.msg = ""
+}
+
+// trimBuffers releases an exceptional directory's model scratch when the
+// working listing shrinks. Ordinary refreshes retain slack, so warmed frame
+// work does not allocate. No job may still be using these buffers.
+func (p *pane) trimBuffers() {
+	n := len(p.v.l.Entries)
+	limit := max(4*withSlack(n), 64<<10)
+	if cap(p.v.rows) > limit {
+		p.v.rows = append([]uint32(nil), p.v.rows...)
+	}
+	if cap(p.rc.rows) > limit {
+		p.rc.rows = nil
+	}
+	if cap(p.rc.m) > limit {
+		p.rc.m = nil
+	}
+	if cap(p.rowFilter.bits) > (limit+63)/64 {
+		p.rowFilter = rowFilter{}
+	}
+	if cap(p.rc.filter.bits) > (limit+63)/64 {
+		p.rc.filter = rowFilter{}
+	}
+	if cap(p.rc.tab.h) > max(4*withSlack(p.v.ts.Sel.Count()+2), 1024) {
+		p.rc.tab = nameMap{}
+	}
 }
 
 // work advances the pane's background-style work for one frame and reports
