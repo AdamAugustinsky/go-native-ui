@@ -6,9 +6,14 @@ import (
 	"bytes"
 	"runtime"
 	"sync"
+	"time"
 
 	"gonativeui/core"
 )
+
+// prefetchIdle is how long workers keep their shapers (each a text system
+// with its own fonts) after the last submitted request.
+const prefetchIdle = 30 * time.Second
 
 // PrefetchTextLimit bounds the source bytes copied for one speculative run.
 // Longer text uses Shape or a Shaper directly; prefetch never truncates it.
@@ -37,6 +42,8 @@ type shapeJob struct {
 // Cancel and Poll belong to the UI thread; workers only touch their assigned
 // jobs. Idle workers park without polling. One worker is the serial shaping
 // fallback; multiple workers share no mutable font or native call state.
+// After 30 seconds without a request the workers release their shapers and
+// make new ones at the next request.
 type Prefetcher struct {
 	mu      core.Mutex
 	jobs    []shapeJob
@@ -50,6 +57,11 @@ type Prefetcher struct {
 	queued  int
 	ready   int
 	closed  bool
+
+	timer     *core.Timer // armed while requests came in the last prefetchIdle
+	armed     bool
+	submitted time.Time // the last request
+	trim      uint32    // incremented when the workers should release their shapers
 }
 
 // NewPrefetcher starts workers (clamped to 1..8), each on its own OS thread,
@@ -130,6 +142,15 @@ func (p *Prefetcher) Submit(group uint32, s *System, f FontKey, b []byte) bool {
 	j.name = append(j.name[:0], b...)
 	j.state = shapeQueued
 	p.queued++
+	p.submitted = core.WallNow()
+	if !p.armed {
+		p.armed = true
+		if p.timer == nil {
+			p.timer = core.AfterFunc(prefetchIdle, p.idle)
+		} else {
+			p.timer.Reset(prefetchIdle)
+		}
+	}
 	wake := p.queued == 1 // a worker parks only when it finds no queued job
 	p.mu.Unlock()
 	if wake {
@@ -245,11 +266,34 @@ func (p *Prefetcher) Ready() int {
 	return p.ready
 }
 
-func (p *Prefetcher) take() int {
+// idle runs prefetchIdle after the first request of a burst: it re-arms for
+// the rest of the span if a later request came, else has the workers release
+// their shapers.
+func (p *Prefetcher) idle() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	if d := core.Since(p.submitted); d < prefetchIdle {
+		p.timer.Reset(prefetchIdle - d)
+		p.mu.Unlock()
+		return
+	}
+	p.armed = false
+	p.trim++
+	p.mu.Unlock()
+	for _, park := range p.park {
+		park.Unpark()
+	}
+}
+
+// take claims a queued job, or returns -1 and the release count.
+func (p *Prefetcher) take() (int, uint32) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		return -1
+		return -1, p.trim
 	}
 	for n := 0; n < len(p.jobs); n++ {
 		i := (p.next + n) % len(p.jobs)
@@ -257,10 +301,10 @@ func (p *Prefetcher) take() int {
 			p.jobs[i].state = shapeRunning
 			p.queued--
 			p.next = (i + 1) % len(p.jobs)
-			return i
+			return i, p.trim
 		}
 	}
-	return -1
+	return -1, p.trim
 }
 
 func (p *Prefetcher) worker(index int, started chan<- error) {
@@ -273,20 +317,35 @@ func (p *Prefetcher) worker(index int, started chan<- error) {
 	if err != nil {
 		return
 	}
-	defer w.Close()
+	defer func() {
+		if w != nil {
+			w.Close()
+		}
+	}()
 	if !p.park[index].StartSimWorker() {
 		return
 	}
+	var trimmed uint32
 	for {
-		i := p.take()
+		i, trim := p.take()
 		if i < 0 {
+			if trim != trimmed && w != nil {
+				w.Close()
+				w = nil
+			}
+			trimmed = trim
 			if !p.park[index].Park() {
 				return
 			}
 			continue
 		}
 		j := &p.jobs[i]
-		ok := w.Shape(j.desc, j.name, &j.result)
+		if w == nil {
+			if w, err = NewShaper(); err != nil {
+				w = nil
+			}
+		}
+		ok := w != nil && w.Shape(j.desc, j.name, &j.result)
 		p.mu.Lock()
 		discard := !ok || j.cancelled || p.closed
 		wake := !discard && p.ready == 0
@@ -317,6 +376,9 @@ func (p *Prefetcher) Close() {
 		return
 	}
 	p.closed = true
+	if p.timer != nil {
+		p.timer.Stop()
+	}
 	p.mu.Unlock()
 	for _, park := range p.park {
 		park.Close()
