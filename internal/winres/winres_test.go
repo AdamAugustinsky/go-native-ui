@@ -74,3 +74,19 @@ func TestSectionLayout(t *testing.T) {
 		}
 	}
 }
+
+func TestFiles(t *testing.T) {
+	v := Version{Strings: []KV{{Key: FilesKey, Value: "ghostty-vt.dll|ghostty-vt.LICENSE.txt"}}}
+	got, err := Files(v)
+	if err != nil || len(got) != 2 || got[0] != "ghostty-vt.dll" || got[1] != "ghostty-vt.LICENSE.txt" {
+		t.Errorf("Files = %q, %v", got, err)
+	}
+	if got, err := Files(Version{}); err != nil || got != nil {
+		t.Errorf("Files of none = %q, %v", got, err)
+	}
+	for _, bad := range []string{"a.exe", `sub\a.dll`, "../a.dll", "a.dll|A.DLL", "a.dll.", ".dll", "a.so", "a.dll|"} {
+		if _, err := Files(Version{Strings: []KV{{Key: FilesKey, Value: bad}}}); err == nil {
+			t.Errorf("Files accepted %q", bad)
+		}
+	}
+}

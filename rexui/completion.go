@@ -404,7 +404,7 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 		if items != nil && items[i].HasIcon {
 			k.Icon(items[i].Icon, fg)
 		}
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(rowH))
+		c.NextSize(ui.TextSize(0), ui.Px(rowH))
 		c.NextFont(r.Styles[theme.StyleBody].Font)
 		c.NextTextColor(fg)
 		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(rkey, 1), base.StrBytes(completionTitle(items, strs, i)))

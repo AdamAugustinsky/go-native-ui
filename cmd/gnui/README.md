@@ -19,6 +19,7 @@ cd cmd/gallery && go run ../gnui package      # release bundle in ./dist
 | `gnui run` | development bundle `.gnui/dev/<Name>.app` (bundle id + `.dev`), signed with `gnui-dev`, launched through LaunchServices; output streamed |
 | `gnui sign app.app` | signs an existing bundle, nested code first (the tool apps) |
 | `gnui inspect <socket> windows\|tree\|do\|shot` | talks to the agent bridge of a development build started with `GNUI_INSPECT=<socket>`: windows, the semantic tree, steps by role and name, a PNG of the current frame (docs/GUIDE.md §11; any OS) |
+| `gnui provenance` | prints the framework tree's provenance for packagers: revision and dirty state (git, or a `.gnui-revision` stamp), libghostty-vt pin and built libraries, precompiled shader library, Go toolchain; `-json` for the `gnui.provenance/v1` document, `-dir` for a tree other than the `gonativeui` module `go list -m` resolves ([docs/design/build-provenance.md](../../docs/design/build-provenance.md)) |
 | `gnui doctor` | checks the toolchain, `gnui.json`, the `gnui-dev` identity (trust, validity, a real signing round trip) and release identities |
 
 Exit status: `0` ok, `1` failure, `2` bad command line, `3` a step that needs

@@ -143,11 +143,18 @@
 // or no valid Authenticode signature while Options.Unsigned is not set
 // (ErrNotSigned).
 //
-// Prepare takes the new .exe, or the zip gnui package writes (one .exe at its
-// top), and copies the executable into a private folder on the running
-// executable's volume ("selfupdate" in app/paths.Cache, or a hidden folder
-// next to the executable): a new file, so it carries no Mark of the Web and
-// SmartScreen does not stop it. The staged executable must be for this
+// Prepare takes the new .exe, or the zip gnui package writes, and copies the
+// executable into a private folder on the running executable's volume
+// ("selfupdate" in app/paths.Cache, or a hidden folder next to the
+// executable): a new file, so it carries no Mark of the Web and SmartScreen
+// does not stop it. The zip holds, at its top and nothing else, one .exe and
+// the files its version resource declares beside it (winres.FilesKey: the
+// .dll files of gnui.json's nativeLibs and their .txt licences), which are
+// staged with it; a bare .exe is an update only for a build that declares
+// no files. Every declared file must be there and nothing else, each DLL
+// for the same machine type and, when the app is signed, signed by the same
+// publisher as the executable. An unsigned app's digest (PrepareSHA256) is
+// the zip's, so it covers every file. The staged executable must be for this
 // machine type, name the same AppUserModelID, be newer (the file version's
 // first three parts, then the fourth; Options.AllowDowngrade as on macOS)
 // and, when the running app is signed, pass WinVerifyTrust with the same
@@ -160,13 +167,17 @@
 // started with a private argument and two inherited handles: the app's
 // process, which it waits on, and the staging folder's lock. Once the app
 // has exited it checks the executable is the one that staged the update,
-// verifies the staged copy again (the signature, or the digest), renames
-// the old executable into the staging folder (old.exe), renames the new one
-// into its place, starts it with the arguments InstallAndRelaunch was given,
-// and waits for Started (Options.HealthTimeout). On a timeout, or when the
-// new version exits first, it ends the new version (TerminateProcess, after
-// checking that the process runs the installed executable), renames the old
-// executable back and starts it, and LastResult reports RolledBack. The
+// verifies the staged files again (the signatures, and each file's digest
+// taken at Prepare), renames the old executable and the files beside it that
+// the old version declares or the update brings into the staging folder
+// (old), renames the new files and then the new executable into place,
+// starts it with the arguments InstallAndRelaunch was given, and waits for
+// Started (Options.HealthTimeout). On a timeout, or when the new version
+// exits first, it ends the new version (TerminateProcess, after checking
+// that the process runs the installed executable), undoes every rename (the
+// old executable and its files back together) and starts it, and LastResult
+// reports RolledBack. A rename that fails during the swap undoes the ones
+// before it in the same way. The
 // helper's own copy cannot be deleted while it runs: the next run's Started
 // or LastResult, or the next Prepare, removes it.
 //

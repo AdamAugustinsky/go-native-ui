@@ -146,8 +146,13 @@ Finder scene): a legacy knob over its slot reads #7A7A7A in light and #9F9F9F
 in dark, an overlay knob #808080 and #9A9A9A over the view, both
 labelColor-black at 49.8 % and white at 55.1 % (`ListRecipe.LegacyKnob`,
 `OverlayKnob`). Ours were #747474 and #A5A5A5 for legacy, and an overlay knob
-in the Rex palette's purple-grey. The legacy knob is 5 % longer in AppKit's
-capture than ours (a knob-length difference not addressed here).
+in the Rex palette's purple-grey. The legacy knob was 5 % longer in AppKit's
+capture than ours: NSScrollView sets the knob proportion to the clip view's
+height over the document's plus the content inset (the toolbar's 52 pt), while
+the slot excludes the inset, which ours had left out of both. The knob is now
+the slot times that share, rounded down to a half point, and no shorter than
+20 pt (16 small legacy, 26 overlay): `widget/base` `barGeom`, tested against
+`theme/testdata/appkit-scroller-knobs-27.2.json` (`scroller.sh -knobs`).
 
 The lists' samples (page 2, `appkit-lists`; tables, outlines) on 2026-10-19:
 86 of 86 offscreen in blue and in pink; 66 of 66 live with the Mac's

@@ -13,8 +13,9 @@ import (
 	"gonativeui/platform"
 )
 
-// A session is a recording made of segments (macOS): the state machine
-// between the system's callbacks and the Recording. It runs on the main
+// A session is a recording made of segments (macOS) or one file (Windows,
+// oneFile): the state machine between the system's callbacks and the
+// Recording. It runs on the main
 // thread; the system's handlers only post messages to its inbox and wake
 // the main thread (D36), which pumps it. It knows the OS only through
 // native, so it is tested everywhere with a fake.
@@ -33,10 +34,12 @@ type native interface {
 	// start makes the stream with a first output writing path (segment 0)
 	// and starts it; mStarted follows.
 	start(path string) error
-	// attach adds an output writing segment seg to path (Resume).
+	// attach adds an output writing segment seg to path (Resume). In a
+	// oneFile session it continues segment 0 instead.
 	attach(seg int, path string) error
 	// detach removes the current output (Pause); its segment's
-	// mSegFinished follows.
+	// mSegFinished follows. In a oneFile session it only stops feeding the
+	// file, and no message follows.
 	detach() error
 	// stopCapture stops the stream; mCaptureStopped follows, and each
 	// writing segment's mSegFinished.
@@ -120,6 +123,10 @@ type session struct {
 	out  string // the final MP4
 	wake func() // has the main thread pump (any thread)
 	done func() // after Ended (main thread)
+
+	// oneFile: pausing keeps writing segment 0 (Windows offsets the
+	// timestamps after a pause), so there is never a join.
+	oneFile bool
 
 	mu      sync.Mutex
 	inbox   [inboxSize]msg
@@ -387,13 +394,19 @@ func (s *session) resume() error {
 	default:
 		return ErrNotRecording
 	}
-	i := len(s.segs)
-	path := s.segPath(i)
-	os.Remove(path)
-	if err := s.n.attach(i, path); err != nil {
-		return err
+	if s.oneFile {
+		if err := s.n.attach(0, s.segs[0].path); err != nil {
+			return err
+		}
+	} else {
+		i := len(s.segs)
+		path := s.segPath(i)
+		os.Remove(path)
+		if err := s.n.attach(i, path); err != nil {
+			return err
+		}
+		s.segs = append(s.segs, segment{path: path})
 	}
-	s.segs = append(s.segs, segment{path: path})
 	s.r.clock.start()
 	s.r.paused.Store(false)
 	s.ph = phRecording

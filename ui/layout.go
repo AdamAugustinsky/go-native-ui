@@ -19,6 +19,15 @@ func (b *box) layoutAxis() int {
 
 func snap(v float32) float32 { return float32(math.Floor(float64(v) + 0.5)) }
 
+// CeilText is the width in pixels of a box for text w pixels wide (or w of
+// text and padding): w rounded up to a whole pixel, as AppKit rounds a
+// label's width up to a half point at 2x (NSTextField's intrinsic width: 38.33
+// pt of "Check" is 38.5). Layout snaps a box's edges to whole pixels, so a
+// box of a whole width keeps it, and the text is never wider than its box,
+// which would fade it out at the edge. A hundredth of a pixel of shaping noise
+// does not round up, as the overflow test allows as much.
+func CeilText(w float32) float32 { return float32(math.Ceil(float64(w) - 0.01)) }
+
 // limit keeps b's size on axis a within its NextMinSize and NextMaxSize.
 func (b *box) limit(a int) {
 	if b.hi[a] > 0 && b.size[a] > b.hi[a] {
@@ -295,7 +304,8 @@ func (c *Context) sizeAxis(a int) {
 				case a == 0 && b.flags&WrapText != 0:
 					ext = c.wrapNatural(b)
 				case a == 0:
-					ext = b.textW
+					pad := b.padSum(0)
+					ext = CeilText(b.textW+pad) - pad
 				case b.flags&WrapText != 0:
 					ext = c.fontInfo(b.font).lh * float32(max(b.lnN, 1))
 				default:

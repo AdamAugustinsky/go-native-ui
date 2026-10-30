@@ -113,39 +113,6 @@ func wantOverlay(t *testing.T, log bool) {
 	}
 }
 
-// outsideCause says what in the system or in another app a cause stands for,
-// when it is one that reaches a window which sits idle on a Mac in use: none
-// of them is the app's own doing.
-//
-//   - CauseAppearance: the appearance or the system's values changed. AppKit
-//     posts one some time after launch on a Mac with a mouse (the scroller
-//     style turns legacy: bars that take room).
-//   - CauseApp with EvActivated or EvDeactivated: another app took the
-//     activation, or gave it back (D37: an app event draws what the Handler
-//     may have changed). Other processes' windows do it all the time where
-//     tests run side by side; until the overlay recorded app events these
-//     frames showed as "menu" or "NO CAUSE".
-//   - CauseApp with EvScreensChanged: AppKit reported screen-parameter changes
-//     (including a hosted runner's virtual display reconfiguration).
-//   - CauseVisible: another window covered or uncovered this one. A change
-//     waits for the loop's next wake, so it comes with one of the above.
-func outsideCause(c app.RepaintCause) (string, bool) {
-	switch c.Kind {
-	case app.CauseAppearance:
-		return "the system's appearance or values changed", true
-	case app.CauseVisible:
-		return "another window covered or uncovered this one", true
-	case app.CauseApp:
-		if app.EventKind(c.Sub) == app.EvScreensChanged {
-			return "the system's screen parameters changed", true
-		}
-		if k := app.EventKind(c.Sub); k == app.EvActivated || k == app.EvDeactivated {
-			return "another app took the activation or gave it back", true
-		}
-	}
-	return "", false
-}
-
 // maxFollow bounds the frames of an animation that follows an outside cause:
 // 1.5 s of frames at 120 Hz. The fade to new values takes the same number of
 // frames however long the system takes to give them (a covered window gets
@@ -171,7 +138,7 @@ func (v verdict) String() string {
 }
 
 // attribute judges frames[from:]. A frame is explained when each of its causes
-// is an outside one (outsideCause) or an animation that follows a frame with
+// is an outside one (widgettest.OutsideCause) or an animation that follows a frame with
 // an outside cause, at most maxFollow frames on. Frames built in the first
 // grace of the app's life are not judged, but an outside cause among them is
 // followed too. Frames before from are not followed: what they started is not
@@ -184,7 +151,7 @@ func attribute(frames []loggedFrame, from int, grace time.Duration) []verdict {
 		var outside []string
 		anim, other := false, !f.ended || len(f.causes) == 0
 		for _, c := range f.causes {
-			if why, ok := outsideCause(c); ok {
+			if why, ok := widgettest.OutsideCause(c); ok {
 				outside = append(outside, why)
 			} else if c.Kind == app.CauseAnimation && follow >= 0 && follow < maxFollow {
 				anim = true

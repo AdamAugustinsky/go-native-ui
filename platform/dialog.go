@@ -12,8 +12,10 @@ import (
 // On macOS an alert is an NSAlert sheet and a file panel an NSOpenPanel or
 // NSSavePanel sheet, attached to the window and started with
 // beginSheetModalForWindow:completionHandler: (never runModal, which would
-// starve the event loop). Everywhere else these calls return ErrUnsupported
-// and the app falls back to its drawn dialog (widget.Dialog).
+// starve the event loop). On Windows the file panels are IFileOpenDialog and
+// IFileSaveDialog owned by the window (dialog_windows.go) and Alert returns
+// ErrUnsupported. Everywhere else these calls return ErrUnsupported and the
+// app falls back to its drawn dialog (widget.Dialog).
 //
 // The three calls return a DialogTicket at once. The answer arrives later
 // through the application object (appobj.go), not the window: the ticket is a

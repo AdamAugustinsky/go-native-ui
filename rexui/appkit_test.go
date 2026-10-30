@@ -520,3 +520,17 @@ func TestBoxesAreAppKitsNotTheSampleFrames(t *testing.T) {
 		t.Errorf("the reference's field is %v × %v: not the frame plus the outline", w.W, w.H)
 	}
 }
+
+// TestLabelStylesAreAsTallAsAppKits: AppKitRef's label-styles stack (11 text
+// styles and 5 colours of one-line labels, 4 pt apart) fits 336.5 pt, because
+// its label cells are 31, 20.5 and 19 pt for Large Title, Title 2 and Title 3
+// (theme.TextSpec.Cell), where the lines are 32, 22 and 20. The sample's 337 pt
+// frame is the same stack rounded up.
+func TestLabelStylesAreAsTallAsAppKits(t *testing.T) {
+	var root ui.ID
+	g := newRig(t, theme.Light, nil, sample(catalog.Index("label-styles"), &root))
+	g.settle()
+	if r := g.c.Rect(root); math.Abs(float64(r[3]-r[1])-2*336.5) > 0.01 {
+		t.Errorf("label-styles is %v pt tall, AppKit's fitting height 336.5", (r[3]-r[1])/2)
+	}
+}

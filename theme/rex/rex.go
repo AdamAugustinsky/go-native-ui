@@ -27,6 +27,11 @@ func Theme() *theme.Theme {
 		Fonts:        fonts,
 		Motion:       motion,
 		SystemAccent: true,
+		// Rex's panes are circular arcs, not macOS's squircle: the corner of
+		// the reference screenshot's pane fits a circle of 10 pt to 0.27 px
+		// and a continuous corner only to 0.56 px (normal distance of the
+		// edge highlight, 104 points of the top left corner of the right pane).
+		Corners:      theme.CornersCircular,
 		Roles:        roles,
 		Text:         textStyles,
 		SystemColors: true,

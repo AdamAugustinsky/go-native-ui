@@ -21,7 +21,10 @@ var appKitToggleOn = ButtonRecipe{
 // segment in the accent under a white label, systemRed destructive labels and
 // borderless icon buttons without a chip. Rex's capsules and quiet
 // tints are the default; an app that wants AppKit's controls instead calls
-// this once, before its first frame.
+// this once, before its first frame. AppKit's rounded corners are continuous
+// (a squircle, not an arc): the theme says so with Corners =
+// theme.CornersContinuous (the default on macOS for a theme that sets none;
+// Rex's is circular).
 func UseAppKitControls() {
 	for _, v := range [...]ButtonVariant{ButtonDefault, ButtonPrimary, ButtonDestructive, ButtonPlain} {
 		ButtonRecipes[v].Capsule = false

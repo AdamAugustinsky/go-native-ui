@@ -342,14 +342,20 @@ func TestPlayerPauseNearEnd(t *testing.T) {
 	if !near(before, held, 2*time.Millisecond) || playing || len(got) != 0 {
 		t.Fatalf("paused at %v, 300 ms later position=%v playing=%v events=%+v", held, before, playing, got)
 	}
+	// Resumed, it ends after the rest of the clip; a loaded runner delays
+	// one end now and then (426 ms for 29 ms on p8-win-dialogs 40805350430),
+	// so a miss plays the rest again from where it held (endedOnTime).
 	resumed := play(t, p)
-	took := endAfter(t, p, 0, resumed)
-	if want := time.Second - held; took < want-50*time.Millisecond || took > want+300*time.Millisecond {
-		t.Errorf("resumed at %v: ended after %v, want about %v", held, took, want)
+	ends := 1
+	if endedOnTime(t, fmt.Sprintf("resumed at %v of a 1 s clip, it", held), endAfter(t, p, 0, resumed), time.Second-held, func() (time.Duration, time.Duration) {
+		onMain(func() { p.Seek(held) })
+		return endAfter(t, p, 1, play(t, p)), time.Second - held
+	}) {
+		ends = 2
 	}
 	time.Sleep(300 * time.Millisecond)
 	onMain(func() { before, playing = p.Position(), p.Playing() })
-	if got = eventsFor(p.ID()); len(got) != 1 || got[0].ev.Kind != Ended || playing || before != 0 {
+	if got = eventsFor(p.ID()); len(got) != ends || got[ends-1].ev.Kind != Ended || playing || before != 0 {
 		t.Fatalf("after end: position=%v playing=%v events=%+v", before, playing, got)
 	}
 }

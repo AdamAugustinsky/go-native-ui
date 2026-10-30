@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package platform
 
@@ -41,6 +41,9 @@ func (e *Editor) SetSpans([]TextSpan) error { return ErrNoHosts }
 
 // SetOptions changes the editor's options.
 func (e *Editor) SetOptions(EditorOptions) {}
+
+// SetColors sets the text and fill colours.
+func (e *Editor) SetColors(text, background uint32) {}
 
 // SetPlaceholder changes the placeholder.
 func (e *Editor) SetPlaceholder(string) {}

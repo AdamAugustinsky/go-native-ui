@@ -15,6 +15,12 @@ mkdir -p docs/design/ref &&
   sips -s format png /tmp/rex.webp --out docs/design/ref/rex-screenshot@2x.png
 ```
 
+**Live reference.** [rex-live-reference-2026-10-29.md](rex-live-reference-2026-10-29.md)
+records Rex Beta 0.1.0 (1642) as installed on the Mac mini: its process
+architecture and window geometry, and, still owed, its live behaviour
+(focus, resize, panes, keyboard, density, appearance and accessibility),
+which needs a session with Screen Recording and Accessibility permission.
+
 ## Boundaries
 
 The Rex look is both the benchmark and our product's look (user,

@@ -56,7 +56,7 @@ var components = map[string][]string{
 	"link":        {"link.go", "text.go"},
 	"toggle":      {"toggle.go", "button.go"},
 	"tabs":        {"tabs.go", "glyph.go", "motion.go"},
-	"toolbar":     {"toolbar.go", "scrolledge.go", "glass.go", "tabs.go", "glyph.go", "motion.go", "button.go", "searchfield.go", "textfield.go", "popover.go"},
+	"toolbar":     {"toolbar.go", "caption.go", "scrolledge.go", "glass.go", "tabs.go", "glyph.go", "motion.go", "button.go", "searchfield.go", "textfield.go", "popover.go"},
 	"sidebar":     {"sidebar.go", "glass.go", "glyph.go", "motion.go", "disclosure.go", "button.go", "searchfield.go", "textfield.go"},
 	"pathbar":     {"pathbar.go", "glyph.go"},
 }

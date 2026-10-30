@@ -150,7 +150,7 @@ func tableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs, clear bool) {
 			c.NextSize(ui.Pct(1), ui.Px(body))
 			c.BoxKeyed(0, ui.KeyN(hc.Key, 3), nil)
 		}
-		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(body))
+		c.NextSize(ui.TextSize(0), ui.Px(body))
 		c.NextFont(font)
 		c.NextTextColor(tc)
 		c.NextAlign(hc.Col.Align)

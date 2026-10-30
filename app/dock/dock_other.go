@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package dock
 
@@ -10,3 +10,4 @@ func osBounce(bool) (Attention, error) { return 0, ErrUnsupported }
 func osCancelBounce(Attention)         {}
 func osSetPolicy(app.Policy) error     { return ErrUnsupported }
 func osPolicy() (app.Policy, error)    { return app.PolicyRegular, ErrUnsupported }
+func osSetProgress(float64) error      { return ErrUnsupported }

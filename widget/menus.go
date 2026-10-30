@@ -128,6 +128,16 @@ func (k *Kit) menuPanel(level, mi int, anchor [4]float32, place ui.Placement) {
 // on a title, Left and Right move along the bar and Enter, Space and Down open
 // the menu. With native menus (macOS, ui.Context.NativeMenus) the bar is the
 // system's and MenuBar builds nothing.
+//
+// The keyboard reaches it as in Windows: F10, or Alt pressed and released on
+// its own, puts the focus on the first title (and again, or Escape, gives it
+// back to where it was); Alt and a title's mnemonic opens that menu, as does
+// the mnemonic alone while a title has the focus; in an open menu an item's
+// mnemonic chooses it. The mnemonics are underlined while the keyboard drives
+// the bar (base.Mnemonics; menu.Menu.Mnemonic and menu.Command.Mnemonic choose
+// them). F10 and Alt with a letter are taken at the end of the frame (Kit.End),
+// after the window's components, so a focused component that has a use for
+// them (a terminal) keeps them; a text field does not take them.
 func (k *Kit) MenuBar() Signal {
 	c := k.c
 	m := k.Menu()
@@ -145,12 +155,42 @@ func (k *Kit) MenuBar() Signal {
 	c.NextSemName("Menu bar")
 	id := c.BoxKeyed(0, bkey, nil)
 	c.Push(id)
+
+	mns := &k.bar.mn
+	*mns = base.Mnemonics{}
+	focused := -1 // the title with the focus
+	for bi, mi := range bar {
+		mns.Add(m.Menus()[mi].Title, m.Menus()[mi].Mnemonic)
+		if c.FocusKey() == ui.KeyN(bkey, uint64(bi)) {
+			focused = bi
+		}
+	}
+	mns.Resolve()
+	barOpen := k.pop.Kind == base.PopupMenu && k.pop.Bar == bkey
+	if focused < 0 && !barOpen {
+		k.bar.mode, k.bar.prev = false, 0 // the keyboard left the bar
+	}
+	k.bar.key, k.bar.built = bkey, !k.off() && len(bar) > 0
+	show := k.ShowMnemonics() && (focused >= 0 || barOpen || c.Input().Mods == ui.ModAlt)
+
 	want := -1
+	if focused >= 0 && !barOpen && !k.off() {
+		switch letter, at := base.TypedMnemonic(c, 0); {
+		case at >= 0:
+			if bi, _ := mns.Find(letter, -1); bi >= 0 {
+				base.ClaimMnemonic(c, at)
+				want = bi
+			}
+		case k.bar.mode && c.TakeKey(ui.KeyEscape, 0):
+			k.leaveBar()
+		}
+	}
 	for bi, mi := range bar {
 		title := m.Menus()[mi].Title
 		key := ui.KeyN(bkey, uint64(bi))
 		open := k.pop.Kind == base.PopupMenu && k.pop.Owner == key
-		w := theme.Snap(k.textW(k.r.Font.UI, title) + 2*px.Pad)
+		tw := k.textW(k.r.Font.UI, title)
+		w := theme.Snap(tw + 2*px.Pad)
 		hi := max(c.HotTOf(key), c.FocusTOf(key))
 		flags := k.InteractFlags(hoverOn) | ui.DrawText
 		if !k.off() {
@@ -176,6 +216,11 @@ func (k *Kit) MenuBar() Signal {
 		c.NextSemState(state)
 		c.NextSemActions(ui.ActPress | ui.ActFocus | ui.ActExpand | ui.ActCollapse)
 		item := c.BoxKeyed(flags, key, strBytes(title))
+		if _, off := mns.At(bi); show && off >= 0 {
+			c.Push(item)
+			k.MnemonicUnderline(ui.KeyN(key, 1), k.r.Font.UI, title, off, (w-tw)/2, 0, h, p.Text)
+			c.Pop()
+		}
 		if !k.off() {
 			s := c.Signal(item)
 			switch {
@@ -205,11 +250,102 @@ func (k *Kit) MenuBar() Signal {
 	}
 	c.Pop()
 	if want >= 0 {
-		k.OpenPopup(base.PopupMenu, ui.KeyN(bkey, uint64(want)), bar[want], [4]float32{})
-		k.pop.Bar = bkey
+		k.openBarMenu(want)
 	}
 	k.undim(dim)
 	return Signal{ID: id}
+}
+
+// barKeys is the menu bar's keyboard state, kept by the Kit.
+type barKeys struct {
+	key   ui.Key         // the bar's key, as the last MenuBar built it
+	built bool           // MenuBar built the bar this frame (Kit.End takes its keys)
+	mode  bool           // the keyboard put the focus on the bar (F10, Alt)
+	prev  ui.Key         // the focus before that, given back when it leaves
+	mn    base.Mnemonics // the titles' mnemonics
+}
+
+// openBarMenu opens the menu of title bi of the bar. In the bar's keyboard
+// mode the title takes the focus (Escape in the menu comes back to it) and a
+// choice gives the focus back to where it was before the bar took it.
+func (k *Kit) openBarMenu(bi int) {
+	bar := k.Menu().Bar()
+	title := ui.KeyN(k.bar.key, uint64(bi))
+	if k.bar.mode {
+		k.c.SetFocus(title) // Escape in the menu comes back to its title, as in Windows
+	}
+	k.OpenPopup(base.PopupMenu, title, bar[bi], [4]float32{})
+	k.pop.Bar = k.bar.key
+	if k.bar.mode {
+		k.pop.Restore = k.bar.prev
+	}
+}
+
+// leaveBar gives the focus back to where it was before the bar took it, and
+// closes the bar's menu.
+func (k *Kit) leaveBar() {
+	c := k.c
+	if k.pop.Kind == base.PopupMenu && k.pop.Bar == k.bar.key {
+		k.pop.Reset()
+	}
+	c.SetFocus(k.bar.prev)
+	k.bar.mode, k.bar.prev = false, 0
+	c.RequestFrame()
+}
+
+// menuBarKeys takes the menu bar's keys that no component took this frame
+// (MenuBar): F10 or an Alt tap moves the focus to the bar or gives it back,
+// Alt and a title's mnemonic opens its menu.
+func (k *Kit) menuBarKeys() {
+	if !k.bar.built {
+		return
+	}
+	k.bar.built = false
+	c := k.c
+	if c.ModalOpen() {
+		return // the bar is behind the dialog, as the app's commands are
+	}
+	bar := k.Menu().Bar()
+	onBar := false
+	for bi := range bar {
+		onBar = onBar || c.FocusKey() == ui.KeyN(k.bar.key, uint64(bi))
+	}
+	barOpen := k.pop.Kind == base.PopupMenu && k.pop.Bar == k.bar.key
+	if c.TakeKey(ui.KeyF10, 0) || c.TakeAltTap() {
+		switch {
+		case barOpen && !k.bar.mode:
+			r := k.pop.Restore
+			k.pop.Reset()
+			c.SetFocus(r)
+			c.RequestFrame()
+		case onBar || barOpen:
+			k.leaveBar()
+		default:
+			k.bar.mode, k.bar.prev = true, c.FocusKey()
+			c.SetFocus(ui.KeyN(k.bar.key, 0))
+			c.SetFocusVisible(true)
+			c.RequestFrame()
+		}
+		return
+	}
+	letter, at := base.TypedMnemonic(c, ui.ModAlt)
+	if at < 0 {
+		return
+	}
+	bi, _ := k.bar.mn.Find(letter, -1)
+	if bi < 0 {
+		return
+	}
+	base.ClaimMnemonic(c, at)
+	if !k.bar.mode {
+		k.bar.prev = c.FocusKey()
+		if barOpen {
+			k.bar.prev = k.pop.Restore
+		}
+		k.bar.mode = true
+	}
+	k.openBarMenu(bi)
+	c.SetFocusVisible(true)
 }
 
 func b2f(b bool) float32 {

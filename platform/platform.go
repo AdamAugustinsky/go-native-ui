@@ -437,6 +437,14 @@ type Options struct {
 	// out of the Dock, the taskbar and the app switcher (see Panel). Open
 	// fails with ErrNoPanels where the OS has none yet (PanelsSupported).
 	Panel *Panel
+
+	// ChildWindows keeps a GDI surface for hosted child windows that draw
+	// with GDI (Win32 controls given to NewHost, such as an EDIT). A window
+	// on Windows normally has none (WS_EX_NOREDIRECTIONBITMAP: what it shows
+	// is its swap chain's), and a GDI child window of such a window shows
+	// nothing (probe P2's no-redirection run); children that present with
+	// DirectX or DirectComposition show either way. Ignored elsewhere.
+	ChildWindows bool
 }
 
 // Backdrop is a system material behind a window's content (Options.Backdrop).

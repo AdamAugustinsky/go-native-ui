@@ -251,23 +251,39 @@ func videoFrames(plain, turned string) (errs []string) {
 
 	// Paused, it holds: the position stays, no frame is asked for, and a
 	// new rate waits for the next Play.
+	// The position is read once it has stopped: on a loaded runner the
+	// player's clock ran on for a moment after Pause returned (1.614 s, then
+	// 1.806 s at 2×: p8-win-gaps 40825237562), which is AVPlayer's, not a
+	// pause that does not hold.
+	s = frameOf(r, v, 160, 96)
+	showing := s.at(40, 48)
+	pausedAt := v.Position()
 	v.Pause()
 	v.SetRate(1.5)
 	p0 := v.Position()
+	for t0 := time.Now(); time.Since(t0) < time.Second; {
+		pump(20 * time.Millisecond)
+		p := v.Position()
+		if p == p0 {
+			break
+		}
+		p0 = p
+	}
 	for t0 := time.Now(); time.Since(t0) < 300*time.Millisecond; {
 		pump(10 * time.Millisecond)
 		s = frameOf(r, v, 160, 96)
 	}
-	if p1 := v.Position(); p1-p0 > 40*time.Millisecond || p0-p1 > 40*time.Millisecond {
-		fail("paused at %v, then at %v", p0, p1)
+	if p1 := v.Position(); p1-p0 > 40*time.Millisecond || p0-p1 > 40*time.Millisecond || p0-pausedAt > 400*time.Millisecond {
+		fail("paused at %v (%v when Pause was called), then at %v", p0, pausedAt, p1)
 	}
 	if s.next != 0 {
 		fail("paused: next frame in %d ns, want none", s.next)
 	}
-	// It holds the frame showing (Pause), which at 2× can be the one of up
-	// to a frame before the position (a new second's colour may not show).
-	if want, before := colourAt(p0.Seconds()), colourAt((p0 - 70*time.Millisecond).Seconds()); !closeTo(s.at(40, 48), want, 40) && !closeTo(s.at(40, 48), before, 40) {
-		fail("paused at %v: left %v, want %v", p0, s.at(40, 48), want)
+	// It holds the frame showing when it paused (Pause), whatever second's
+	// colour that is: a loaded runner pulls frames late, and the one showing
+	// at 2.33 s was still the first second's (green for blue: 40723321723).
+	if !closeTo(s.at(40, 48), showing, 40) {
+		fail("paused at %v: left %v, want %v, the frame showing when it paused", p0, s.at(40, 48), showing)
 	}
 	// A paused frame has one owned texture: repeated redraws import no
 	// pixel buffers, retain none, and allocate nothing.

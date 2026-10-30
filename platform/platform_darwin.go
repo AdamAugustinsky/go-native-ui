@@ -78,6 +78,7 @@ type Window struct {
 	ticks, ticksSinceFrame, pauses uint64
 	armedT, lastTickT, lastFrameT  int64
 	visible                        int8 // last EvVisible: 1, 0, or -1 before any
+	hideSaid                       bool // Hide reported it hidden, AppKit having reported nothing (Show takes it back)
 	visibleT                       int64
 	restarts                       uint64 // stopped links replaced (restartLink)
 	restartT                       int64

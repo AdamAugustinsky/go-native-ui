@@ -18,6 +18,12 @@ type Decorations struct {
 	// Maximized is true while the window is maximized (the maximize button
 	// then restores it).
 	Maximized bool
+	// Caption is true when the window has a titlebar the app draws
+	// (app.Config.Titlebar on Windows) whose caption buttons (minimise,
+	// maximise, close) the app draws too, in SystemButtons' rectangle: the
+	// OS reports them there to its snap layouts and the window's hit test,
+	// and draws nothing. rexui.BeginToolbar draws them (rexui.CaptionButtons).
+	Caption bool
 }
 
 // WindowAction is something the UI asks the window to do.

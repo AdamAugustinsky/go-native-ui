@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -525,6 +524,16 @@ func becameDownload(c *ffi.CB) {
 	v.post(DownloadStarted, 0, d.ID)
 }
 
+// taken reports whether one of the view's downloads is written to p.
+func (v *view) taken(p string) bool {
+	for _, d := range v.dls {
+		if d.Path == p {
+			return true
+		}
+	}
+	return false
+}
+
 // downloadOf is the view and record of WKDownload dl, for the download
 // delegate's calls.
 func downloadOf(self, dl objc.ID) (*view, *download) {
@@ -547,58 +556,12 @@ func decideDestination(c *ffi.CB) {
 	v, d := downloadOf(self, dl)
 	var dest objc.ID
 	if v != nil && d != nil && v.opt.DownloadDir != "" {
-		if path, err := uniquePath(v.opt.DownloadDir, string(objc.AppendUTF8(nil, name)), v.dls); err == nil {
+		if path, err := uniquePath(v.opt.DownloadDir, string(objc.AppendUTF8(nil, name)), v.taken); err == nil {
 			d.Path = path
 			dest = objc.Send1(clsNSURL, selFileURLWithPath, uintptr(objc.Str(path)))
 		}
 	}
 	objc.CallBlock(c.Frame(), handler, uintptr(dest)) // nil cancels the download
-}
-
-// uniquePath is a file in dir for suggested, unused on disk and by the
-// view's other downloads: "name.ext", then "name (2).ext" …
-func uniquePath(dir, suggested string, dls []*download) (string, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	name := cleanName(suggested)
-	ext := filepath.Ext(name)
-	stem := strings.TrimSuffix(name, ext)
-	for i := 1; i < 10000; i++ {
-		p := filepath.Join(dir, name)
-		if i > 1 {
-			p = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
-		}
-		if _, err := os.Lstat(p); err == nil {
-			continue
-		}
-		taken := false
-		for _, d := range dls {
-			taken = taken || d.Path == p
-		}
-		if !taken {
-			return p, nil
-		}
-	}
-	return "", os.ErrExist
-}
-
-// cleanName is a server's file name made safe to create: its last element,
-// no separators or control characters, not hidden; "download" if nothing is
-// left.
-func cleanName(s string) string {
-	s = filepath.Base(strings.ReplaceAll(s, "\\", "/"))
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7F || r == '/' || r == ':' {
-			return '_'
-		}
-		return r
-	}, s)
-	s = strings.TrimLeft(strings.TrimSpace(s), ".")
-	if s == "" {
-		return "download"
-	}
-	return s
 }
 
 func downloadDidFinish(c *ffi.CB) {

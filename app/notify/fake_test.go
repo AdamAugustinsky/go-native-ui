@@ -304,15 +304,26 @@ func (s *sink) results() []Result {
 }
 
 // resultOf is the delivered result with ticket tk.
+//
+// It waits for it (dispatching, up to 10 s): the service delivers a post's
+// result after the system has the note, so a test that waited for the note
+// may look before the result is there (TestPostWithTableFullHasNoActions,
+// "no result for ticket", p8-webview2 40816023392 on Windows amd64).
 func (s *sink) resultOf(t *testing.T, tk Ticket) Result {
 	t.Helper()
-	for _, r := range s.results() {
-		if r.Ticket == tk {
-			return r
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		for _, r := range s.results() {
+			if r.Ticket == tk {
+				return r
+			}
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no result for ticket %d in 10 s (results %+v)", tk, s.results())
+		}
+		drain()
+		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("no result for ticket %d (results %+v)", tk, s.results())
-	return Result{}
 }
 
 // waitResult waits for the result with ticket tk.
@@ -393,6 +404,14 @@ func fresh(t *testing.T, o Options) (*fakeCenter, *sink) {
 // start at 0. With manual set the launch's listing is left to the test.
 func relaunch(t *testing.T, o Options, manual bool) (*fakeCenter, *sink) {
 	t.Helper()
+	f := newFake(manual)
+	s := relaunchWith(t, o, f)
+	return f, s
+}
+
+// relaunchWith is relaunch over the backend b.
+func relaunchWith(t *testing.T, o Options, b backend) *sink {
+	t.Helper()
 	workers.Wait()
 	s := &sink{}
 	platform.SetAppSink(s)
@@ -417,9 +436,8 @@ func relaunch(t *testing.T, o Options, manual bool) (*fakeCenter, *sink) {
 	}
 	drain()
 	s.reset()
-	f := newFake(manual)
 	svc.setupMu.Lock()
-	svc.b = f
+	svc.b = b
 	svc.on.Store(false)
 	svc.setupMu.Unlock()
 	svc.catMu.Lock()
@@ -438,7 +456,7 @@ func relaunch(t *testing.T, o Options, manual bool) (*fakeCenter, *sink) {
 	if err := Setup(o); err != nil {
 		t.Fatal(err)
 	}
-	return f, s
+	return s
 }
 
 func mustPost(t *testing.T, n Note) PostResult {

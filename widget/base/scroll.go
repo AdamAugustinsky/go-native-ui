@@ -99,14 +99,6 @@ func (k *Kit) takeScrollMaxHeight() float32 {
 	return m
 }
 
-// barView is the content and view extents bar geometry works on: a vertical
-// bar's track runs below the view's top inset.
-func barView(content, view [2]float32, top float32) ([2]float32, [2]float32) {
-	content[1] -= top
-	view[1] -= top
-	return content, view
-}
-
 // BeginScroll starts a scroll view: a clipping box (as wide and high as its
 // parent unless NextSize says otherwise) whose content scrolls with the wheel,
 // the trackpad (rubber-banding past the edges), the keyboard
@@ -308,8 +300,7 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 				pa = float64(ca[a] - view[a])
 			}
 		}
-		bc, bv := barView(ca, view, top)
-		g, ok := k.barGeom(a, bc, bv, pa, both, legacy)
+		g, ok := k.barGeom(a, ca, view, top, pa, both, legacy, st.Size)
 		if !ok {
 			continue
 		}
@@ -398,15 +389,25 @@ func (k *Kit) BeginScrollBar(b *ScrollBar) ui.ID {
 }
 
 // barGeom is the geometry of the bar on axis a (0 horizontal, 1 vertical)
-// of a view; ok is false when the content fits and there is no bar.
-func (k *Kit) barGeom(a int, content, view [2]float32, pos float64, both, legacy bool) (g barGeometry, ok bool) {
+// of a view whose content starts top pixels below its top (a vertical bar's
+// track runs below that inset); ok is false when the content fits and there
+// is no bar. The knob is AppKit's: the slot times the share of the content
+// the view shows, the inset counted in both (NSScrollView sets the scroller's
+// knobProportion to the clip view's height over the document's plus the
+// content inset, while the slot excludes the inset), rounded down to a whole
+// pixel (a half point at 2x) and no shorter than the scroller's minimum.
+func (k *Kit) barGeom(a int, content, view [2]float32, top float32, pos float64, both, legacy bool, size theme.Size) (g barGeometry, ok bool) {
 	if content[a] <= view[a]+0.5 || view[a] <= 0 {
 		return g, false
 	}
 	if !legacy {
 		g.inset = theme.Snap(k.r.Px.BorderW * 2)
 	}
-	g.trackLen = view[a] - 2*g.inset
+	track := view[a]
+	if a == 1 {
+		track -= top
+	}
+	g.trackLen = track - 2*g.inset
 	if both && !legacy {
 		g.trackLen -= k.r.Px.ScrollbarW
 	}
@@ -415,7 +416,7 @@ func (k *Kit) barGeom(a int, content, view [2]float32, pos float64, both, legacy
 		g.slotOff = theme.Snap(k.r.Lines.ScrollerKnobInset)
 		g.slotLen = max(g.trackLen-2*g.slotOff, 0)
 	}
-	g.thumbLen = min(max(g.slotLen*view[a]/content[a], k.Pt(24)), g.slotLen)
+	g.thumbLen = min(max(float32(math.Floor(float64(g.slotLen*view[a]/content[a]))), k.knobMin(legacy, size)), g.slotLen)
 	maxScroll := float64(content[a] - view[a])
 	frac := float32(0)
 	if maxScroll > 0 {
@@ -423,6 +424,19 @@ func (k *Kit) barGeom(a int, content, view [2]float32, pos float64, both, legacy
 	}
 	g.thumbOff = g.slotOff + (g.slotLen-g.thumbLen)*frac
 	return g, true
+}
+
+// knobMin is the shortest knob in pixels: -[NSScroller rectForPart:] never
+// gives one shorter, whatever the content (theme.Lines.ScrollerKnobMin).
+func (k *Kit) knobMin(legacy bool, size theme.Size) float32 {
+	l := &k.r.Lines
+	switch {
+	case !legacy:
+		return theme.Snap(l.ScrollerKnobMinOverlay)
+	case size == theme.SizeSmall || size == theme.SizeMini:
+		return theme.Snap(l.ScrollerKnobMinSmall)
+	}
+	return theme.Snap(l.ScrollerKnobMin)
 }
 
 // barGeometry is where a bar is: its track starts inset pixels from the
@@ -448,12 +462,11 @@ func (k *Kit) ScrollInput(okey, skey ui.Key, st *ScrollState, axes ScrollAxes) {
 	sx, sy := c.Scroll(sid)
 	pos := [2]float64{sx, sy}
 	both := axes == ScrollBoth
-	bc, bv := barView(content, view, st.top)
 	for a := 0; a < 2; a++ {
 		if !hasAxis(axes, a) {
 			continue
 		}
-		g, ok := k.barGeom(a, bc, bv, pos[a], both, k.legacyBars(st))
+		g, ok := k.barGeom(a, content, view, st.top, pos[a], both, k.legacyBars(st), st.Size)
 		if !ok {
 			continue
 		}

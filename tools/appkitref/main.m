@@ -1699,7 +1699,17 @@ static NSDictionary *fontTable(void) {
 		@"caption2" : NSFontTextStyleCaption2,
 	};
 	NSMutableDictionary *ts = [NSMutableDictionary dictionary];
-	for (NSString *k in styles) ts[k] = fontJ([NSFont preferredFontForTextStyle:styles[k] options:@{}]);
+	for (NSString *k in styles) {
+		NSFont *f = [NSFont preferredFontForTextStyle:styles[k] options:@{}];
+		NSMutableDictionary *e = [fontJ(f) mutableCopy];
+		// a single-line label (NSTextField labelWithString:): its intrinsic height, the
+		// cell's rounded up to a half point, and the width of "Check" (theme.TextSpec.Cell)
+		NSTextField *l = [NSTextField labelWithString:@"Check"];
+		l.font = f;
+		e[@"labelCell"] = num(l.intrinsicContentSize.height);
+		e[@"labelCheckWidth"] = num(l.intrinsicContentSize.width);
+		ts[k] = e;
+	}
 	d[@"textStyles"] = ts;
 	// the system font across sizes: the optical-size axis and the tracking
 	NSMutableArray *curve = [NSMutableArray array];

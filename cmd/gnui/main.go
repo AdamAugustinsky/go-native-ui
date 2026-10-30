@@ -10,6 +10,7 @@
 //	gnui sign    [-identity id|-dev|-adhoc] [-hardened] [-entitlements file] path.app
 //	gnui doctor  [-c gnui.json] [-setup-dev-cert]
 //	gnui inspect [-json] [-timeout d] <socket> windows|tree|do|shot ...
+//	gnui provenance [-dir dir] [-json]
 //
 // package builds a release bundle: an arm64 binary (macOS means Apple
 // silicon, DECISIONS.md D55), Info.plist, an .icns icon, resources, nested
@@ -32,6 +33,10 @@
 // steps by role and name, and renders the current frame to a PNG. It works on
 // every OS the bridge does.
 //
+// provenance prints the framework tree's provenance for app packagers: its
+// revision, the libghostty-vt pin and libraries, the precompiled shader
+// library and the Go toolchain (docs/design/build-provenance.md).
+//
 // See cmd/gnui/README.md for the gnui.json schema and the signing scheme.
 package main
 
@@ -52,6 +57,8 @@ usage:
   gnui doctor [flags]     check the toolchain and the signing identities
   gnui inspect <socket> windows|tree|do|shot
                           drive and inspect a development build run with GNUI_INSPECT=<socket>
+  gnui provenance [-dir dir] [-json]
+                          the framework tree's revision, Ghostty pin, shader library and Go (for packagers)
 
 Every command reads -c gnui.json (default: ./gnui.json) where it needs one.
 Run "gnui <command> -h" for the flags.
@@ -81,6 +88,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdDoctor(args[1:], stdout, stderr)
 	case "inspect":
 		err = cmdInspect(args[1:], stdout, stderr)
+	case "provenance":
+		err = cmdProvenance(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0

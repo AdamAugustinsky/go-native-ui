@@ -84,7 +84,8 @@ VOut vs_main(VIn i) {
 	o.color = i.color;
 	o.radii = i.radii;
 	o.misc = float4(i.border, i.soft, i.fadeX.x, i.fadeX.y);
-	o.flags = uint2(i.borderColor, i.mode);
+	// ShapeContinuous (the tex of a shape quad) rides in bit 8 of the mode
+	o.flags = uint2(i.borderColor, i.mode | (i.mode == 0u ? (i.tex & 1u) << 8u : 0u));
 	o.tex = i.tex;
 	return o;
 }
@@ -107,6 +108,35 @@ float rrect_sdf(float2 p, float4 rect, float4 radii) {
 	r = min(r, min(h.x, h.y));
 	float2 d = abs(q) - h + r;
 	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+
+// The continuous (squircle) corner of macOS, ShapeContinuous: the corner of
+// radius r reaches CORNER_REACH * r along both edges and follows a
+// superellipse |x|^n + |y|^n = 1 of exponent CORNER_N (drawlist.go; the
+// constants must match). The distance is the norm's first-order estimate,
+// (f - 1) / |grad f|, exact on the straight edges and good to a fraction of
+// a pixel at the edge of the shape, where it is used.
+#define CORNER_REACH 1.52
+#define CORNER_N 3.3
+
+float crect_sdf(float2 p, float4 rect, float4 radii) {
+	float2 c = (rect.xy + rect.zw) * 0.5;
+	float2 h = (rect.zw - rect.xy) * 0.5;
+	float2 q = p - c;
+	float r = q.x < 0.0 ? (q.y < 0.0 ? radii.x : radii.w)
+	                    : (q.y < 0.0 ? radii.y : radii.z);
+	float e = min(CORNER_REACH * r, min(h.x, h.y));
+	if (e <= 0.0) {
+		return rrect_sdf(p, rect, radii);
+	}
+	float2 d = abs(q) - (h - e);
+	if (d.x <= 0.0 || d.y <= 0.0) {
+		return max(d.x, d.y) - e;
+	}
+	float2 a = d / e;
+	float f = pow(pow(a.x, CORNER_N) + pow(a.y, CORNER_N), 1.0 / CORNER_N);
+	float2 g = pow(a, float2(CORNER_N - 1.0, CORNER_N - 1.0)) / pow(f, CORNER_N - 1.0);
+	return e * (f - 1.0) / max(length(g), 1e-3);
 }
 
 // Gaussian-blurred rounded rectangle, after Evan Wallace, "Fast Rounded
@@ -182,7 +212,8 @@ float4 ps_main(VOut i) : SV_Target {
 	float border = i.misc.x;
 	float soft = i.misc.y;
 	float2 fadeX = i.misc.zw;
-	uint mode = i.flags.y;
+	uint mode = i.flags.y & 255u;
+	bool continuous = (i.flags.y & 256u) != 0u;
 	float2 p = i.pos.xy;
 
 	// Four-corner colour, interpolated premultiplied.
@@ -204,7 +235,7 @@ float4 ps_main(VOut i) : SV_Target {
 		if (soft > 0.0) {
 			res = col * rrect_shadow(p, rect, radii, soft);
 		} else {
-			float sd = rrect_sdf(p, rect, radii);
+			float sd = continuous ? crect_sdf(p, rect, radii) : rrect_sdf(p, rect, radii);
 			float outer = clamp(0.5 - sd, 0.0, 1.0);
 			if (border > 0.0) {
 				float inner = clamp(0.5 - (sd + border), 0.0, 1.0);

@@ -475,3 +475,40 @@ func TestMeshCopiesSingleQuadsAndReleasesClippedMeshes(t *testing.T) {
 		t.Fatalf("warm meshes allocate %v times", a)
 	}
 }
+
+// With Theme.ContinuousCorners a rounded box's fill and border ask for the
+// continuous curve (gpu.ShapeContinuous in the quad's Tex); a square box, a
+// shadow and the default theme do not.
+func TestContinuousCornersAreAskedFor(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		h := newHarness(t, 200, 100)
+		h.c.Theme.ContinuousCorners = on
+		h.frame(func(c *Context) {
+			c.NextSize(Px(100), Px(60))
+			c.NextBG(0xFF0000FF)
+			c.NextRadius(8)
+			c.NextShadows(Shadow{OffY: 4, Sigma: 6, Color: 0x00000080}, Shadow{})
+			c.Open(DrawShadow|DrawBackground, "round")
+			c.NextSize(Px(10), Px(10))
+			c.NextBG(0x00FF00FF)
+			c.Box(DrawBackground, "square")
+			c.Close()
+		})
+		want := gpu.TextureID(0)
+		if on {
+			want = gpu.ShapeContinuous
+		}
+		qs := quadsOf(h)
+		if len(qs) < 3 {
+			t.Fatalf("continuous %v: %d quads, want shadows and two fills", on, len(qs))
+		}
+		for _, q := range qs[:len(qs)-2] {
+			if q.Soft == 0 || q.Tex != 0 {
+				t.Errorf("continuous %v: shadow band has soft %v, tex %v", on, q.Soft, q.Tex)
+			}
+		}
+		if round, square := qs[len(qs)-2], qs[len(qs)-1]; round.Tex != want || square.Tex != 0 {
+			t.Errorf("continuous %v: round box and square box tex %v %v, want %v 0", on, round.Tex, square.Tex, want)
+		}
+	}
+}

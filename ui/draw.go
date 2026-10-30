@@ -386,6 +386,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 			if draw {
 				q := c.quad(l)
 				q.Rect, q.Clip, q.Radii, q.Color = r, clip, b.radii, colors
+				c.curve(q)
 				if border > 0 {
 					q.Border, q.BorderColor = border, b.col(b.bd.Color)
 				}
@@ -484,7 +485,16 @@ func (c *Context) strip(l *gpu.DrawList, b *box, clip [4]float32) {
 	}
 	q := c.quad(l)
 	q.Rect, q.Clip, q.Radii = b.rect, clip, b.radii
+	c.curve(q)
 	q.Border, q.BorderColor = b.bd.Width, b.col(b.bd.Color)
+}
+
+// curve gives the shape quad q the continuous corners the theme asks for
+// (Theme.ContinuousCorners).
+func (c *Context) curve(q *gpu.Quad) {
+	if c.Theme.ContinuousCorners && q.Radii != [4]float32{} {
+		q.Tex = gpu.ShapeContinuous
+	}
 }
 
 // emitImage draws b's image centred in the padded rectangle (or placed by
@@ -519,6 +529,7 @@ func (c *Context) overlay(l *gpu.DrawList, b *box, clip [4]float32, color uint32
 	col := b.col(scaleAlpha(color, t))
 	q := c.quad(l)
 	q.Rect, q.Clip, q.Color, q.Radii = b.rect, clip, [4]uint32{col, col, col, col}, b.radii
+	c.curve(q)
 }
 
 // emitText draws the display text of b inside its padded rectangle.

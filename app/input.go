@@ -50,6 +50,11 @@ type translator struct {
 	// drops waits for the frames of the drops behind the one in the input (drag.go).
 	drops dropQueue
 
+	// altArmed: Alt alone was pressed (a key event, not the state a window
+	// finds when it gains the focus) and nothing else happened since, so its
+	// release is an Alt tap (ui.Input.AltTap).
+	altArmed bool
+
 	// refed: endFrame fed deferred events into the input, which wait for the
 	// frame that follows (cleared by take).
 	refed bool
@@ -256,6 +261,7 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		if !ok {
 			return false
 		}
+		t.altArmed = false
 		in.MouseX, in.MouseY, in.Inside = e.X, e.Y, true
 		in.Mods = mods(e.Mods)
 		if down := e.Flags&platform.FlagDown != 0; in.Down[b] != down { // else only the position counts
@@ -266,9 +272,11 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 			return false
 		}
 		in.Mods = mods(e.Mods)
+		t.altArmed = false
 		t.scroll(e)
 	case platform.EvKey:
 		in.Mods = mods(e.Mods)
+		t.altArmed = false
 		phys := keyCode(e.Key)
 		if phys == 0 {
 			return false // not a key ui knows
@@ -279,14 +287,23 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		}
 		in.PushKey(ui.KeyEvent{
 			Code: code, Physical: phys, Mods: in.Mods,
-			Down: e.Flags&platform.FlagDown != 0, Repeat: e.Flags&platform.FlagRepeat != 0,
+			Down: e.Flags&platform.FlagDown != 0, Repeat: e.Flags&platform.FlagRepeat != 0, Char: e.Char,
 		})
 	case platform.EvModifiers:
 		m := mods(e.Mods)
 		if in.Mods == m {
 			return false
 		}
+		// Alt pressed and released on its own is the Alt tap that moves the
+		// keyboard to a drawn menu bar. The press must be a key's (it has the
+		// key's code): a window that gains the focus with Alt held (Alt+Tab)
+		// is told so with no code, and its release is not a tap.
+		tap := t.altArmed && m == 0 && in.Mods == ui.ModAlt
+		t.altArmed = m == ui.ModAlt && in.Mods == 0 && e.Code != 0
 		in.Mods = m // for the hints that follow a held modifier (⌘ shows shortcuts, ⌥ the alternate items)
+		if tap {
+			in.AltTap = true
+		}
 	case platform.EvEdit:
 		a := editAction(platform.EditCmd(e.Tag))
 		if a == 0 {
@@ -364,6 +381,7 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		}
 		in.Focused = down
 		in.FocusGained = down
+		t.altArmed = false
 		if !down { // a release that happens in another window never arrives: cancel, not click
 			in.FocusLost = true
 			in.Mods = 0 // nor does a modifier's; the platform reports the ones held when focus returns

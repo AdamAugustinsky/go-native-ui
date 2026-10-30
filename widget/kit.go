@@ -105,6 +105,8 @@ type Kit struct {
 
 	gl      glyphs
 	scratch []byte
+
+	bar barKeys // the menu bar's keyboard state (menus.go)
 }
 
 // NewKit makes the kit of one window. c is the window's ui context, ts its text
@@ -131,6 +133,7 @@ func (k *Kit) Begin(c *ui.Context) {
 // keeps its context (Context).
 func (k *Kit) End() {
 	k.contextMenu()
+	k.menuBarKeys()
 	k.Kit.End()
 }
 

@@ -98,8 +98,77 @@ func windowsVersion(c *Config) ([4]uint16, error) {
 // winExeName is the executable's file name.
 func winExeName(c *Config) string { return c.Executable + ".exe" }
 
-// windowsResources are the resources linked into the executable for arch.
-func windowsResources(c *Config, arch string) ([]winres.Resource, error) {
+// winFile is a file that ships beside the executable: a DLL of nativeLibs
+// or its licence.
+type winFile struct{ name, src string }
+
+// windowsNativeLibs lists the files of gnui.json's nativeLibs for arch: the
+// .dll files of each directory's windows-<arch> subdirectory (at least one,
+// each a DLL for arch's machine), and, when the directory holds a LICENSE,
+// that licence as <library>.LICENSE.txt beside each DLL (as macOS puts it in
+// Contents/Resources/Licenses). The names are what the executable declares
+// in its version resource (winres.FilesKey).
+func windowsNativeLibs(c *Config, arch string) ([]winFile, error) {
+	var files []winFile
+	seen := map[string]bool{}
+	add := func(f winFile) error {
+		if err := winres.CheckFileName(f.name); err != nil {
+			return err
+		}
+		if k := strings.ToLower(f.name); seen[k] {
+			return fmt.Errorf("nativeLibs: two files are called %s", f.name)
+		} else {
+			seen[k] = true
+		}
+		files = append(files, f)
+		return nil
+	}
+	for _, d := range c.NativeLibs {
+		dir := c.Path(d)
+		sub := filepath.Join(dir, "windows-"+arch)
+		libs, _ := filepath.Glob(filepath.Join(sub, "*.dll"))
+		if len(libs) == 0 {
+			return nil, fmt.Errorf("native libraries: no .dll in %s (build them: go run ./tools/libghostty)", sub)
+		}
+		for _, l := range libs {
+			pf, err := readPEFile(l)
+			if err != nil {
+				return nil, fmt.Errorf("native library %s: %w", l, err)
+			}
+			if pf.Machine != winres.MachineFor(arch) {
+				return nil, fmt.Errorf("native library %s is for machine type %#x, not windows/%s", l, pf.Machine, arch)
+			}
+			name := filepath.Base(l)
+			if err := add(winFile{name: name, src: l}); err != nil {
+				return nil, err
+			}
+			if lic := filepath.Join(dir, "LICENSE"); isFile(lic) {
+				if err := add(winFile{name: strings.TrimSuffix(name, filepath.Ext(name)) + ".LICENSE.txt", src: lic}); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return files, nil
+}
+
+// readPEFile reads the PE headers and resources of the file at path.
+func readPEFile(path string) (*winres.File, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return winres.Read(f, st.Size())
+}
+
+// windowsResources are the resources linked into the executable for arch;
+// files are the names that ship beside it.
+func windowsResources(c *Config, arch string, files []string) ([]winres.Resource, error) {
 	q, err := windowsVersion(c)
 	if err != nil {
 		return nil, err
@@ -123,6 +192,7 @@ func windowsResources(c *Config, arch string) ([]winres.Resource, error) {
 		{Key: "ProductName", Value: c.ShownName()},
 		{Key: "ProductVersion", Value: c.Version},
 		{Key: "AppUserModelID", Value: aumid},
+		{Key: winres.FilesKey, Value: strings.Join(files, "|")},
 	}
 	kept := strs[:0]
 	for _, kv := range strs {
@@ -296,9 +366,10 @@ func iconDIB(img *image.NRGBA) []byte {
 func sysoName(arch string) string { return "zz_gnui_rsrc_windows_" + arch + ".syso" }
 
 // buildWindows builds the executable for arch at out, a GUI-subsystem
-// release build with its resources linked in.
-func buildWindows(c *Config, arch, out string, o buildOptions) error {
-	rs, err := windowsResources(c, arch)
+// release build with its resources linked in, declaring files as the ones
+// beside it.
+func buildWindows(c *Config, arch, out string, files []string, o buildOptions) error {
+	rs, err := windowsResources(c, arch, files)
 	if err != nil {
 		return err
 	}
@@ -342,28 +413,51 @@ func buildWindows(c *Config, arch, out string, o buildOptions) error {
 
 // packageWindows builds, signs and zips the Windows executables:
 // <out>/windows-<arch>/<Executable>.exe and <out>/<Name>-<version>-windows-<arch>.zip.
+// The files of nativeLibs go beside the executable, signed with it, and into
+// the zip with it, all at the zip's top.
 func packageWindows(c *Config, archs []string, outDir, signCmd string, o buildOptions, stdout io.Writer) error {
 	if signCmd == "" {
 		signCmd = c.Windows.Sign
 	}
 	for _, arch := range archs {
+		libs, err := windowsNativeLibs(c, arch)
+		if err != nil {
+			return err
+		}
+		names := make([]string, len(libs))
+		for i, l := range libs {
+			names[i] = l.name
+		}
 		dir := filepath.Join(outDir, "windows-"+arch)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 		exe := filepath.Join(dir, winExeName(c))
 		fmt.Fprintf(stdout, "packaging %s %s (%s) for windows/%s -> %s\n", c.Name, c.Version, c.ID, arch, exe)
-		if err := buildWindows(c, arch, exe, o); err != nil {
+		if err := buildWindows(c, arch, exe, names, o); err != nil {
 			return err
 		}
-		if signCmd != "" {
-			if err := signWindows(signCmd, exe, stdout); err != nil {
-				return err
+		paths := []string{exe}
+		for _, l := range libs {
+			dst := filepath.Join(dir, l.name)
+			os.Remove(dst)
+			if err := copyInto(dir, l.name, l.src); err != nil {
+				return fmt.Errorf("native library %s: %w", l.src, err)
 			}
-			fmt.Fprintf(stdout, "signed %s\n", exe)
+			paths = append(paths, dst)
+		}
+		if signCmd != "" {
+			for _, p := range paths {
+				if !strings.EqualFold(filepath.Ext(p), ".txt") {
+					if err := signWindows(signCmd, p, stdout); err != nil {
+						return err
+					}
+					fmt.Fprintf(stdout, "signed %s\n", p)
+				}
+			}
 		}
 		zipPath := filepath.Join(outDir, fmt.Sprintf("%s-%s-windows-%s.zip", strings.ReplaceAll(c.Name, " ", ""), c.Version, arch))
-		if err := zipFile(exe, zipPath); err != nil {
+		if err := zipFiles(zipPath, paths); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "zip: %s\n", zipPath)
@@ -474,8 +568,31 @@ func splitCommand(s string) ([]string, error) {
 	return words, nil
 }
 
-// zipFile writes a zip holding the one file src under its base name.
-func zipFile(src, dst string) error {
+// zipFiles writes a zip holding the files srcs under their base names.
+func zipFiles(dst string, srcs []string) (err error) {
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			os.Remove(dst)
+		}
+	}()
+	zw := zip.NewWriter(out)
+	mod := time.Now().UTC().Truncate(time.Second)
+	for _, src := range srcs {
+		if err := zipAdd(zw, src, mod); err != nil {
+			return err
+		}
+	}
+	return zw.Close()
+}
+
+func zipAdd(zw *zip.Writer, src string, mod time.Time) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -485,30 +602,16 @@ func zipFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	zw := zip.NewWriter(out)
 	h, err := zip.FileInfoHeader(st)
 	if err != nil {
-		out.Close()
 		return err
 	}
 	h.Method = zip.Deflate
-	h.Modified = time.Now().UTC().Truncate(time.Second)
+	h.Modified = mod
 	w, err := zw.CreateHeader(h)
-	if err == nil {
-		_, err = io.Copy(w, in)
-	}
-	if err == nil {
-		err = zw.Close()
-	}
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
 	if err != nil {
-		os.Remove(dst)
+		return err
 	}
+	_, err = io.Copy(w, in)
 	return err
 }

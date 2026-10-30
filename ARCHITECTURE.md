@@ -286,7 +286,7 @@ On top, shared by every backend:
 
 - **Run cache:** keyed by (hash of bytes, font, size). It stores
   pointer-free glyph arrays in a slab; a full cache keeps the runs of
-  recent access epochs and drops the rest (D86). File names are
+  recent access epochs and drops the rest (D88). File names are
   shaped once, mostly on workers (`text.Prefetcher`: two by default, each
   with its own shaper and native faces), and prefetched for a listing as it
   loads; the frame imports finished runs before it builds boxes
@@ -355,7 +355,7 @@ On top, shared by every backend:
 - **Handles, not pointers:** `type ListingID uint32`, `EntryIdx uint32`,
   `TextureID uint16`, with generation bits where reuse is possible.
 - **Frame scratch:** one byte arena that resets each frame; hit testing
-  against the last layout reads the rects kept in each box (D86). Typed slices are carved
+  against the last layout reads the rects kept in each box (D88). Typed slices are carved
   from them with `unsafe.Slice` only for pointer-free types. No dependency
   on `GOEXPERIMENT=arenas`.
 - **Steady state allocates nothing.** A test harness runs warmed-up,

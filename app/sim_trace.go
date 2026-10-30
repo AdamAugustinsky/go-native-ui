@@ -228,7 +228,7 @@ func (s *Sim) Idle(d time.Duration, allowed SimCause) (r SimIdleReport, err erro
 	return r, err
 }
 
-// SimMemory records GC live bytes and the capacities trimmed in D86. Native
+// SimMemory records GC live bytes and the capacities trimmed in D88. Native
 // GPU bytes are represented by instance capacity, not Go's heap counter.
 type SimMemory struct {
 	// HeapLive and Goroutines are process-wide; other fields are app capacities.

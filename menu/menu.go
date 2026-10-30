@@ -163,6 +163,11 @@ type Command struct {
 	// Symbol is the SF Symbol shown before the title in native menus
 	// ("doc.on.doc"; "" none). Drawn menus do not show it yet.
 	Symbol string
+	// Mnemonic is the letter or digit that chooses the command's item from
+	// the keyboard in a drawn menu (Windows and Linux: underlined, typed
+	// with the menu open); 0 lets the menu pick a free one (widget/base's
+	// Mnemonics). It is ignored by native menus.
+	Mnemonic rune
 	// InModal lets the command act while a modal overlay (a dialog) is open.
 	// Without it every command and shortcut is held back then, except the edit
 	// roles for a text field with the focus inside the modal (see Match). Mark
@@ -198,6 +203,10 @@ type Menu struct {
 	// Role marks the bar's Window and Help menus, which the system extends
 	// on macOS (the list of windows, the Help search field).
 	Role MenuRole
+	// Mnemonic is the letter or digit of the menu's title in a drawn menu
+	// bar (Alt+F opens File) and of its entry as a submenu; 0 lets the menu
+	// pick a free one. It is ignored by native menus.
+	Mnemonic rune
 }
 
 // MenuRole marks a menu the operating system knows (Menu.Role).
@@ -271,7 +280,7 @@ func NewModel(commands []Command, menus []Menu, bar []int) (*Model, error) {
 		bar:   append([]int(nil), bar...),
 	}
 	for i := range menus {
-		m.menus[i] = Menu{Title: menus[i].Title, Items: append([]Item(nil), menus[i].Items...), Role: menus[i].Role}
+		m.menus[i] = Menu{Title: menus[i].Title, Items: append([]Item(nil), menus[i].Items...), Role: menus[i].Role, Mnemonic: menus[i].Mnemonic}
 	}
 	roles := make(map[Role]ID)
 	shortcuts := make(map[keyIndex]ID)

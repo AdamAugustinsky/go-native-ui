@@ -20,13 +20,16 @@ import (
 	applog "gonativeui/app/log"
 	"gonativeui/app/paths"
 	"gonativeui/internal/winproc"
+	"gonativeui/internal/winres"
 )
 
 // The Windows helper follows the macOS one (helper_darwin.go): the same
 // record, phases and health marker. The differences: the app passes the
 // helper two inherited handles, its own process (to wait on) and the
-// staging folder's lock; the swap is two renames (the old executable to
-// staging\old.exe, the new one into its place); the new version is started
+// staging folder's lock; the swap is renames (the old executable and the
+// files beside it that the update replaces or the old version declared to
+// staging\old, then the new files and the new executable into place, all
+// undone together on a failure or a rollback); the new version is started
 // with CreateProcess and stopped, on a rollback, with TerminateProcess once
 // its image is checked to be the installed executable.
 
@@ -293,6 +296,11 @@ func loadJob(jobPath string) (job, error) {
 	case !j.Signed && len(j.Digest) != 64:
 		return j, errors.New("the job has no digest for an unsigned app")
 	}
+	for _, f := range j.Files {
+		if winres.CheckFileName(f.Name) != nil || len(f.Digest) != 64 {
+			return j, fmt.Errorf("the job names an unusable file %q", f.Name)
+		}
+	}
 	j.HealthTimeout = clamp(j.HealthTimeout, time.Second, 10*time.Minute, 30*time.Second)
 	j.QuitTimeout = clamp(j.QuitTimeout, time.Second, 10*time.Minute, 60*time.Second)
 	return j, nil
@@ -317,6 +325,33 @@ type helper struct {
 	dir    string
 	launch func(string, []string) (int, error)
 	rec    record
+	sw     swap // the renames that installed the update
+}
+
+// swap is a sequence of renames that can be undone together.
+type swap struct{ done [][2]string }
+
+// move renames from to to and remembers it.
+func (s *swap) move(from, to string) error {
+	if err := winproc.Rename(from, to); err != nil {
+		return err
+	}
+	s.done = append(s.done, [2]string{from, to})
+	return nil
+}
+
+// undo renames everything back, the last first; it stops at the first
+// rename that fails.
+func (s *swap) undo() error {
+	for i := len(s.done) - 1; i >= 0; i-- {
+		m := s.done[i]
+		if err := winproc.Rename(m[1], m[0]); err != nil {
+			s.done = s.done[:i+1]
+			return err
+		}
+	}
+	s.done = nil
+	return nil
 }
 
 // takeLock adopts the inherited handle to the staging folder's lock, after
@@ -378,8 +413,27 @@ func (h *helper) run() {
 			return
 		}
 	}
-	if _, err := verifyStaged(cur, j.Staged, pub, j.AnyVersion); err != nil {
+	newDir := filepath.Dir(j.Staged)
+	names := make([]string, len(j.Files))
+	for i, f := range j.Files {
+		names[i] = f.Name
+		sum, err := sha256File(filepath.Join(newDir, f.Name))
+		if err != nil || hex.EncodeToString(sum[:]) != f.Digest {
+			h.fail("the staged "+f.Name+" changed after it was verified", true)
+			return
+		}
+	}
+	info, err := verifyStaged(cur, j.Staged, pub, j.AnyVersion)
+	if err == nil {
+		err = checkFiles(info, newDir, names, pub)
+	}
+	if err != nil {
 		h.fail("the staged update no longer verifies: "+err.Error(), true)
+		return
+	}
+	old, err := readExePath(j.Bundle)
+	if err != nil {
+		h.fail("the executable to replace: "+err.Error(), true)
 		return
 	}
 	_, newIno, err := inode(j.Staged)
@@ -395,20 +449,16 @@ func (h *helper) run() {
 	}
 	h.lg.Info("selfupdate helper: verified the update again")
 
-	backup := filepath.Join(j.Staging, "old.exe")
-	if err := winproc.Rename(j.Bundle, backup); err != nil {
-		h.fail("the old version could not be moved aside: "+err.Error(), true)
-		return
-	}
-	if err := winproc.Rename(j.Staged, j.Bundle); err != nil {
-		if rerr := winproc.Rename(backup, j.Bundle); rerr != nil {
-			h.critical(fmt.Sprintf("the update could not be moved into place (%v), and the old version could not be put back (%v); it is at %s", err, rerr, backup))
+	backup := filepath.Join(j.Staging, "old")
+	if err := h.install(old.files, names, backup); err != nil {
+		if uerr := h.sw.undo(); uerr != nil {
+			h.critical(fmt.Sprintf("the update could not be moved into place (%v), and the old version could not be put back (%v); it is in %s", err, uerr, backup))
 			return
 		}
 		h.fail("the update could not be moved into place: "+err.Error(), true)
 		return
 	}
-	h.lg.Info("selfupdate helper: swapped the new version into place", "backup", backup)
+	h.lg.Info("selfupdate helper: swapped the new version into place", "backup", backup, "files", len(names))
 
 	h.rec.Phase = phaseVerifying
 	if err := writeRecord(h.dir, h.rec); err != nil {
@@ -430,6 +480,41 @@ func (h *helper) run() {
 	os.Remove(filepath.Join(h.dir, "state.json"))
 	h.tidy()
 	h.lg.Info("selfupdate helper: the new version started; removed the old one", "version", j.To)
+}
+
+// install moves the old version into backup (the executable, then the files
+// beside it that the old version declares or the update brings), and the
+// new files and then the new executable into place, through h.sw.
+func (h *helper) install(oldFiles, newFiles []string, backup string) error {
+	j := h.j
+	if err := os.Mkdir(backup, 0o700); err != nil {
+		return err
+	}
+	appDir, newDir := filepath.Dir(j.Bundle), filepath.Dir(j.Staged)
+	if err := h.sw.move(j.Bundle, filepath.Join(backup, filepath.Base(j.Bundle))); err != nil {
+		return fmt.Errorf("the old version could not be moved aside: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, n := range append(append([]string(nil), oldFiles...), newFiles...) {
+		k := strings.ToLower(n)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		p := filepath.Join(appDir, n)
+		if _, err := os.Lstat(p); err != nil {
+			continue // not there: nothing to keep
+		}
+		if err := h.sw.move(p, filepath.Join(backup, n)); err != nil {
+			return fmt.Errorf("%s could not be moved aside: %w", n, err)
+		}
+	}
+	for _, n := range newFiles {
+		if err := h.sw.move(filepath.Join(newDir, n), filepath.Join(appDir, n)); err != nil {
+			return fmt.Errorf("%s could not be moved into place: %w", n, err)
+		}
+	}
+	return h.sw.move(j.Staged, j.Bundle)
 }
 
 // waitHealthy waits until deadline for the marker Started writes, and says
@@ -484,7 +569,8 @@ func (h *helper) stop(pid int) {
 	winproc.Wait(p, 5*time.Second)
 }
 
-// rollback stops the new version, puts the old one back and starts it.
+// rollback stops the new version, puts the old one back (the executable
+// and the files beside it, by undoing the swap) and starts it.
 func (h *helper) rollback(backup, why string, pid int) {
 	j := h.j
 	h.lg.Warn("selfupdate helper: rolling back", "reason", why)
@@ -492,20 +578,11 @@ func (h *helper) rollback(backup, why string, pid int) {
 		h.stop(pid)
 	}
 	if dev, ino, err := inode(j.Bundle); err != nil || dev != j.Dev || ino != h.rec.NewIno {
-		h.critical(fmt.Sprintf("%s, and the app was replaced while it ran; the old version is at %s", why, backup))
+		h.critical(fmt.Sprintf("%s, and the app was replaced while it ran; the old version is in %s", why, backup))
 		return
 	}
-	failed := filepath.Join(j.Staging, "failed.exe")
-	if err := winproc.Rename(j.Bundle, failed); err != nil {
-		h.critical(fmt.Sprintf("%s, and the new version could not be moved aside (%v); the old version is at %s", why, err, backup))
-		return
-	}
-	if err := winproc.Rename(backup, j.Bundle); err != nil {
-		if rerr := winproc.Rename(failed, j.Bundle); rerr != nil {
-			h.critical(fmt.Sprintf("%s, and neither version could be put back (%v; %v); the old version is at %s", why, err, rerr, backup))
-			return
-		}
-		h.critical(fmt.Sprintf("%s, and the old version could not be put back (%v); it is at %s", why, err, backup))
+	if err := h.sw.undo(); err != nil {
+		h.critical(fmt.Sprintf("%s, and the old version could not be put back (%v); it is in %s", why, err, backup))
 		return
 	}
 	h.lg.Info("selfupdate helper: put the old version back")

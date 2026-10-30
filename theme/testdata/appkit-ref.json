@@ -132,56 +132,67 @@
   "body": {
    "size": 13,
    "line": 16,
+   "cell": 16,
    "weight": 400
   },
   "callout": {
    "size": 12,
    "line": 15,
+   "cell": 15,
    "weight": 400
   },
   "caption1": {
    "size": 10,
    "line": 13,
+   "cell": 13,
    "weight": 400
   },
   "caption2": {
    "size": 10,
    "line": 13,
+   "cell": 13,
    "weight": 510
   },
   "footnote": {
    "size": 10,
    "line": 13,
+   "cell": 13,
    "weight": 400
   },
   "headline": {
    "size": 13,
    "line": 16,
+   "cell": 16,
    "weight": 700
   },
   "largeTitle": {
    "size": 26,
    "line": 32,
+   "cell": 31,
    "weight": 400
   },
   "subheadline": {
    "size": 11,
    "line": 14,
+   "cell": 14,
    "weight": 400
   },
   "title1": {
    "size": 22,
    "line": 26,
+   "cell": 26,
    "weight": 400
   },
   "title2": {
    "size": 17,
    "line": 22,
+   "cell": 20.5,
    "weight": 400
   },
   "title3": {
    "size": 15,
    "line": 20,
+   "cell": 19,
    "weight": 400
   }
  },

@@ -32,6 +32,11 @@
 //	rexlook -o out.png -o-dark dark.png
 //	                           render the light and the dark picture
 //	rexlook -o out.png -native render what the scene draws in the native shell (no field, no ⌘ and +)
+//	rexlook -density compact   panes packed closer, with smaller corners (theme.DensityCompact); with any mode
+//
+// In the window, ⌘⌥ and the arrows move the focus to the pane on that side,
+// F6 and ⇧F6 to the next and the one before, and a focused divider moves with
+// the arrows (widget/workspace).
 //
 // On macOS the window modes use the native shell (rex.NativeConfig,
 // experimental): a Liquid Glass backdrop where the field was and native ⌘ and
@@ -103,7 +108,16 @@ func main() {
 	idle := flag.Duration("idle", 0, "show the window, wait a second, count the frames drawn over this long while nothing happens, print them as JSON and exit")
 	verbose := flag.Bool("v", false, "print the startup timeline to stderr; with -bench or in a window, also a state line every second while frames stop coming")
 	budgetScale := flag.Float64("budget-scale", 1, "with -gate: multiply the time budgets by this (3: the coarse, catastrophic check of a shared CI runner)")
+	densityFlag := flag.String("density", "comfortable", "comfortable (the theme's insets, gutters and corners) or compact")
 	flag.Parse()
+	switch *densityFlag {
+	case "comfortable":
+	case "compact":
+		density = theme.DensityCompact
+	default:
+		fmt.Fprintf(os.Stderr, "rexlook: -density %q: want comfortable or compact\n", *densityFlag)
+		os.Exit(2)
+	}
 	*maxCPU *= *budgetScale
 
 	if *drawn {
@@ -154,10 +168,14 @@ func parseMode(s string) (theme.Preference, error) {
 	return 0, fmt.Errorf("-mode %q: want system, light or dark", s)
 }
 
-// newScene is the scene showing the mode pref asks for.
+// density is the -density flag's.
+var density theme.Density
+
+// newScene is the scene showing the mode pref asks for, at the density asked.
 func newScene(pref theme.Preference) *rex.Rex {
 	x := rex.NewApp()
 	x.SetPreference(pref)
+	x.SetDensity(density)
 	return x
 }
 
@@ -260,7 +278,7 @@ func runIdle(pref theme.Preference, d time.Duration) error {
 // writes it, with the layout metrics the compare tool checks; with dark, also
 // the dark mode into that file.
 func renderPNG(path, dark string, pref theme.Preference, native bool) error {
-	o := rex.ShotOptions{Width: refW, Height: refH, Scale: 2, Corners: true, Preference: pref, Native: native}
+	o := rex.ShotOptions{Width: refW, Height: refH, Scale: 2, Corners: true, Preference: pref, Native: native, Density: density}
 	if pref == theme.System { // an offscreen window has no system: ask this machine
 		a := platform.SystemAppearance()
 		o.System = ui.Appearance{Dark: a.Dark, Accent: a.Accent, Known: a.Known}

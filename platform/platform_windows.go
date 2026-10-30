@@ -43,6 +43,9 @@ const (
 	wmImeSetContext = 0x0281
 	wmSysKeyDown    = 0x0104
 	wmSysKeyUp      = 0x0105
+	wmSysChar       = 0x0106
+	wmSysCommand    = 0x0112
+	scKeyMenu       = 0xF100
 	wmMouseMove     = 0x0200
 	wmLButtonDown   = 0x0201
 	wmLButtonUp     = 0x0202
@@ -219,7 +222,8 @@ func mustUTF16(s string) *uint16 {
 // Window is one top-level window of the app (registry_windows.go has them
 // all).
 type Window struct {
-	q eventQueue
+	q       eventQueue
+	hostWin // hosted views and the focus state (host_windows.go)
 
 	hwnd, hinst uintptr
 	style       uint32
@@ -255,6 +259,13 @@ type Window struct {
 	place      windowPlacement // the placement full screen restores
 	mi         monitorInfo
 	flash      flashWInfo
+
+	// Panels and the drawn titlebar (panel_windows.go, chrome_windows.go).
+	exStyle uintptr
+	panel   *Panel // Options.Panel, copied; nil: an ordinary window
+	ps      panelState
+	drags   dragMap // SetDragRegions: what moves a panel or a drawn titlebar's window
+	chrome  chromeState
 
 	handler   func() // SetFrameHandler
 	inHandler bool
@@ -328,6 +339,7 @@ func Open(o Options) (*Window, error) {
 	}
 
 	w := &Window{q: newEventQueue(), opening: true, style: wsOverlappedWindow, rscale: 1, minW: o.MinWidth, minH: o.MinHeight}
+	w.frameKind(&o) // a panel's styles, a drawn titlebar
 	w.hinst = win32.Call(pGetModuleHandleW, 0)
 
 	w.cursors = [numCursors]uintptr{
@@ -367,9 +379,13 @@ func Open(o Options) (*Window, error) {
 	// on the screen for one pass (TestFirstFrameIsContent on the runners,
 	// about 1 in 100 fresh processes under load; a probe that painted the
 	// surface blue saw blue there instead). Nothing here draws with GDI.
+	if o.ChildWindows { // GDI children draw into the window's surface (host_windows.go)
+		w.exStyle &^= wsExNoRedirectionBitmap
+		w.gdiSurface = true
+	}
 	reg.creating = w // wndProc runs inside CreateWindowExW, before the HWND is known
 	hwnd := win32.Call(pCreateWindowExW,
-		wsExNoRedirectionBitmap, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style),
+		w.exStyle, uintptr(unsafe.Pointer(classNameUTF16)), uintptr(unsafe.Pointer(title)), uintptr(w.style|wsClipChildren), // hosts are child windows (D66)
 		cwUseDefault, cwUseDefault, uintptr(ow), uintptr(oh), 0, 0, w.hinst, 0)
 	runtime.KeepAlive(title)
 	reg.creating = nil
@@ -391,12 +407,13 @@ func Open(o Options) (*Window, error) {
 		}
 	}
 	w.scale = float32(dpi) / defaultDPI
+	w.frameSetup() // DWM's corners and shadow, capture, a panel's place, the frame without its caption
 
 	if o.Hidden { // content-first: shown, but cloaked until the first frame is presented
 		w.cloaked = w.setCloak(true)
 		markOpen("cloak")
 	}
-	win32.Call(pShowWindow, w.hwnd, swShowNormal)
+	win32.Call(pShowWindow, w.hwnd, w.showCmd())
 	markOpen("shown")
 	w.updateClientSize()
 	w.rw, w.rh, w.rscale = w.w, w.h, w.scale
@@ -417,6 +434,9 @@ func (w *Window) outerSize(lw, lh int, dpi uint32) (int32, int32) {
 		win32.Call(pAdjustRectExForDpi, uintptr(unsafe.Pointer(&w.rc)), uintptr(w.style), 0, 0, uintptr(dpi))
 	} else {
 		win32.Call(pAdjustWindowRectEx, uintptr(unsafe.Pointer(&w.rc)), uintptr(w.style), 0, 0)
+	}
+	if w.chrome.on {
+		w.rc.top = 0 // the caption is the app's: the client reaches the window's top (chrome_windows.go)
 	}
 	return w.rc.right - w.rc.left, w.rc.bottom - w.rc.top
 }
@@ -514,8 +534,11 @@ func (w *Window) applyCursor() {
 	}
 }
 
-// SetDragRegions is a no-op on Windows: the window keeps its system titlebar.
-func (w *Window) SetDragRegions([]DragRegion) {}
+// SetDragRegions sets the window drag map (see DragRegion): a left press in
+// a drag area moves the window (WM_NCHITTEST answers HTCAPTION there). Only a
+// panel and a window with a drawn titlebar (Options.Titlebar) use it; any
+// other keeps the system's caption. Main thread.
+func (w *Window) SetDragRegions(r []DragRegion) { w.drags.set(r) }
 
 // Text returns the UTF-8 bytes of an EvText event.
 func (w *Window) Text(r TextRef) []byte { return w.q.textOf(r) }
@@ -555,6 +578,7 @@ func (w *Window) Close() {
 	if w.hwnd == 0 {
 		return
 	}
+	w.abortDialogs() // its file dialogs (W8), while the window still exists
 	reg.remove(w)
 	w.wakeMark.Store(false)
 	if w.clip != nil { // ends now, or when the native call it may be in returns; publishes nothing either way
@@ -570,6 +594,7 @@ func (w *Window) Close() {
 		w.menuLoop = false
 		leaveModal()
 	}
+	w.releaseAllHosts()
 	hwnd := w.hwnd
 	w.hwnd = 0
 	w.frameArmed, w.waitable = false, 0
@@ -630,6 +655,11 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 			return defProc(hwnd, m, wp, lp)
 		}
 		w.hwnd = hwnd
+	}
+	if w.panel != nil || w.chrome.on {
+		if r, done := w.frameMsg(hwnd, m, wp, lp); done { // panel_windows.go, chrome_windows.go
+			return r
+		}
 	}
 	switch m {
 	case wmClip:
@@ -721,6 +751,9 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return defProc(hwnd, m, wp, lp)
 
 	case wmSetCursor:
+		if wp != hwnd {
+			return 0 // over a hosted child window: its own cursor
+		}
 		if uint32(lp&0xFFFF) == htClient {
 			x, y, ok := w.pointerNow(hwnd)
 			w.shown = w.curs.pointerShape(x, y, ok, w.ptrX, w.ptrY)
@@ -752,48 +785,38 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		w.emitResize()
 		return 0
 
-	case wmSetFocus:
-		reg.focus = w
-		t := Now()
-		w.q.push(Event{Kind: EvFocus, Flags: FlagDown, Time: t})
-		focusModifiers(&w.q, &w.lastMods, currentMods(), t) // keys pressed while another window had the focus
+	case wmSetFocus: // EvFocus, and EvHostFocus when the focus came back from a host
+		w.syncFocus(hwnd)
 		return 0
-	case wmKillFocus:
-		t := Now()
-		w.q.push(Event{Kind: EvFocus, Time: t})
-		focusModifiers(&w.q, &w.lastMods, 0, t) // a release elsewhere never arrives
+	case wmKillFocus: // the same with the window that takes the focus: a host of ours keeps it in the window
+		w.syncFocus(wp)
 		return 0
+	case wmActivate:
+		if w.onActivate(wp) { // the host that had the focus gets it back
+			return 0
+		}
+		return defProc(hwnd, m, wp, lp)
 
 	case wmKeyDown, wmKeyUp, wmSysKeyDown, wmSysKeyUp:
-		var f Flags
-		if m == wmKeyDown || m == wmSysKeyDown {
-			f = FlagDown
-			if lp&(1<<30) != 0 {
-				f |= FlagRepeat
-			}
-		}
-		code, k, ok := winKey(wp, lp)
-		if !ok {
-			return 0 // processed by an input method (VK_PROCESSKEY)
-		}
-		cur := currentMods()
-		if vkIsModifier(wp) { // a modifier on its own is EvModifiers, once per change
-			if cur != w.lastMods {
-				w.lastMods = cur
-				w.q.push(Event{Kind: EvModifiers, Mods: cur, Code: code, Time: Now()})
-			}
-		} else {
-			var mapped uint32
-			if winNeedsChar(wp) {
-				mapped = uint32(win32.Call(pMapVirtualKeyW, wp, 2 /* MAPVK_VK_TO_CHAR */))
-			}
-			w.q.push(Event{Kind: EvKey, Key: k, Char: winChar(wp, mapped), Code: code, Mods: cur, Flags: f, Time: Now()})
-			w.lastMods = cur // (EvModifiers reports changes against what the app last saw)
-		}
+		w.keyMessage(m, wp, lp)
 		if m == wmSysKeyDown || m == wmSysKeyUp {
 			return defProc(hwnd, m, wp, lp) // keeps Alt+F4 and Alt+Space working
 		}
 		return 0
+	case wmSysChar:
+		if wp == ' ' {
+			return defProc(hwnd, m, wp, lp) // Alt+Space: the system menu
+		}
+		return 0 // Alt and a letter is the app's (a drawn menu bar's mnemonic); no beep
+	case wmSysCommand:
+		if wp&0xFFF0 == scKeyMenu && lp != ' ' {
+			// F10 or Alt alone (lp 0) or Alt and a letter: Windows would
+			// enter the menu loop of a menu bar the window does not have
+			// (the system menu's, invisibly, which eats the keys that
+			// follow). The app has them as keys and an Alt tap instead.
+			return 0
+		}
+		return defProc(hwnd, m, wp, lp)
 
 	case wmChar:
 		w.onChar(uint16(wp))
@@ -890,6 +913,10 @@ func wndProc(hwnd, m, wp, lp uintptr) uintptr {
 		w.q.push(e)
 		return 0
 	}
+	if m >= 0xC000 && uint32(m) == taskbar.buttonMsg {
+		taskbarButtonCreated(hwnd)
+		return 0
+	}
 	return defProc(hwnd, m, wp, lp)
 }
 
@@ -955,4 +982,36 @@ func (w *Window) onChar(u uint16) {
 		n = 4
 	}
 	w.q.pushText(w.utf8[:n], Now())
+}
+
+// keyMessage queues the events of a key message (WM_KEYDOWN, WM_KEYUP,
+// WM_SYSKEYDOWN, WM_SYSKEYUP) sent to the window, or to a hosted control that
+// passes the system keys on (F10, Alt and Alt chords: the drawn menu bar's).
+func (w *Window) keyMessage(m, wp, lp uintptr) {
+	var f Flags
+	if m == wmKeyDown || m == wmSysKeyDown {
+		f = FlagDown
+		if lp&(1<<30) != 0 {
+			f |= FlagRepeat
+		}
+	}
+	code, k, ok := winKey(wp, lp)
+	if !ok {
+		return // processed by an input method (VK_PROCESSKEY)
+	}
+	cur := currentMods()
+	if vkIsModifier(wp) { // a modifier on its own is EvModifiers, once per change
+		if cur != w.lastMods {
+			w.lastMods = cur
+			w.q.push(Event{Kind: EvModifiers, Mods: cur, Code: code, Time: Now()})
+		}
+	} else {
+		var mapped uint32
+		if winNeedsChar(wp) {
+			mapped = uint32(win32.Call(pMapVirtualKeyW, wp, 2 /* MAPVK_VK_TO_CHAR */))
+		}
+		w.q.push(Event{Kind: EvKey, Key: k, Char: winChar(wp, mapped), Code: code, Mods: cur, Flags: f, Time: Now()})
+		w.lastMods = cur // (EvModifiers reports changes against what the app last saw)
+	}
+
 }

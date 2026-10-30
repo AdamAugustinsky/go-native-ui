@@ -25,6 +25,13 @@ var (
 	testSource oleObj // a foreign IDataObject: the vtable of ours, another address
 	testFE     formatEtc
 	testSM     stgMedium
+	// EnumFormatEtc's enumerator and Next's count: as locals they lived on
+	// the goroutine's stack, which can move inside com.Call before the
+	// native call, so Next wrote its count to the old stack and the list
+	// ended early ("lists 1 formats, want 4", p8-win-gaps 40829144782 on
+	// arm64).
+	testEnum    uintptr
+	testFetched uint32
 )
 
 func openDragWindow(t *testing.T) *Window {
@@ -225,18 +232,18 @@ func TestDataObjectOfASession(t *testing.T) {
 	}
 
 	// EnumFormatEtc lists the four formats the session offers.
-	var enum uintptr
-	hrEnum := win32.HR(com.Call(obj, 8, dataDirGet, uintptr(unsafe.Pointer(&enum))))
-	if hrEnum != 0 || enum == 0 {
+	testEnum = 0
+	hrEnum := win32.HR(com.Call(obj, 8, dataDirGet, uintptr(unsafe.Pointer(&testEnum))))
+	if hrEnum != 0 || testEnum == 0 {
 		t.Fatalf("EnumFormatEtc = %#x", hrEnum)
 	}
+	enum := testEnum
 	defer com.Release(enum)
 	n := 0
-	var fetched uint32
 	for ; n < 8; n++ {
 		testFE = formatEtc{}
-		fetched = 0
-		if com.Call(enum, 3 /* Next */, 1, uintptr(unsafe.Pointer(&testFE)), uintptr(unsafe.Pointer(&fetched))) != 0 || fetched != 1 {
+		testFetched = 0
+		if com.Call(enum, 3 /* Next */, 1, uintptr(unsafe.Pointer(&testFE)), uintptr(unsafe.Pointer(&testFetched))) != 0 || testFetched != 1 {
 			break
 		}
 	}
@@ -314,5 +321,64 @@ func TestLiveDoDragDrop(t *testing.T) {
 	}
 	if ev := eventsOf(w, EvDragEnd); len(ev) != 1 || ev[0].Tag != uint64(ticket) {
 		t.Fatalf("EvDragEnd: %+v (ticket %d)", ev, ticket)
+	}
+}
+
+// A foreign data object (the shell's, from SHCreateDataObject, holding text)
+// dropped 20 times, with the target registered and revoked around each drop,
+// keeps no reference of ours, and the window's own objects stay as they were
+// (W8's gate: 20 drops leak no COM object).
+var (
+	leakFE  formatEtc
+	leakSM  stgMedium
+	leakObj uintptr
+)
+
+func TestTwentyForeignDropsLeakNothing(t *testing.T) {
+	w := openDragWindow(t)
+	pCreate := win32.Proc(shell32, "SHCreateDataObject")
+	if pCreate == 0 {
+		t.Skip("no SHCreateDataObject")
+	}
+	if !w.oleSetup() {
+		t.Skip("OLE cannot be used on this thread")
+	}
+	if hr := com.HR(win32.Call(pCreate, 0, 0, 0, 0, uintptr(unsafe.Pointer(&iidDataObject)), uintptr(unsafe.Pointer(&leakObj)))); hr < 0 || leakObj == 0 {
+		t.Skipf("SHCreateDataObject: %#x", uint32(hr))
+	}
+	defer win32.Release(leakObj)
+	leakFE = formatEtc{cfFormat: cfUnicodeText, dwAspect: 1, lindex: -1, tymed: tymedHGlobal}
+	leakSM = stgMedium{tymed: tymedHGlobal, hglobal: allocClipboardText([]byte("dropped"))}
+	if hr := com.HR(com.Call(leakObj, 7, uintptr(unsafe.Pointer(&leakFE)), uintptr(unsafe.Pointer(&leakSM)), 1)); hr < 0 { // SetData, the object owns the memory
+		t.Skipf("IDataObject.SetData: %#x", uint32(hr))
+	}
+	refs := func() uintptr { win32.AddRef(leakObj); return com.Call(leakObj, 2) } // Release returns the count left
+	before, gdi0, user0 := refs(), uintptr(0), uintptr(0)
+	w.SetDragHandler(func(float32, float32, DragKinds, DragOp) DragAnswer {
+		return DragAnswer{Op: DragOpCopy, Accept: DragText}
+	})
+	for i := 0; i < 20; i++ {
+		w.SetDropKinds(DragText)
+		if !w.drag.registered {
+			t.Fatalf("drop %d: the window did not register", i)
+		}
+		testEffect = effectCopy
+		dragCall(w, 3, leakObj, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+		testEffect = effectCopy
+		dragCall(w, 6, leakObj, 0, packPoint(10, 10), uintptr(unsafe.Pointer(&testEffect)))
+		ev := eventsOf(w, EvDrop)
+		if len(ev) != 1 || string(w.Text(ev[0].Text)) != "dropped" {
+			t.Fatalf("drop %d: %+v", i, ev)
+		}
+		w.SetDropKinds(0)
+		if i == 0 {
+			gdi0, user0 = guiObjects()
+		}
+	}
+	if after := refs(); after != before {
+		t.Errorf("the data object's references: %d before the drops, %d after", before, after)
+	}
+	if gdi1, user1 := guiObjects(); gdi1 > gdi0 || user1 > user0 {
+		t.Errorf("after 20 drops: GDI %d → %d, USER %d → %d", gdi0, gdi1, user0, user1)
 	}
 }

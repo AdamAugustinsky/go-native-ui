@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gonativeui/internal/testlock"
 )
 
 // These tests build, sign and launch real bundles with the macOS tools. The
@@ -223,6 +225,10 @@ func TestPackageWithoutAppleIdentity(t *testing.T) {
 		t.Error("a bundle was built before the missing identity was reported")
 	}
 
+	// The disk image service is the system's: app/selfupdate's tests (another
+	// process) keep an image attached meanwhile, and hdiutil verify failed
+	// with EAGAIN through gnui's 20 s of retries (p8-webview2 40811975293).
+	testlock.Hold(t, "diskimage")
 	so = mustGnui(t, "package", "-c", helloConfig, "-o", out, "-identity", "-", "-dmg", "-zip")
 	for _, want := range []string{"skipped: notarize", "dmg signature and notarization"} {
 		if !strings.Contains(so, want) {

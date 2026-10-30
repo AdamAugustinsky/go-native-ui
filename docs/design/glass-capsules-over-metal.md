@@ -94,6 +94,18 @@ wait, which are option 2's two real costs.
 2. If not, option 2 (measured, effort L) or probe option 3 first?
 3. Should #25 be closed against D54, with the capsule work as its own issue?
 
+## 2026-10-29: still parked
+
+The Rex-inspired review asked again for richer glass over our content. No
+new comparison was run: the earlier study's numbers stand (about 1.4 ms of
+main-thread wait per frame for option 2), and the session had no Screen
+Recording permission, so it could not capture glass against drawn
+capsules by eye or by flash test
+([rex-live-reference-2026-10-29.md](rex-live-reference-2026-10-29.md)).
+Without a comparison that shows a visible benefit, nothing is enabled,
+not even as an opt-in. The next step is unchanged: the option 3 probe mode
+below, run from a session that can capture the screen.
+
 ## Not measured yet (needs an unlocked screen)
 
 The study was one machine and one display. Before building anything: the

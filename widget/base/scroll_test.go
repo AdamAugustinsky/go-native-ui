@@ -1,6 +1,9 @@
 package base
 
 import (
+	"encoding/json"
+	"math"
+	"os"
 	"testing"
 
 	"gonativeui/theme"
@@ -406,5 +409,58 @@ func TestTableHeaderLeavesTheCorner(t *testing.T) {
 	g.frames(3)
 	if row = g.c.RectOf(head.hkey); head.Corner() != 0 || row[2] != table[2] {
 		t.Fatalf("overlay bars: corner %v, the header ends at %v of %v", head.Corner(), row[2], table[2])
+	}
+}
+
+// TestKnobLengthIsAppKits: the knob's slot and length are what real
+// NSScrollViews give (theme/testdata/appkit-scroller-knobs-27.2.json,
+// tools/appkitref/scroller.sh -knobs, in points; run at 2x): the slot is the
+// view below its inset less the knob inset at both ends, the knob is the slot
+// times the view's share of the document plus the inset, rounded down to a half
+// point, and no shorter than the scroller's minimum. An inset under a
+// toolbar once made ours 4 % shorter, as it counted the inset in neither.
+func TestKnobLengthIsAppKits(t *testing.T) {
+	raw, err := os.ReadFile("../../theme/testdata/appkit-scroller-knobs-27.2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ref struct {
+		Knobs []struct {
+			Style, Size           string
+			View, Document, Inset float64
+			Slot, Knob            float64
+		}
+	}
+	if err := json.Unmarshal(raw, &ref); err != nil {
+		t.Fatal(err)
+	}
+	if len(ref.Knobs) == 0 {
+		t.Fatal("no knobs measured")
+	}
+	g := newRig(t, 400, 300, 2, func(k *Kit) {})
+	for _, r := range ref.Knobs {
+		if r.Document+r.Inset <= r.View {
+			continue // no bar
+		}
+		legacy := r.Style == "legacy"
+		size := theme.SizeRegular
+		if r.Size == "small" {
+			size = theme.SizeSmall
+		}
+		view := [2]float32{0, float32(r.View * 2)}
+		content := [2]float32{0, float32((r.Document + r.Inset) * 2)}
+		b, ok := g.k.barGeom(1, content, view, float32(r.Inset*2), 0, false, legacy, size)
+		if !ok {
+			t.Fatalf("%+v: no bar", r)
+		}
+		slot, knob := float64(b.slotLen)/2, float64(b.thumbLen)/2
+		switch {
+		case legacy:
+			if slot != r.Slot || math.Abs(knob-r.Knob) > 0.01 {
+				t.Errorf("%+v: our slot is %v pt and knob %v", r, slot, knob)
+			}
+		case r.Knob == 26 && knob != 26: // an overlay bar's slot is ours, so only its minimum is compared
+			t.Errorf("%+v: our shortest knob is %v pt", r, knob)
+		}
 	}
 }

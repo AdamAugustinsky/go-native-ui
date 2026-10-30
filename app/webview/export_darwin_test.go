@@ -38,3 +38,6 @@ func AskMedia(v *View, typ int) int {
 func CornerRadiusOf(v *View) float64 {
 	return objc.SendF64(objc.Send(v.be.(*view).wv, selLayer), objc.Sel("cornerRadius"))
 }
+
+// Ready reports whether v's web view is there: from New on, on macOS.
+func Ready(*View) bool { return true }

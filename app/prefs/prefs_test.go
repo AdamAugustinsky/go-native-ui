@@ -93,9 +93,20 @@ func TestWriteAtomicReadersNeverSeeAPartialFile(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Windows: an open file blocks the rename, so readers must leave
+			// gaps, and WriteAtomic gives up after about 0.8 s of refusals.
+			// A fixed 100 µs gap was not enough where a read itself is slow:
+			// three readers kept the file open all the time and the rename
+			// was refused throughout ("Access is denied", p8-windows-flakes
+			// 40835121441 on arm64). Each reader waits three times as long as
+			// its last read took, so it holds the file a quarter of the time
+			// at most, whatever the runner's speed.
+			gap := 100 * time.Microsecond
 			for !stop.Load() {
-				time.Sleep(100 * time.Microsecond) // Windows: an open file blocks the rename, so readers must leave gaps
+				time.Sleep(gap)
+				t0 := time.Now()
 				got, err := os.ReadFile(p)
+				gap = 3*time.Since(t0) + time.Millisecond
 				if err != nil {
 					continue // Windows may refuse an open during a rename
 				}

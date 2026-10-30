@@ -183,6 +183,11 @@ func Open(o Options) (*Window, error) {
 // the user types in keeps the keyboard, and any other panel activates the
 // app and becomes key, as a palette does.
 func (w *Window) Show() {
+	if w.hideSaid { // Hide reported a window AppKit never had: back to that
+		w.hideSaid = false
+		w.pushVisible(true)
+		w.visible = -1
+	}
 	if w.panel != nil {
 		w.showPanel()
 		return

@@ -179,6 +179,23 @@ func (b *Backdrop) Over(c uint32) uint32 {
 // texture that shape quads use.
 type TextureID uint32
 
+// ShapeContinuous, as the Tex of a ModeShape quad (which names no texture),
+// gives its rounded corners the continuous curve macOS draws, a squircle,
+// where zero gives circular arcs. The corner of radius r reaches
+// ContinuousReach·r along both edges (no further than half the rect's smaller
+// side) and follows a superellipse of exponent ContinuousExponent: fitted to
+// Core Animation's cornerCurve .continuous for radii up to 30 pt
+// (testdata/appkit-corner-27.2.json, tools/appkitref/corner.sh), where it is
+// within 0.3 pt. Shadows (Soft > 0) are blurred circular shapes either way.
+const ShapeContinuous TextureID = 1
+
+// ContinuousReach and ContinuousExponent are the continuous corner's shape:
+// the shaders' CORNER_REACH and CORNER_N, which must match.
+const (
+	ContinuousReach    = 1.52
+	ContinuousExponent = 3.3
+)
+
 // Quad is one instance. The renderer uploads Quads byte-for-byte as the
 // shader's instance record, so the layout (108 bytes, 4-byte alignment) is
 // part of the shader contract; do not reorder fields.

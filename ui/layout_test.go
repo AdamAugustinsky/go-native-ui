@@ -475,3 +475,24 @@ func TestCrossAxisPlacement(t *testing.T) {
 		t.Errorf("a centred column puts a 100 px child at x %v, want 100", got)
 	}
 }
+
+// A text box is as wide as its text rounded up to a whole pixel (padding
+// counted in), as AppKit rounds a label's width up: a hundredth of a pixel of
+// shaping noise does not round up.
+func TestTextBoxWidthRoundsUp(t *testing.T) {
+	for _, c := range []struct{ w, want float32 }{{0, 0}, {76.66, 77}, {77, 77}, {77.004, 77}, {77.02, 78}} {
+		if got := CeilText(c.w); got != c.want {
+			t.Errorf("CeilText(%v) = %v, want %v", c.w, got, c.want)
+		}
+	}
+	h := newHarness(t, 200, 100)
+	var id ID
+	h.frame(func(c *Context) {
+		c.NextPadding(0.5, 0, 0, 0) // three 8 px glyphs and half a pixel of padding
+		c.NextSize(TextSize(0), Px(14))
+		id = c.Box(DrawText, "abc")
+	})
+	if got := h.c.boxes[id].size[0]; got != 25 {
+		t.Fatalf("a text box of 24.5 px is %v wide, want 25", got)
+	}
+}
