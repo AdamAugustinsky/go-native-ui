@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// At most 96 bytes and 48 glyphs; the frozen linear scans take O(n³) for
+// At most 96 bytes and 96 glyphs; the frozen linear scans take O(n³) for
 // all byte queries. Index storage must stay O(bytes+glyphs).
 func FuzzCaretDifferential(f *testing.F) {
 	for _, s := range diffTextSeeds {
