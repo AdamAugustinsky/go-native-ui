@@ -87,6 +87,16 @@ rev=$(jq -r .framework.revision dist/gnui-provenance.json)
 go build -ldflags "-X gonativeui/provenance.FrameworkRevision=$rev" ...   # or gnui package -ldflags "-X ..."
 ```
 
+The `-X` takes effect only in a binary that imports `gonativeui/provenance`
+(the linker ignores it otherwise, without an error). Importing it also
+embeds the shader library on darwin, so an app that keeps the revision in
+a build-info package of its own can leave `provenance` out of the binary
+and keep only the JSON. Zap does that.
+
+`ghostty` is the framework's pin, reported whether or not the app links
+libghostty-vt. An app that does not (Zap) should keep it inside the
+framework's block of its manifest, not list it as a library it ships.
+
 `-dir <framework dir>` reads another tree. A tree that is not a git
 checkout (an export) needs `.gnui-revision` at its top, holding
 `<40 hex>` or `<40 hex>-dirty`. Without `-json`, gnui prints a summary.
