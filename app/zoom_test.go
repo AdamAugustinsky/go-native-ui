@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -565,7 +566,21 @@ func pixelDiff(a, b []byte, stride int) string {
 			n, x0, y0, x1, y1 = n+1, min(x0, x), min(y0, y), max(x1, x), max(y1, y)
 		}
 	}
-	return fmt.Sprintf("%d pixels in x %d..%d, y %d..%d", n, x0, x1, y0, y1)
+	if n == 0 {
+		return "none"
+	}
+	// The 5×5 texels around the first difference, travelled then fresh.
+	var w strings.Builder
+	fmt.Fprintf(&w, "%d pixels in x %d..%d, y %d..%d; around (%d, %d), RGBA travelled|fresh:", n, x0, x1, y0, y1, x0, y0)
+	for y := y0 - 2; y <= y0+2; y++ {
+		w.WriteString("\n")
+		for x := x0 - 2; x <= x0+2; x++ {
+			if i := y*stride + x*4; x >= 0 && y >= 0 && x*4 < stride && i+3 < len(a) {
+				fmt.Fprintf(&w, " %02x%02x%02x%02x|%02x%02x%02x%02x", a[i], a[i+1], a[i+2], a[i+3], b[i], b[i+1], b[i+2], b[i+3])
+			}
+		}
+	}
+	return w.String()
 }
 
 // inkless reports whether the frame is one colour.
