@@ -1,9 +1,80 @@
 package text
 
 import (
+	"math"
+	"math/rand"
 	"strconv"
 	"testing"
 )
+
+var benchmarkCaretXResult float32
+
+func checkCaretIndex(t *testing.T, v RunView) {
+	t.Helper()
+	var c CaretIndex
+	c.Build(v)
+	indexed := v
+	indexed.carets = c.data
+	for off := -1; off <= len(v.Text)+1; off++ {
+		want, got := v.CaretX(off), c.CaretX(off)
+		if got != want && !(math.IsNaN(float64(got)) && math.IsNaN(float64(want))) {
+			t.Fatalf("%q clusters %v: indexed caret at %d = %v, raw %v", v.Text, v.Clusters, off, got, want)
+		}
+		if got := indexed.CaretX(off); got != want && !math.IsNaN(float64(want)) {
+			t.Fatalf("indexed view caret at %d = %v, raw %v", off, got, want)
+		}
+	}
+	for x := float32(-15); x < v.Advance+15; x += 1.25 {
+		if got, want := indexed.HitByte(x), v.HitByte(x); got != want {
+			t.Fatalf("%q clusters %v: indexed hit at %v = %d, raw %d", v.Text, v.Clusters, x, got, want)
+		}
+	}
+	if a := testing.AllocsPerRun(10, func() { c.Build(v); _ = c.CaretX(len(v.Text) / 2) }); a != 0 {
+		t.Fatalf("warmed index: %v allocations", a)
+	}
+}
+
+// Includes nonadjacent groups with the same logical start, marks left of the
+// origin, missing glyphs, malformed UTF-8 and offsets inside graphemes.
+func TestCaretIndexReference(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	parts := []string{"a", "ffi", " ", "אב", "لا", "e\u0301", "🇬🇧", "👩\u200d👩", "क्ष", "\r\n", "\xff\x80"}
+	for trial := 0; trial < 600; trial++ {
+		var txt string
+		for n := 1 + rng.Intn(6); n > 0; n-- {
+			txt += parts[rng.Intn(len(parts))]
+		}
+		n := rng.Intn(16)
+		cl, xs := make([]uint32, n), make([]float32, n)
+		pen := float32(-5)
+		for i := range cl {
+			cl[i] = uint32(rng.Intn(len(txt) + 1))
+			if rng.Intn(2) == 0 {
+				cl[i] |= ClusterRTL
+			}
+			xs[i] = pen - float32(rng.Intn(12))
+			pen += 8
+		}
+		if trial%10 == 0 {
+			cl = nil
+		}
+		checkCaretIndex(t, view(txt, n, cl, xs, pen+5))
+	}
+}
+
+func BenchmarkCaretIndex(b *testing.B) {
+	for _, n := range []int{100, 1000} {
+		v := longView(n)
+		var c CaretIndex
+		c.Build(v)
+		b.Run(strconv.Itoa(n)+" glyphs", func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				benchmarkCaretXResult = c.CaretX(n / 2)
+			}
+		})
+	}
+}
 
 // Hand-built views check the caret model itself, independent of any shaper:
 // the geometry of ligatures, marks and bidi runs.
@@ -172,7 +243,7 @@ func BenchmarkCaretX(b *testing.B) {
 		b.Run(strconv.Itoa(n)+" glyphs", func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_ = v.CaretX(n / 2)
+				benchmarkCaretXResult = v.CaretX(n / 2)
 			}
 		})
 	}

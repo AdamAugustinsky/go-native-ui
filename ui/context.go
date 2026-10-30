@@ -173,6 +173,9 @@ type Context struct {
 	shapeInfo interface {
 		ShapeInfo(text.FontKey, []byte) (text.RunRef, float32, uint32)
 	}
+	fieldCarets text.CaretIndex // the focused field's geometry, independent of run-cache storage
+	fieldRun    text.RunRef
+	fieldRunGen uint32
 
 	boxes                []box
 	pool                 *core.Pool

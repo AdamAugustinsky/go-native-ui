@@ -3,10 +3,10 @@ package text
 import "unicode/utf8"
 
 // Grapheme cluster segmentation (UAX #29, Unicode 17) over UTF-8 bytes,
-// without allocation. The rules are applied statelessly at a position (the
-// two runes around it, plus a bounded look-behind for emoji ZWJ sequences,
-// flag pairs and Indic conjuncts), so any offset can be asked about without
-// scanning the text from its start. The tables are unidata.go.
+// without allocation. Random access looks behind a position for emoji ZWJ
+// sequences, flag pairs and Indic conjuncts. Sequential passes use
+// GraphemeIterator, which carries that context forward. The tables are
+// unidata.go.
 //
 // Invalid UTF-8 bytes are one-rune clusters of their own, the same units the
 // shapers treat as U+FFFD.
@@ -169,6 +169,84 @@ func oddRegionalIndicators(b []byte) bool {
 		n++
 	}
 	return n&1 == 1
+}
+
+// GraphemeIterator walks grapheme boundaries in linear time without retaining
+// the text. The zero value starts at byte 0. Call Next with the same bytes
+// until it returns len(b); reset the iterator to walk different text.
+type GraphemeIterator struct {
+	off       int
+	prev      uint16
+	riOdd     bool
+	pict      bool // Extended_Pictographic Extend*
+	zwjPict   bool // that sequence followed by ZWJ
+	consonant bool // Consonant [Extend Linker]*
+	linker    bool // a Linker occurred after that consonant
+}
+
+// Next returns the next grapheme boundary, or len(b) at the end.
+func (it *GraphemeIterator) Next(b []byte) int {
+	first := true
+	for it.off < len(b) {
+		if !first && b[it.off] < utf8.RuneSelf && it.prev != gbPrepend && !(it.prev == gbCR && b[it.off] == '\n') {
+			return it.off
+		}
+		r, n := utf8.DecodeRune(b[it.off:])
+		var g uint16
+		var ic uint8
+		var pict bool
+		if r < utf8.RuneSelf {
+			switch {
+			case r == '\r':
+				g = gbCR
+			case r == '\n':
+				g = gbLF
+			case r < 0x20 || r == 0x7f:
+				g = gbControl
+			}
+		} else {
+			g, ic, pict = gbClass(r), icbClass(r), extPict(r)
+		}
+		const ctl = gbControl | gbCR | gbLF
+		join := false
+		switch {
+		case it.prev == gbCR && g == gbLF:
+			join = true
+		case it.prev&ctl != 0 || g&ctl != 0:
+		case it.prev == gbL && g&(gbL|gbV|gbLV|gbLVT) != 0:
+			join = true
+		case it.prev&(gbLV|gbV) != 0 && g&(gbV|gbT) != 0:
+			join = true
+		case it.prev&(gbLVT|gbT) != 0 && g == gbT:
+			join = true
+		case g&(gbExtend|gbZWJ|gbSpacingMark) != 0 || it.prev == gbPrepend:
+			join = true
+		case ic == icbConsonant && it.consonant && it.linker:
+			join = true
+		case it.prev == gbZWJ && pict && it.zwjPict:
+			join = true
+		case it.prev == gbRegionalIndicator && g == gbRegionalIndicator && it.riOdd:
+			join = true
+		}
+		if !first && !join {
+			return it.off
+		}
+		first = false
+		it.riOdd = g == gbRegionalIndicator && !it.riOdd
+		it.zwjPict = g == gbZWJ && it.pict
+		it.pict = pict || g == gbExtend && it.pict
+		switch ic {
+		case icbConsonant:
+			it.consonant, it.linker = true, false
+		case icbLinker:
+			it.linker = it.consonant
+		case icbExtend:
+		default:
+			it.consonant, it.linker = false, false
+		}
+		it.prev, it.off = g, it.off+n
+	}
+	return len(b)
 }
 
 // NextGrapheme returns the first grapheme cluster boundary of b after off,

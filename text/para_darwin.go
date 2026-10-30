@@ -76,10 +76,9 @@ func (s *System) ParaStats() ParaStats { return s.paras.stats() }
 // storage and the layout's scratch up front: the cache then evicts rather
 // than grow beyond the budget, and laying out paragraphs of up to
 // min(b.Text, 16 KiB) bytes allocates no Go memory, misses and evictions
-// included. Memory is the trade-off: the cache's reservation is about 27
-// bytes per glyph of the budget (1.7 MiB for DefaultParaBudget, which
-// ReserveRuns reserves when no budget is declared; 27.5 MiB at the limits),
-// and the scratch up to about 2 MiB more. Beyond the declared budget a miss
+// included. The reservation includes glyphs, text, lines and indexed caret
+// geometry, plus reused layout scratch. ReserveRuns reserves DefaultParaBudget
+// when no budget is declared. Beyond the declared budget a miss
 // may allocate: a paragraph longer than the scratch grows it once, and one
 // bigger than the whole budget is laid out in storage of its own, outside the
 // cache, released when it leaves use. Call it once at setup.
