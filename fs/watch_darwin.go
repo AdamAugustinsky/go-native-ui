@@ -3,8 +3,10 @@
 package fs
 
 import (
+	"bytes"
 	"errors"
 	"os"
+	"slices"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -62,23 +64,31 @@ const (
 )
 
 type kqFile struct {
-	fd  int
-	gen uint32
+	fd   int
+	off  uint32
+	len  uint16
+	next int32
 }
 
 type kqDir struct {
-	id     uint32
-	path   string // as given to add
-	canon  string // real path, as reported by F_GETPATH
-	fd     int
-	files  map[string]*kqFile // by name
-	gen    uint32
-	nfiles int // watches counted against the total budget
+	id         uint32
+	path       string // as given to add
+	canon      string // real path, as reported by F_GETPATH
+	fd         int
+	files      []kqFile
+	names      []byte
+	lookup     map[uint64]int32
+	spareFiles []kqFile
+	spareNames []byte
+	wgen       uint64
+	lastReq    uint64
+	external   bool
+	nfiles     int // watches counted against the total budget
 }
 
 type kqRef struct {
-	d    *kqDir
-	name string // "" for the directory itself
+	d     *kqDir
+	index int // -1 for the directory itself
 }
 
 type kqWatcher struct {
@@ -86,8 +96,11 @@ type kqWatcher struct {
 	kq   int
 	done chan struct{}
 
-	smu sync.Mutex // serializes resync (owns lst)
-	lst Listing
+	smu           sync.Mutex // serializes standalone resync
+	lst           Listing    // only standalone watcher users; the Service supplies its own listing
+	path          []byte
+	registrations []syscall.Kevent_t
+	receipts      []syscall.Kevent_t
 
 	mu     sync.Mutex // guards the structures below
 	dirs   map[uint32]*kqDir
@@ -194,7 +207,13 @@ func (w *kqWatcher) register(fd int, fflags uint32) error {
 	return err
 }
 
-func (w *kqWatcher) add(id uint32, path string) error {
+func (w *kqWatcher) add(id uint32, path string) error { return w.addWatch(id, path, 0, false) }
+
+func (w *kqWatcher) addListingWatch(id uint32, path string, gen uint64) error {
+	return w.addWatch(id, path, gen, true)
+}
+
+func (w *kqWatcher) addWatch(id uint32, path string, gen uint64, external bool) error {
 	fd, err := openEvt(path, true)
 	if err != nil {
 		return err
@@ -204,7 +223,7 @@ func (w *kqWatcher) add(id uint32, path string) error {
 		syscall.Close(fd)
 		return &os.PathError{Op: "fcntl(F_GETPATH)", Path: path, Err: err}
 	}
-	d := &kqDir{id: id, path: path, canon: canon, fd: fd, files: map[string]*kqFile{}}
+	d := &kqDir{id: id, path: path, canon: canon, fd: fd, lookup: make(map[uint64]int32), wgen: gen, external: external}
 
 	w.mu.Lock()
 	if w.closed {
@@ -216,7 +235,7 @@ func (w *kqWatcher) add(id uint32, path string) error {
 		w.dropDirLocked(old)
 	}
 	w.dirs[id] = d
-	w.byFD[fd] = kqRef{d: d}
+	w.byFD[fd] = kqRef{d: d, index: -1}
 	err = w.register(fd, noteDirChange|noteGone)
 	if err != nil {
 		w.dropDirLocked(d)
@@ -227,7 +246,9 @@ func (w *kqWatcher) add(id uint32, path string) error {
 
 	// Directory first, files second: a change in between shows up as a
 	// directory event, and resync after it picks the new file up.
-	w.resync(d)
+	if !external {
+		w.resync(d)
+	}
 	return nil
 }
 
@@ -252,11 +273,14 @@ func (w *kqWatcher) remove(id uint32) {
 // dropDirLocked closes d's descriptors (which also removes their kevents)
 // and forgets it. w.mu held.
 func (w *kqWatcher) dropDirLocked(d *kqDir) {
-	for name, f := range d.files {
-		syscall.Close(f.fd)
-		delete(w.byFD, f.fd)
-		delete(d.files, name)
+	for _, f := range d.files {
+		if f.fd >= 0 {
+			syscall.Close(f.fd)
+			delete(w.byFD, f.fd)
+		}
 	}
+	d.files, d.names = nil, nil
+	clear(d.lookup)
 	w.nfiles -= d.nfiles
 	d.nfiles = 0
 	if d.fd >= 0 {
@@ -288,55 +312,130 @@ func (w *kqWatcher) resync(d *kqDir) {
 	}
 
 	w.mu.Lock()
+	w.syncLocked(d, l)
+	w.mu.Unlock()
+	if l.bufferBytes() > listingSlotBytes {
+		*l = Listing{}
+	}
+}
+
+func (w *kqWatcher) syncListing(id uint32, gen, req uint64, l *Listing) {
+	w.mu.Lock()
 	defer w.mu.Unlock()
+	d := w.dirs[id]
+	if d == nil || d.wgen != gen || req <= d.lastReq {
+		return
+	}
+	d.lastReq = req
+	if l.Err == nil {
+		w.syncLocked(d, l)
+	}
+}
+
+func fileHash(name []byte) uint64 {
+	h := uint64(14695981039346656037)
+	for _, b := range name {
+		h = (h ^ uint64(b)) * 1099511628211
+	}
+	return h
+}
+
+func (d *kqDir) fileIndex(name []byte) int {
+	for i := d.lookup[fileHash(name)]; i != 0; {
+		f := &d.files[i-1]
+		if bytes.Equal(name, d.names[f.off:f.off+uint32(f.len)]) {
+			return int(i - 1)
+		}
+		i = f.next
+	}
+	return -1
+}
+
+// syncLocked rebuilds the bounded file set from one fresh listing. All bulk
+// scratch and file records are pointer-free and reused; names are copied once
+// into an arena, and new descriptors are registered in one kevent batch.
+func (w *kqWatcher) syncLocked(d *kqDir, l *Listing) {
 	if d.fd < 0 || w.closed {
 		return
 	}
-	files := 0
-	for i := range l.Entries {
-		if l.Entries[i].Kind == KindFile {
-			files++
+	count, names := 0, 0
+	for _, e := range l.Entries {
+		if e.Kind == KindFile {
+			count++
+			names += int(e.NameLen)
 		}
 	}
-	d.gen++
-	if files > maxDirFiles {
-		files = 0 // structure only
+	if count > maxDirFiles {
+		count, names = 0, 0
 	}
-	if files > 0 {
-		for i := range l.Entries {
-			if l.Entries[i].Kind != KindFile {
-				continue
-			}
-			name := l.Name(i)
-			if f := d.files[string(name)]; f != nil {
-				f.gen = d.gen
-				continue
-			}
-			if w.nfiles >= maxTotalFiles {
+	files := slices.Grow(d.spareFiles[:0], count)
+	arena := slices.Grow(d.spareNames[:0], names)
+	w.registrations = w.registrations[:0]
+	w.registrations = slices.Grow(w.registrations, count)
+	for i, e := range l.Entries {
+		if count == 0 {
+			break
+		}
+		if e.Kind != KindFile {
+			continue
+		}
+		name := l.Name(i)
+		fd := -1
+		if old := d.fileIndex(name); old >= 0 {
+			fd = d.files[old].fd
+			d.files[old].fd = -1 // transferred to the new records
+		}
+		if fd < 0 && w.nfiles < maxTotalFiles {
+			w.path = append(append(append(append(w.path[:0], d.path...), '/'), name...), 0)
+			for {
+				r, _, errno := syscall.Syscall(syscall.SYS_OPEN, uintptr(unsafe.Pointer(&w.path[0])), oEvtOnly|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+				if errno == syscall.EINTR {
+					continue
+				}
+				if errno == 0 {
+					fd = int(r)
+					w.nfiles++
+					w.registrations = append(w.registrations, syscall.Kevent_t{Ident: uint64(fd), Filter: syscall.EVFILT_VNODE, Flags: syscall.EV_ADD | syscall.EV_CLEAR | syscall.EV_RECEIPT, Fflags: noteDirChange | noteGone})
+				}
 				break
 			}
-			full := path + "/" + string(name)
-			fd, err := openEvt(full, false)
-			if err != nil {
-				continue // raced with a delete, or unreadable
-			}
-			f := &kqFile{fd: fd, gen: d.gen}
-			w.byFD[fd] = kqRef{d: d, name: string(name)}
-			if w.register(fd, noteDirChange|noteGone) != nil {
-				delete(w.byFD, fd)
-				syscall.Close(fd)
-				continue
-			}
-			d.files[string(name)] = f
-			d.nfiles++
-			w.nfiles++
 		}
+		if fd < 0 {
+			continue
+		}
+		files = append(files, kqFile{fd: fd, off: uint32(len(arena)), len: uint16(len(name))})
+		arena = append(arena, name...)
 	}
-	for name, f := range d.files {
-		if f.gen != d.gen {
+	for _, f := range d.files {
+		if f.fd >= 0 {
 			syscall.Close(f.fd)
 			delete(w.byFD, f.fd)
-			delete(d.files, name)
+			w.nfiles--
+		}
+	}
+	d.files, d.spareFiles = files, d.files[:0]
+	d.names, d.spareNames = arena, d.names[:0]
+	clear(d.lookup)
+	d.nfiles = len(files)
+	for i := range d.files {
+		f := &d.files[i]
+		h := fileHash(d.names[f.off : f.off+uint32(f.len)])
+		f.next = d.lookup[h]
+		d.lookup[h] = int32(i + 1)
+		w.byFD[f.fd] = kqRef{d: d, index: i}
+	}
+	if n := len(w.registrations); n > 0 {
+		w.receipts = slices.Grow(w.receipts[:0], n)[:n]
+		got, err := kevent(w.kq, w.registrations, w.receipts)
+		for i, ev := range w.registrations {
+			if err == nil && i < got && w.receipts[i].Flags&syscall.EV_ERROR != 0 && w.receipts[i].Data == 0 {
+				continue
+			}
+			fd := int(ev.Ident)
+			ref := w.byFD[fd]
+			d.files[ref.index].fd = -1
+			delete(w.byFD, fd)
+			syscall.Close(fd)
 			d.nfiles--
 			w.nfiles--
 		}
@@ -387,12 +486,13 @@ func (w *kqWatcher) process(evs []syscall.Kevent_t) bool {
 		d := ref.d
 		fl := ev.Fflags
 		switch {
-		case ref.name != "": // a file in the directory
+		case ref.index >= 0: // a file in the directory
 			if fl&noteGone != 0 {
-				if f := d.files[ref.name]; f != nil && f.fd == int(ev.Ident) {
+				f := &d.files[ref.index]
+				if f.fd == int(ev.Ident) {
 					syscall.Close(f.fd)
 					delete(w.byFD, f.fd)
-					delete(d.files, ref.name)
+					f.fd = -1
 					d.nfiles--
 					w.nfiles--
 				}
@@ -401,7 +501,11 @@ func (w *kqWatcher) process(evs []syscall.Kevent_t) bool {
 				// event kept the old watch under that name, so look again.
 				need(d)
 			}
-			changed = append(changed, Change{d.id, ChangeDir})
+			kind := ChangeContent
+			if fl&noteGone != 0 || !d.external {
+				kind = ChangeDir
+			}
+			changed = append(changed, Change{d.id, kind})
 		case fl&noteGone != 0:
 			// Confirm that the directory really is gone from its path.
 			if !stillAt(d) {
@@ -417,18 +521,20 @@ func (w *kqWatcher) process(evs []syscall.Kevent_t) bool {
 			}
 		}
 	}
-	w.mu.Unlock()
-
 	w.pmu.Lock()
 	for _, c := range changed {
 		w.noteLocked(c.ID, c.Kind)
 	}
 	woke := len(w.pending) > 0
 	w.pmu.Unlock()
+	w.mu.Unlock() // remove cannot finish before this batch's changes are recorded
 	for _, d := range resync {
-		w.resync(d)
+		if !d.external {
+			w.resync(d)
+		}
 	}
-	w.scrChanged, w.scrResync = changed, resync
+	clear(resync)
+	w.scrChanged, w.scrResync = changed[:0], resync[:0]
 	if woke {
 		w.wake()
 	}
@@ -436,13 +542,15 @@ func (w *kqWatcher) process(evs []syscall.Kevent_t) bool {
 }
 
 // noteLocked records kind for id, keeping the strongest per id
-// (gone > overflow > dir). w.pmu held.
+// (gone > overflow > dir > content). w.pmu held.
 func (w *kqWatcher) noteLocked(id uint32, kind ChangeKind) {
 	rank := func(k ChangeKind) int {
 		switch k {
 		case ChangeGone:
-			return 2
+			return 3
 		case ChangeOverflow:
+			return 2
+		case ChangeDir:
 			return 1
 		}
 		return 0

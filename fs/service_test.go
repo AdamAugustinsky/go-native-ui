@@ -7,12 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gonativeui/core"
 )
 
 // fakeList serves paths of the form "n:<count>:<tag>": count entries named
@@ -591,4 +594,237 @@ func TestServiceWatchGap(t *testing.T) {
 	}
 	h.s.Release(r.Listing, r.Lease)
 	h.expectNone(150 * time.Millisecond) // and only once
+}
+
+// Resort reads the held snapshot while the UI keeps displaying it. Releasing
+// that snapshot early must not let another worker reuse its buffers.
+func TestServiceResortKeepsSnapshotAndAvoidsIO(t *testing.T) {
+	h := newHarness(t)
+	h.s.List(1, "n:100:sort", SortName, false)
+	r := h.await(2*time.Second, isListing(1))
+	calls := h.fs.calls.Load()
+	for _, key := range []SortKey{SortSize, SortSize, SortName, SortName, SortModified, SortKind} {
+		original := append([]uint32(nil), r.Listing.Order...)
+		expected := *r.Listing
+		expected.Order = append([]uint32(nil), r.Listing.Order...)
+		Sort(&expected, key, true)
+		req := h.s.Resort(1, r.Listing, r.Lease, key, true)
+		if req == 0 {
+			t.Fatal("valid lease rejected")
+		}
+		next := h.await(2*time.Second, isListing(1))
+		if next.Req != req || next.Listing == r.Listing || !slices.Equal(original, r.Listing.Order) || !slices.Equal(expected.Order, next.Listing.Order) {
+			t.Fatal("resort mutated the held snapshot or returned the wrong order")
+		}
+		h.s.Release(r.Listing, r.Lease)
+		r = next
+	}
+	if h.fs.calls.Load() != calls {
+		t.Fatal("resort read the filesystem")
+	}
+	// Cancellation can retire the id while its old result is still held.
+	h.s.Cancel(1)
+	req := h.s.Resort(1, r.Listing, r.Lease, SortName, false)
+	h.s.Release(r.Listing, r.Lease)
+	next := h.await(2*time.Second, isListing(1))
+	if req == 0 || next.Req != req {
+		t.Fatal("resort lost its pinned source")
+	}
+	checkFake(t, next.Listing, "n:100:sort")
+	h.s.Release(next.Listing, next.Lease)
+	if h.s.Resort(1, next.Listing, next.Lease, SortName, false) != 0 {
+		t.Fatal("stale lease accepted")
+	}
+}
+
+func TestServiceCancelRetiresIDsAndRejectsOldWorkers(t *testing.T) {
+	h := newHarness(t)
+	h.s.List(1, "block:old", SortName, false)
+	waitFor(t, "old listing", time.Second, func() bool { return h.fs.started.Load() > 0 })
+	h.s.Cancel(1)
+	req := h.s.List(1, "n:4:new", SortName, false)
+	close(h.fs.gate)
+	r := h.await(time.Second, isListing(1))
+	if r.Req != req {
+		t.Fatal("old generation delivered")
+	}
+	checkFake(t, r.Listing, "n:4:new")
+	h.s.Release(r.Listing, r.Lease)
+	h.s.Cancel(1)
+	for id := uint32(2); id < 10002; id++ {
+		h.s.mu.Lock()
+		h.s.state(id)
+		h.s.mu.Unlock()
+		h.s.Cancel(id)
+	}
+	h.s.mu.Lock()
+	ids, dirty := len(h.s.ids), len(h.s.dirtyIDs)
+	h.s.mu.Unlock()
+	if ids != 0 || dirty != 0 {
+		t.Fatalf("retained %d ids, %d dirty ids", ids, dirty)
+	}
+	h.expectNone(50 * time.Millisecond)
+}
+
+func TestServiceFullRingParksUntilPollOrClose(t *testing.T) {
+	for _, closeFull := range []bool{false, true} {
+		h := newHarness(t)
+		h.s.mu.Lock()
+		h.s.ring = core.NewRing[resMsg](2)
+		h.s.mu.Unlock()
+		for id := uint32(1); id <= 8; id++ {
+			h.s.List(id, "n:1:park", SortName, false)
+		}
+		waitFor(t, "both producers parked", time.Second, func() bool {
+			h.s.mu.Lock()
+			defer h.s.mu.Unlock()
+			return h.s.ringWait[0] && h.s.ringWait[1]
+		})
+		before := h.fs.calls.Load()
+		time.Sleep(20 * time.Millisecond)
+		if h.fs.calls.Load() != before {
+			t.Fatal("producer made progress without a ring slot")
+		}
+		if closeFull {
+			start := time.Now()
+			h.s.Close()
+			if time.Since(start) > time.Second {
+				t.Fatal("Close did not release parked producers")
+			}
+		} else {
+			for id := uint32(1); id <= 8; id++ {
+				r := h.await(time.Second, isListing(id))
+				h.s.Release(r.Listing, r.Lease)
+			}
+		}
+	}
+}
+
+func TestServiceContentDebounceDoesNotWakeUI(t *testing.T) {
+	h := newHarness(t)
+	h.s.List(1, "n:4:content", SortName, false)
+	h.s.Watch(1, "/content")
+	r := h.await(time.Second, isListing(1))
+	h.s.Release(r.Listing, r.Lease)
+	waitFor(t, "watch", time.Second, func() bool { return h.watchAdded(1) })
+	h.drainWake()
+	h.w.emit(Change{1, ChangeContent})
+	waitFor(t, "dirty", time.Second, func() bool { h.s.mu.Lock(); defer h.s.mu.Unlock(); return len(h.s.dirtyIDs) == 1 })
+	h.expectQuiet(80 * time.Millisecond)
+	h.w.emit(Change{1, ChangeContent})
+	h.expectQuiet(100 * time.Millisecond)
+	r = h.await(time.Second, isListing(1))
+	if !r.Refresh {
+		t.Fatal("content change was not a refresh")
+	}
+	h.s.Release(r.Listing, r.Lease)
+	// A sustained stream has a hard deadline; structure takes precedence.
+	h.s.mu.Lock()
+	st := h.s.ids[1]
+	now := time.Now()
+	h.s.dirtyLocked(st, now, true)
+	for i := 1; i < 20; i++ {
+		h.s.dirtyLocked(st, now.Add(time.Duration(i)*50*time.Millisecond), true)
+	}
+	due := st.dirtyDue
+	h.s.dirtyLocked(st, now.Add(100*time.Millisecond), false)
+	structural := st.dirtyDue
+	h.s.mu.Unlock()
+	if !due.Equal(now.Add(contentMaxWait)) || !structural.Equal(now.Add(100*time.Millisecond+h.s.debounce)) {
+		t.Fatalf("deadlines: content=%v structure=%v", due.Sub(now), structural.Sub(now))
+	}
+}
+
+func TestServicePoolBoundsExceptionalListings(t *testing.T) {
+	s := &Service{slotOf: make(map[*Listing]int32)}
+	l, slot := s.getListingLocked()
+	l.Entries = make([]Entry, 1_000_000)
+	l.Names = make([]byte, 16_000_000)
+	l.Order = make([]uint32, 1_000_000)
+	s.Release(l, s.lease[slot])
+	if l.bufferBytes() != 0 || s.pooledBytes != 0 {
+		t.Fatalf("exceptional listing retained %d bytes", l.bufferBytes())
+	}
+	// A repeatedly used large working set is learned, then reused without allocations.
+	for range 10 {
+		l, slot = s.getListingLocked()
+		if cap(l.Entries) < 100_000 {
+			l.Entries = make([]Entry, 100_000)
+		} else {
+			l.Entries = l.Entries[:100_000]
+		}
+		s.Release(l, s.lease[slot])
+	}
+	if n := testing.AllocsPerRun(20, func() { l, slot = s.getListingLocked(); l.Entries = l.Entries[:100_000]; s.Release(l, s.lease[slot]) }); n != 0 {
+		t.Fatalf("warm large working set: %v allocs", n)
+	}
+	for range 12 {
+		l, slot = s.getListingLocked()
+		l.Entries = append(l.Entries, Entry{})
+		s.Release(l, s.lease[slot])
+	}
+	if s.pooledBytes > listingPoolBytes {
+		t.Fatalf("small working set retains %d bytes", s.pooledBytes)
+	}
+}
+
+func TestServiceResortDoesNotLoseNewerDiskContents(t *testing.T) {
+	h := newHarness(t)
+	h.s.List(1, "n:2:old", SortName, false)
+	h.s.Watch(1, "/changes")
+	old := h.await(time.Second, isListing(1))
+	waitFor(t, "watch", time.Second, func() bool { return h.watchAdded(1) })
+	h.s.List(1, "n:5:new", SortName, false)
+	fresh := h.await(time.Second, isListing(1))
+	h.s.Resort(1, old.Listing, old.Lease, SortSize, true)
+	sorted := h.await(time.Second, isListing(1))
+	checkFake(t, sorted.Listing, "n:2:old")
+	refreshed := h.await(time.Second, isListing(1))
+	if !refreshed.Refresh {
+		t.Fatal("newer disk contents were not refreshed")
+	}
+	checkFake(t, refreshed.Listing, "n:5:new")
+	for _, r := range []Result{old, fresh, sorted, refreshed} {
+		h.s.Release(r.Listing, r.Lease)
+	}
+}
+
+func TestServiceSetWakeTargetsNextResult(t *testing.T) {
+	var old, new atomic.Int64
+	s := NewServiceWith(func() { old.Add(1) }, func(string, *Listing) error { return nil })
+	defer s.Close()
+	s.SetWake(func() { new.Add(1) })
+	s.List(1, "synthetic", SortName, false)
+	waitFor(t, "new wake", time.Second, func() bool { return new.Load() == 1 })
+	if old.Load() != 0 {
+		t.Fatal("result woke the previous target")
+	}
+	for _, r := range s.Poll(nil) {
+		s.Release(r.Listing, r.Lease)
+	}
+}
+
+func TestServicePoolIdleReclaimsLargeWorkingSet(t *testing.T) {
+	s := NewServiceWith(nil, func(string, *Listing) error { return nil })
+	defer s.Close()
+	for range 8 {
+		s.mu.Lock()
+		l, slot := s.getListingLocked()
+		if cap(l.Entries) < 400_000 {
+			l.Entries = make([]Entry, 400_000)
+		} else {
+			l.Entries = l.Entries[:400_000]
+		}
+		s.freeSlotLocked(slot)
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
+	if s.pooledBytes <= listingPoolBytes || s.poolDue.IsZero() {
+		s.mu.Unlock()
+		t.Fatal("large pool was not warmed or its expiry was not armed")
+	}
+	s.poolDue = time.Now().Add(-time.Second)
+	s.mu.Unlock()
+	s.kick()
+	waitFor(t, "idle trim", time.Second, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.pooledBytes == 0 && s.poolDue.IsZero() })
 }

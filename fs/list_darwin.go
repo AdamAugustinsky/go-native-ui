@@ -37,7 +37,7 @@ const (
 
 	sIFMT, sIFDIR = 0o170000, 0o040000
 
-	bulkBufSize = 256 << 10
+	bulkBufSize = 64 << 10
 )
 
 type attrList struct {
@@ -54,11 +54,11 @@ type attrList struct {
 // through a free list (not a sync.Pool, which the GC empties) so a warm
 // listing allocates nothing.
 type bulkScratch struct {
-	buf  [bulkBufSize]byte
-	stat [256]byte // struct stat64 for symlink targets
-	al   attrList
 	path []byte // NUL-terminated directory path
 	link []byte // NUL-terminated "dir/name" of a symlink being stat'ed
+	al   attrList
+	stat [256]byte // struct stat64 for symlink targets
+	buf  [bulkBufSize]byte
 }
 
 var (
@@ -79,7 +79,7 @@ func getScratch() *bulkScratch {
 
 // prewarmScratch has n scratches, their path buffers sized for any path, on
 // the free list, so that the first listings and stats, which run at once on
-// the service's workers, find them there instead of each allocating 264 KiB
+// the service's workers, find them there instead of each allocating bulk scratch
 // and growing its path buffer the first time two of them overlap: when that
 // happens is the scheduler's, and a measured window must not be it.
 func prewarmScratch(n int) {
