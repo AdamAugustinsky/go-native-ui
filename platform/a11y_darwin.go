@@ -132,10 +132,7 @@ func (w *Window) AXActive() bool {
 
 // expire piggybacks on frames and queries: inactivity schedules no wakeup.
 func (b *axDarwin) expire(now int64) {
-	if b.core.active && now-b.lastQuery >= 30e9 {
-		b.core.active = false
-		SetAXSourceActive(b.src, false)
-	}
+	expireAX(&b.core.active, b.lastQuery, now, b.src)
 }
 
 // SyncAX brings the bridge up to date with the app's tree, once per frame

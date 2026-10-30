@@ -1,0 +1,312 @@
+package app
+
+import (
+	"bytes"
+	"fmt"
+	"image"
+	"image/png"
+	"math/rand/v2"
+	"os"
+	"runtime"
+	"strconv"
+	"testing"
+	"time"
+
+	"gonativeui/core"
+	filesys "gonativeui/fs"
+	"gonativeui/img"
+	"gonativeui/markdown"
+	"gonativeui/platform"
+	"gonativeui/rexui"
+	"gonativeui/rexui/mdview"
+	"gonativeui/text"
+	"gonativeui/theme"
+	"gonativeui/theme/rex"
+	"gonativeui/ui"
+	"gonativeui/widget/base"
+)
+
+// simScene exercises each owned worker family with real text and renderer,
+// while synthetic directory contents avoid a host filesystem dependency.
+type simScene struct {
+	a                 *App
+	k                 *base.Kit
+	field             ui.TextBuffer
+	fieldKey          ui.Key
+	list              base.VListState
+	ids               []uint64
+	view              mdview.MarkdownView
+	doc               markdown.Doc
+	styles            ui.RichStyles
+	font              text.FontKey
+	prefetch          *text.Prefetcher
+	files             *filesys.Service
+	results           []filesys.Result
+	images            *img.Cache
+	png               []byte
+	imageState        img.State
+	burst             int
+	listings, imports int
+}
+
+func (b *simScene) Init(a *App) error {
+	b.a = a
+	b.k = base.NewKit(a.UI, a.Text, rex.Theme())
+	b.k.ReduceMotion = true
+	b.font = a.Text.Font(text.FontDesc{SizePt: 13, Weight: 400, Scale: 1})
+	b.styles.Set(0, ui.RichStyle{Font: b.font})
+	b.styles.Set(1, ui.RichStyle{Font: b.font, Color: 0x3070d0ff, Deco: ui.DecoHoverUnderline})
+	b.field.SetString("simulation")
+	b.ids = make([]uint64, 10000)
+	for i := range b.ids {
+		b.ids[i] = uint64(i + 1)
+	}
+	b.list.Reserve(len(b.ids))
+	b.list.Append(b.ids)
+	var p markdown.Parser
+	p.Parse([]byte("A **Markdown** view with [a link](https://example.com).\n\n```go\nfunc answer() int { return 42 }\n```\n")).CopyTo(&b.doc)
+	var err error
+	b.prefetch, err = text.NewPrefetcher(2, 16, platform.Wake)
+	if err != nil {
+		return err
+	}
+	b.prefetch.Submit(1, a.Text, b.font, []byte("worker prefetch fi fl"))
+	b.files = filesys.NewServiceWith(platform.Wake, func(_ string, l *filesys.Listing) error {
+		const n = 330000
+		if cap(l.Entries) < n {
+			l.Entries = make([]filesys.Entry, n)
+		} else {
+			l.Entries = l.Entries[:n]
+		}
+		l.Names = append(l.Names[:0], 'x')
+		for i := range l.Entries {
+			l.Entries[i] = filesys.Entry{NameLen: 1, Size: int64(i)}
+		}
+		return nil
+	})
+	b.results = make([]filesys.Result, 0, 8)
+	var out bytes.Buffer
+	if err := png.Encode(&out, image.NewRGBA(image.Rect(0, 0, 8, 8))); err != nil {
+		return err
+	}
+	b.png = out.Bytes()
+	b.images = img.NewCache(img.Options{Renderer: a.R, Workers: 2, Entries: 16, Wake: platform.Wake})
+	return nil
+}
+
+func (b *simScene) Build(c *ui.Context) {
+	b.imports += b.prefetch.Poll(b.a.Text, 16)
+	b.results = b.files.Poll(b.results[:0])
+	for _, r := range b.results {
+		if r.Listing != nil {
+			b.listings++
+			b.files.Release(r.Listing, r.Lease)
+		}
+	}
+	if b.images.Poll() {
+		c.RequestFrame()
+	}
+	_, b.imageState = b.images.Request(img.Key{Hash: 1, W: 8, H: 8}, img.Bytes(b.png))
+	b.k.Begin(c)
+	c.NextSize(ui.Pct(1), ui.Pct(1))
+	c.NextAxis(ui.AxisY)
+	c.NextPad(12)
+	c.NextGap(8)
+	c.Open(ui.Clip, "root")
+	b.k.NextWidth(ui.Pct(1))
+	b.fieldKey = rexui.TextField(b.k, "Name", &b.field, "", rexui.FieldOpts{}).Key
+	mdview.Markdown(b.k, ui.HashString(c.ParentKey(), "markdown"), &b.doc, mdview.MarkdownOpts{View: &b.view})
+	c.NextSize(ui.Pct(1), ui.Children(1))
+	c.RichText(ui.HashString(c.ParentKey(), "rich"), []byte("Read the linked guide"), []ui.Span{{Off: 9, Len: 12, Style: 1, Flags: ui.SpanLink, Tag: 1}}, &b.styles, ui.RichOpts{})
+	c.NextSize(ui.Pct(1), ui.Grow(1))
+	v := base.BeginVList(c, "rows", &b.list, base.VListOpts{Estimate: 22})
+	for i := v.First; i < v.Last; i++ {
+		v.Item(i)
+		c.NextSize(ui.Pct(1), ui.Px(22))
+		c.NextFont(b.font)
+		c.NextTextColor(b.k.Theme().Colors[theme.Label])
+		c.Box(ui.DrawText, "row")
+	}
+	base.EndVList(&v)
+	for i := 0; i < b.burst; i++ {
+		c.NextPos(0, 0)
+		c.NextSize(ui.Px(1), ui.Px(1))
+		c.NextBG(0x30303080)
+		c.BoxKeyed(ui.FloatingX|ui.FloatingY|ui.DrawBackground, ui.KeyN(c.ParentKey(), uint64(100000+i)), nil)
+	}
+	c.Close()
+	b.k.End()
+}
+
+func (b *simScene) SimClose() {
+	b.view.Close()
+	if b.prefetch != nil {
+		b.prefetch.Close()
+	}
+	if b.files != nil {
+		b.files.Close()
+	}
+	if b.images != nil {
+		b.images.Close(time.Second)
+	}
+}
+func (b *simScene) SimRetained() map[string]int {
+	return map[string]int{"listing-pool": b.files.RetainedPoolBytes(), "vlist-back": b.list.BackCapacity()}
+}
+
+func simMust(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runSimSmoke(t *testing.T, seed uint64, hours time.Duration) uint64 {
+	t.Helper()
+	baseline := runtime.NumGoroutine()
+	b := new(simScene)
+	s, err := NewSim(Config{}, 900, 700, 1, b, SimOptions{Seed: seed, Render: true})
+	if err != nil {
+		skipOrFail(t, "simulation", err)
+	}
+	defer s.Close()
+	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
+	simMust(t, s.Advance(time.Second))
+	if b.imports != 1 || b.view.Pending() != 0 || b.imageState != img.Ready {
+		t.Fatalf("workers: imports=%d highlight=%d image=%v", b.imports, b.view.Pending(), b.imageState)
+	}
+	// Grow the real GPU ring and box slab, and retain a VList rebuild back.
+	b.burst = 10000
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvWake}))
+	simMust(t, s.Advance(100*time.Millisecond))
+	b.list.Reset(b.ids)
+	for range 4 {
+		b.files.List(1, "/gnui-synthetic-not-on-disk", filesys.SortName, false)
+		simMust(t, s.Advance(100*time.Millisecond))
+	}
+	peak, err := s.Memory()
+	simMust(t, err)
+	if peak.Boxes < 10000 || peak.Instances < 10000 || peak.Subsystems["0/listing-pool"] <= 8<<20 {
+		t.Fatalf("stress did not grow capacities: %+v", peak)
+	}
+	b.burst = 0
+	for range 210 {
+		simMust(t, s.Event(0, platform.Event{Kind: platform.EvWake}))
+		simMust(t, s.Advance(20*time.Millisecond))
+	}
+	// The VList and listing pool owe a cleanup after 30s; no busy frame loop.
+	idle, err := s.Idle(time.Minute, SimDeadline|SimContinuation)
+	simMust(t, err)
+	floor, err := s.CheckMemory(SimMemory{Boxes: 2048, RunGlyphs: text.MaxCachedGlyphs, RunText: text.MaxCachedTextBytes, Instances: 8192, Subsystems: map[string]int{"0/listing-pool": 8 << 20, "0/vlist-back": 0}})
+	simMust(t, err)
+	if floor.Boxes >= peak.Boxes || floor.Instances >= peak.Instances || floor.HeapLive >= peak.HeapLive {
+		t.Fatalf("retained memory did not fall: peak=%+v floor=%+v", peak, floor)
+	}
+	t.Logf("seed=%d peak heap=%d boxes=%d instances=%d pool=%d; idle floor heap=%d boxes=%d instances=%d; cleanup=%+v", seed, peak.HeapLive, peak.Boxes, peak.Instances, peak.Subsystems["0/listing-pool"], floor.HeapLive, floor.Boxes, floor.Instances, idle)
+	// Isolate the exact D11 gate from scenario/trace/worker allocations.
+	s.CheckAllocations(true)
+	for range 64 {
+		simMust(t, s.Event(0, platform.Event{Kind: platform.EvWake}))
+		simMust(t, s.Advance(20*time.Millisecond))
+	}
+	s.CheckAllocations(false)
+	for burst := 0; burst < 6; burst++ {
+		b.k.Focus(b.fieldKey)
+		for range 4 {
+			x, y := float32(rng.IntN(500)), float32(240+rng.IntN(250))
+			simMust(t, s.Event(0, platform.Event{Kind: platform.EvPointerMove, X: x, Y: y}))
+			simMust(t, s.Event(0, platform.Event{Kind: platform.EvScroll, X: x, Y: y, DY: float32(rng.IntN(7) - 3)}))
+			simMust(t, s.Event(0, platform.Event{Kind: platform.EvKey, Key: platform.KeyEnd, Flags: platform.FlagDown}))
+			simMust(t, s.Event(0, platform.Event{Kind: platform.EvText}, []byte{byte('a' + rng.IntN(26))}))
+			simMust(t, s.Advance(50*time.Millisecond))
+		}
+		// A real clipboard paste answer, targeted to the focused field.
+		s.Clipboard([]byte(" paste"))
+		simMust(t, s.Event(0, platform.Event{Kind: platform.EvPaste, Tag: uint64(b.fieldKey)}, s.clipboard))
+		simMust(t, s.Event(0, platform.Event{Kind: platform.EvFocus}))
+		simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible}))
+		simMust(t, s.Advance(2*time.Second))
+		quiet, err := s.Idle(hours/6, 0)
+		simMust(t, err)
+		if quiet.Frames != 0 {
+			t.Fatal(quiet)
+		}
+		if burst == 1 {
+			simMust(t, s.Appearance(true))
+		}
+		if burst == 2 {
+			simMust(t, s.Event(0, platform.Event{Kind: platform.EvResize, W: 960, H: 720, Scale: 1.25}))
+		}
+		if burst == 3 {
+			_, err = s.AXQuery(0)
+			simMust(t, err)
+			simMust(t, s.Advance(time.Minute))
+			if s.windows[0].ax.Active() {
+				t.Fatal("AX did not expire")
+			}
+			_, err = s.AXQuery(0)
+			simMust(t, err)
+		}
+		if burst == 4 {
+			simMust(t, s.DeviceLost())
+		}
+		simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}))
+		simMust(t, s.Event(0, platform.Event{Kind: platform.EvFocus, Flags: platform.FlagDown}))
+		b.k.Focus(0)
+		simMust(t, s.Event(0, platform.Event{Kind: platform.EvPointerLeave}))
+		simMust(t, s.Advance(2*time.Second))
+	}
+	// A completely unchanged return must reproduce the exact draw list.
+	draw, _ := s.FrameHash(0)
+	s.AddCheck(SimReturnFrame(0, draw))
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible}))
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvFocus}))
+	_, err = s.Idle(time.Hour, 0)
+	simMust(t, err)
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}))
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvFocus, Flags: platform.FlagDown}))
+	simMust(t, s.Advance(time.Second))
+	hash := s.TraceHash()
+	t.Logf("seed=%d trace=%016x frames=%d simulated=%s", seed, hash, s.windows[0].frames, time.Duration(core.Now()-int64(time.Second)))
+	s.Close()
+	if n := runtime.NumGoroutine(); n > baseline {
+		t.Fatalf("goroutines after Close=%d, baseline=%d", n, baseline)
+	}
+	return hash
+}
+
+func TestSimFourHours(t *testing.T) {
+	hours := 4 * time.Hour
+	if v := os.Getenv("GNUI_SIM_HOURS"); v != "" {
+		h, err := strconv.ParseFloat(v, 64)
+		if err != nil || h <= 0 {
+			t.Fatal("invalid GNUI_SIM_HOURS")
+		}
+		hours = time.Duration(h * float64(time.Hour))
+	}
+	seeds := []uint64{1}
+	if v := os.Getenv("GNUI_SIM_SEEDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			t.Fatal("invalid GNUI_SIM_SEEDS")
+		}
+		seeds = make([]uint64, n)
+		for i := range seeds {
+			seeds[i] = uint64(i + 1)
+		}
+	}
+	if v := os.Getenv("GNUI_SIM_SEED"); v != "" {
+		n, err := strconv.ParseUint(v, 0, 64)
+		simMust(t, err)
+		seeds = []uint64{n}
+	}
+	for _, seed := range seeds {
+		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			a := runSimSmoke(t, seed, hours)
+			b := runSimSmoke(t, seed, hours)
+			if a != b {
+				t.Fatalf("seed=%d replay diverged: %016x != %016x", seed, a, b)
+			}
+		})
+	}
+}

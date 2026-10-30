@@ -991,3 +991,12 @@ func (r *Renderer) deleteGLObjects() {
 		fr.Call1(glx.deleteProgram, uintptr(r.prog))
 	}
 }
+
+// InstanceCapacity is the retained GPU instance-ring capacity in quads.
+func (r *Renderer) InstanceCapacity() int {
+	n := 0
+	for i := range r.slots {
+		n += r.slots[i].quads
+	}
+	return n
+}

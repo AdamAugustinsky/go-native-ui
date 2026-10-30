@@ -1025,3 +1025,6 @@ func (r *Renderer) Destroy() {
 		r.ctx, r.dev = 0, 0
 	}
 }
+
+// InstanceCapacity is the retained GPU instance-ring capacity in quads.
+func (r *Renderer) InstanceCapacity() int { return r.capQuads }
