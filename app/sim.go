@@ -6,10 +6,13 @@ import (
 	"image"
 	"math"
 	"runtime"
+	"slices"
+	"strings"
 	"time"
 
 	"gonativeui/core"
 	"gonativeui/gpu"
+	"gonativeui/internal/allocsite"
 	"gonativeui/platform"
 	"gonativeui/text"
 	"gonativeui/ui"
@@ -50,6 +53,8 @@ type Sim struct {
 	allocs     bool
 	procs      int
 	stats      [2]runtime.MemStats
+	sites      [2]allocsite.Snapshot // profile at the last attribution, and now
+	unprofile  func()
 }
 
 // SimCloser releases a builder's workers at simulated window close.
@@ -342,7 +347,9 @@ func (s *Sim) draw(v *simWindow, now int64) error {
 	if s.allocs {
 		runtime.ReadMemStats(&s.stats[1])
 		if n := s.stats[1].Mallocs - s.stats[0].Mallocs; n != 0 {
-			return fmt.Errorf("window %d warmed frame allocated %d objects, %d bytes", v.id, n, s.stats[1].TotalAlloc-s.stats[0].TotalAlloc)
+			if sites := s.drawAllocations(); sites != "" {
+				return fmt.Errorf("window %d warmed frame allocated %d objects, %d bytes; ours:\n%s", v.id, n, s.stats[1].TotalAlloc-s.stats[0].TotalAlloc, sites)
+			}
 		}
 	}
 	tree, _ := a.UI.SemanticSnapshot()
@@ -432,7 +439,50 @@ func (s *Sim) setClipboard(b []byte) {
 
 // CheckAllocations enables exact, isolated per-frame allocation checks after
 // a scenario has warmed its state. Disable it for growth and deliberate trims.
-func (s *Sim) CheckAllocations(on bool) { s.allocs = on }
+// A frame that allocates fails only for allocations of ours made under the
+// draw (D27): the runtime's own (a thread, its timer heap) are passed over.
+func (s *Sim) CheckAllocations(on bool) {
+	if on == s.allocs {
+		return
+	}
+	s.allocs = on
+	if !on {
+		s.unprofile()
+		s.unprofile = nil
+		return
+	}
+	s.unprofile = allocsite.Enable()
+	s.sites[0].Take()
+	s.sites[1].Take()
+	runtime.GC()
+	s.sites[0].Take()
+}
+
+// drawAllocations attributes what the frames drawn since the last
+// attribution allocated: the sites of ours under (*Sim).draw, or "" if every
+// allocation was the runtime's or made off the draw (a worker, an event). The
+// collection it needs runs only after a frame allocated.
+func (s *Sim) drawAllocations() string {
+	runtime.GC()
+	s.sites[1].Take()
+	sites := allocsite.Diff(&s.sites[0], &s.sites[1])
+	s.sites[0], s.sites[1] = s.sites[1], s.sites[0]
+	ours := sites[:0]
+	for _, site := range sites {
+		// A stack the profile cut at 32 frames may hide the draw: count it.
+		if site.Class == allocsite.Ours && (len(site.Stack) >= 32 || slices.ContainsFunc(site.Stack, func(f string) bool {
+			return strings.HasPrefix(f, "gonativeui/app.(*Sim).draw ")
+		})) {
+			ours = append(ours, site)
+		}
+	}
+	if len(ours) == 0 {
+		return ""
+	}
+	var w strings.Builder
+	allocsite.Write(&w, ours)
+	return w.String()
+}
 
 func (s *Sim) closeWindow(v *simWindow) {
 	if v.closed {
@@ -463,6 +513,7 @@ func (s *Sim) Close() {
 		return
 	}
 	s.closed = true
+	s.CheckAllocations(false)
 	defer runtime.GOMAXPROCS(s.procs)
 	defer runtime.UnlockOSThread()
 	defer s.clock.Restore()

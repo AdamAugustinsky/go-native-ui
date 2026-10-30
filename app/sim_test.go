@@ -466,8 +466,8 @@ func TestSimAllocationGateDetectsOneAllocation(t *testing.T) {
 	s.CheckAllocations(true)
 	b.allocate = true
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvWake}))
-	if err = s.Advance(time.Second); err == nil {
-		t.Fatal("allocation gate missed planted allocation")
+	if err = s.Advance(time.Second); err == nil || !strings.Contains(err.Error(), "simFlat") {
+		t.Fatalf("allocation gate missed planted allocation, or did not name its site: %v", err)
 	}
 }
 
