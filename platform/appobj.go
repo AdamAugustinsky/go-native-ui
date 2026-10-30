@@ -2,6 +2,7 @@ package platform
 
 import (
 	"errors"
+	"gonativeui/core"
 	"math/bits"
 	"os"
 	"os/signal"
@@ -1173,7 +1174,7 @@ var quitState struct {
 	serial   uint64
 	reason   QuitReason
 	opts     AppOptions
-	timer    *time.Timer
+	timer    *core.Timer
 	approved atomic.Bool // the quit was allowed and the app's loop ends (where the OS does not end the process itself)
 }
 
@@ -1293,7 +1294,7 @@ func beginQuit(reason QuitReason) int {
 		quitState.phase = quitLater
 		if d := quitState.opts.QuitDeadline; d > 0 {
 			serial := quitState.serial
-			quitState.timer = time.AfterFunc(d, func() {
+			quitState.timer = core.AfterFunc(d, func() {
 				dispatch.quitDue.Store(serial)
 				signalApp()
 			})

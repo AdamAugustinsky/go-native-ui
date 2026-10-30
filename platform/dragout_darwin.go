@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"gonativeui/core"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -256,9 +257,9 @@ func newPromise(w *Window, session DragTicket, p *FilePromise) *promiseRec {
 	defer promiseMu.Unlock()
 	// Promises of drags that ended without a drop are removed when they end;
 	// one a destination never asked for after a drop is dropped when it is old.
-	promises = removeRecs(promises, func(r *promiseRec) bool { return !r.requested && time.Since(r.made) > time.Hour })
+	promises = removeRecs(promises, func(r *promiseRec) bool { return !r.requested && core.Since(r.made) > time.Hour })
 	promiseSeq++
-	r := &promiseRec{id: promiseSeq, w: w, session: session, name: []byte(p.Name), uti: p.Type, write: p.Write, timeout: p.Timeout, made: time.Now()}
+	r := &promiseRec{id: promiseSeq, w: w, session: session, name: []byte(p.Name), uti: p.Type, write: p.Write, timeout: p.Timeout, made: core.WallNow()}
 	if r.uti == "" {
 		r.uti = "public.data"
 	}

@@ -1,6 +1,7 @@
 package rexui
 
 import (
+	"gonativeui/core"
 	"math"
 	"runtime"
 	"time"
@@ -304,12 +305,12 @@ func (s *TerminalState) feed(c *ui.Context, o TerminalOpts) {
 		budget = 4 * time.Millisecond
 	}
 	const chunk = 64 << 10
-	start := time.Now()
+	start := core.WallNow()
 	for s.off < len(s.pending) {
 		n := min(chunk, len(s.pending)-s.off)
 		s.T.Write(s.pending[s.off : s.off+n])
 		s.off += n
-		if time.Since(start) >= budget {
+		if core.Since(start) >= budget || core.SimulationForTesting() != nil {
 			break
 		}
 	}

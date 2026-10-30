@@ -4,6 +4,7 @@ package webview
 
 import (
 	"fmt"
+	"gonativeui/core"
 	"hash/fnv"
 	"os"
 	"path/filepath"
@@ -648,7 +649,7 @@ func (v *view) endDownload(d *download, s DownloadState) {
 func observe(c *ffi.CB) {
 	ctx := uint64(c.Int(5))
 	if ctx&ctxDownload != 0 {
-		now := time.Now().UnixNano()
+		now := core.Now()
 		last := wk.lastDL.Load()
 		if now-last >= progressEvery && wk.lastDL.CompareAndSwap(last, now) {
 			wk.ring.OfferID(ctx>>24&0xFFFFFFFF, int64(DownloadProgress), int64(ctx&0xFFFFFF), nil)

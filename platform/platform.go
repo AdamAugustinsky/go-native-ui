@@ -104,6 +104,7 @@
 package platform
 
 import (
+	"gonativeui/core"
 	"runtime"
 	"sync/atomic"
 	"unicode/utf8"
@@ -596,6 +597,10 @@ var wakePending atomic.Bool
 // Wake makes the main loop's Wait return with an EvWake event. It is safe
 // to call from any goroutine and cheap when a wake is already pending.
 func Wake() {
+	if c := core.SimulationForTesting(); c != nil {
+		c.Wake()
+		return
+	}
 	if wakePending.CompareAndSwap(false, true) {
 		osWake()
 	}

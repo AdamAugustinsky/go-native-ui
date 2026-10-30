@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"gonativeui/core"
 	"gonativeui/highlight"
 	"gonativeui/platform"
 	"gonativeui/ui"
@@ -21,6 +22,8 @@ const (
 // Workers own only jobs and a small mailbox, never the view containing the
 // highlighter. Two workers serve all windows; admission bounds copied input.
 type highlightPool struct {
+	sim     *core.Parker
+	stopped chan struct{}
 	mu      sync.Mutex
 	cond    *sync.Cond
 	once    sync.Once
@@ -78,6 +81,13 @@ type highlighter struct {
 func (p *highlightPool) start() {
 	p.once.Do(func() {
 		p.cond = sync.NewCond(&p.mu)
+		if core.SimulationForTesting() != nil {
+			p.sim = core.NewParker()
+			p.sim.BindSimWorkerForTesting()
+			p.stopped = make(chan struct{})
+			go p.worker()
+			return
+		}
 		for range 2 {
 			go p.worker()
 		}
@@ -104,7 +114,11 @@ func (p *highlightPool) submit(m *hlMailbox, lang highlight.Lang, src []byte) *h
 		p.bytes += len(src)
 		e.job = j
 		p.jobs[i] = j
-		p.cond.Signal()
+		if p.sim != nil {
+			p.sim.Unpark()
+		} else {
+			p.cond.Signal()
+		}
 		return e
 	}
 	p.refused = true
@@ -143,6 +157,12 @@ func (p *highlightPool) cancel(j *hlJob) {
 }
 
 func (p *highlightPool) worker() {
+	if p.sim != nil {
+		defer close(p.stopped)
+		if !p.sim.StartSimWorker() {
+			return
+		}
+	}
 	for {
 		p.mu.Lock()
 		var j *hlJob
@@ -156,7 +176,17 @@ func (p *highlightPool) worker() {
 				}
 			}
 			if j == nil {
-				p.cond.Wait()
+				if p.sim != nil {
+					p.mu.Unlock()
+					ok := p.sim.Park()
+					p.mu.Lock()
+					if !ok {
+						p.mu.Unlock()
+						return
+					}
+				} else {
+					p.cond.Wait()
+				}
 			}
 		}
 		p.mu.Unlock()
@@ -204,6 +234,9 @@ func (h *highlighter) init() {
 	}
 	if h.pool == nil {
 		h.pool = &codeWorkers
+		if core.SimulationForTesting() != nil {
+			h.pool = new(highlightPool)
+		}
 	}
 	h.byHash = make(map[uint64]*hlEntry)
 	h.byBlock = make(map[ui.Key]hlAlias)
@@ -361,6 +394,10 @@ func (h *highlighter) close() {
 		}
 	}
 	h.byHash, h.byBlock = nil, nil
+	if h.pool != nil && h.pool.sim != nil {
+		h.pool.sim.Close()
+		<-h.pool.stopped
+	}
 }
 
 // clipTokens is toks without what lies past n bytes.

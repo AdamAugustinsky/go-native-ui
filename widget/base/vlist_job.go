@@ -1,6 +1,7 @@
 package base
 
 import (
+	"gonativeui/core"
 	"math/bits"
 	"time"
 
@@ -126,7 +127,7 @@ func (st *VListState) enqueue(op vlOp) {
 // startJob begins the rebuild of op from the front buffer; ins are the ids
 // it inserts (a Splice's or a Reset's), copied into the back buffer now.
 func (st *VListState) startJob(op vlOp, ins []uint64) {
-	st.bkUsed = time.Now().UnixNano()
+	st.bkUsed = core.Now()
 	f := &st.f
 	j := &st.job
 	*j = vlJob{on: true}
@@ -222,27 +223,31 @@ func (st *VListState) jobCost() int {
 
 // step advances the rebuild by one slice.
 func (st *VListState) step() {
-	start := time.Now()
+	start := core.WallNow()
 	units := 0
+	sliceUnits := vlSliceUnits
+	if core.SimulationForTesting() != nil && sliceUnits == 0 {
+		sliceUnits = vlChunk
+	}
 	for st.job.on && !st.job.ready {
 		n := vlChunk
 		var room int // the units left in the slice
-		if vlSliceUnits > 0 {
-			room = vlSliceUnits - units
+		if sliceUnits > 0 {
+			room = sliceUnits - units
 			n = min(n, room)
 		} else {
-			room = int((vlSliceNs - int64(time.Since(start))) / vlSlotNs)
+			room = int((vlSliceNs - int64(core.Since(start))) / vlSlotNs)
 		}
 		did := st.work(n, room, units == 0)
 		if did == 0 {
 			return
 		}
 		units += did
-		if vlSliceUnits > 0 {
-			if units >= vlSliceUnits {
+		if sliceUnits > 0 {
+			if units >= sliceUnits {
 				return
 			}
-		} else if time.Since(start) >= time.Duration(vlSliceNs) {
+		} else if core.Since(start) >= time.Duration(vlSliceNs) {
 			return
 		}
 	}
@@ -519,7 +524,7 @@ func (st *VListState) Sync(frame uint32) {
 		return
 	}
 	st.frame, st.synced = frame, true
-	if !st.job.on && st.bk.slots() > 0 && time.Now().UnixNano()-st.bkUsed >= vlBackIdleNs {
+	if !st.job.on && st.bk.slots() > 0 && core.Now()-st.bkUsed >= vlBackIdleNs {
 		st.bk = vlBuf{}
 	}
 	if st.job.on {
@@ -577,7 +582,7 @@ func (st *VListState) publish() {
 		}
 	}
 	st.f, st.bk = st.bk, st.f
-	st.bkUsed = time.Now().UnixNano()
+	st.bkUsed = core.Now()
 	st.rev++
 	st.job = vlJob{}
 	if st.qhead < len(st.queue) {
@@ -664,6 +669,6 @@ func prevClear(g []uint64, i int) int {
 // retaining a peak-size rebuild buffer until the next user event.
 func (st *VListState) keepBack(c *ui.Context) {
 	if !st.job.on && st.bk.slots() > 0 {
-		c.WakeIn(max(vlBackIdleNs-(time.Now().UnixNano()-st.bkUsed), 1))
+		c.WakeIn(max(vlBackIdleNs-(core.Now()-st.bkUsed), 1))
 	}
 }

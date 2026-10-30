@@ -138,6 +138,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gonativeui/core"
 	"io"
 	"os"
 	"strings"
@@ -244,7 +245,7 @@ var (
 	// time Send keeps retrying (maxTimeout) with a margin.
 	dedupHorizon = 30 * time.Second
 	// nowFn is the clock for it.
-	nowFn = time.Now
+	nowFn = core.WallNow
 )
 
 // maxTimeout caps Options.Timeout.
