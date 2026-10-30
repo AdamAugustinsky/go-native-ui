@@ -2,13 +2,13 @@ package mdview_test
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"gonativeui/gpu"
 	"gonativeui/highlight"
+	"gonativeui/internal/allocsite"
 	"gonativeui/internal/fakeui"
 	"gonativeui/markdown"
 	"gonativeui/rexui/mdview"
@@ -420,13 +420,12 @@ func TestLargeCodeFramesAllocateNothing(t *testing.T) {
 	if n := g.c.Boxes(); n > 150 {
 		t.Fatalf("1000 lines built %d boxes; invisible lines were not culled", n)
 	}
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for range 100 {
-		frame()
-	}
-	runtime.ReadMemStats(&after)
-	if n := after.Mallocs - before.Mallocs; n != 0 {
-		t.Fatalf("large code frames allocated %d objects / %d bytes", n, after.TotalAlloc-before.TotalAlloc)
+	// Attributed (D27): the runtime's own allocations are passed over.
+	if n, sites := allocsite.During(func() {
+		for range 100 {
+			frame()
+		}
+	}); n != 0 {
+		t.Fatalf("large code frames allocated %d objects of ours:\n%s", n, sites)
 	}
 }

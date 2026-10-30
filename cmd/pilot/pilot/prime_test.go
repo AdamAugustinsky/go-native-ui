@@ -1,8 +1,6 @@
 package pilot
 
 import (
-	"runtime"
-	"strings"
 	"testing"
 
 	"gonativeui/internal/allocsite"
@@ -65,18 +63,4 @@ func TestPrimeNamesBuildsEveryPlan(t *testing.T) {
 }
 
 // oursDuring returns the objects our code allocated during fn, and their sites.
-func oursDuring(fn func()) (int64, string) {
-	defer allocsite.Enable()()
-	var s0, s1 allocsite.Snapshot
-	s0.Take()
-	s1.Take()
-	runtime.GC()
-	s0.Take()
-	fn()
-	runtime.GC()
-	s1.Take()
-	sites := allocsite.Diff(&s0, &s1)
-	var w strings.Builder
-	allocsite.Write(&w, sites)
-	return int64(allocsite.Objects(sites, allocsite.Ours)), w.String()
-}
+func oursDuring(fn func()) (int64, string) { return allocsite.During(fn) }
