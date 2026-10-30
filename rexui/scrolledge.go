@@ -160,8 +160,10 @@ func scrollEdge(k *base.Kit, v *base.ScrollView, line bool, under *[3]float32) {
 // content
 // (gpu.Backdrop.Fade): no bar, no hairline, no edge. At rest it is nothing,
 // the pane's own surface showing. Under Reduce Transparency it is the film's
-// pocket's opaque colour over the strip alone.
-func SoftScrollEdge(k *base.Kit, key ui.Key, w, top, fade float32, tint uint32, under bool) {
+// pocket's opaque colour over the strip alone. radius rounds the strip's top
+// corners as the pane's (its clip is square): the pane's corner radius, 0 for
+// square.
+func SoftScrollEdge(k *base.Kit, key ui.Key, w, top, fade float32, tint uint32, under bool, radius float32) {
 	if !under || w <= 0 || top <= 0 {
 		return
 	}
@@ -173,6 +175,7 @@ func SoftScrollEdge(k *base.Kit, key ui.Key, w, top, fade float32, tint uint32, 
 	if r.Settings.ReduceTransparency {
 		theme.At(c, 0, 0, w, top)
 		c.NextBG(fill)
+		c.NextRadii(radius, radius, 0, 0)
 		c.NextAuditExempt(ui.AuditCovered.Mask()) // the content scrolls under it on purpose
 		c.BoxKeyed(ui.DrawBackground|base.Floating, key, nil)
 		return
@@ -185,6 +188,7 @@ func SoftScrollEdge(k *base.Kit, key ui.Key, w, top, fade float32, tint uint32, 
 	theme.At(c, 0, 0, w, top+max(fade, 0))
 	c.NextBackdrop(blur)
 	c.NextBG(fill)
+	c.NextRadii(radius, radius, 0, 0)
 	c.NextAuditExempt(ui.AuditCovered.Mask())
 	c.BoxKeyed(ui.DrawBackground|base.Floating, key, nil)
 }
