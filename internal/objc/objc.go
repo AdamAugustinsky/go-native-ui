@@ -12,7 +12,8 @@
 // The lookup rule. Cls and Sel remember every name, so a repeat call is a
 // map lookup that allocates nothing, and they are safe from any goroutine;
 // still, a handler on another thread should find its classes and selectors
-// at setup and keep them in variables.
+// at setup and keep them in variables. Constant selector names can use SelZ
+// with a NUL terminator to skip the Go intern table and its copy.
 //
 // Str creates an autoreleased NSString without keeping or allocating
 // anything, so it is fine per call on the main thread. CString keeps its
@@ -23,6 +24,7 @@ package objc
 
 import (
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -82,11 +84,12 @@ func init() {
 	if _, err := purego.Dlopen("/System/Library/Frameworks/Foundation.framework/Foundation", purego.RTLD_NOW|purego.RTLD_GLOBAL); err != nil {
 		panic(err)
 	}
-	selRetain, selRelease = Sel("retain"), Sel("release")
+	selRetain, selRelease = SelZ("retain\x00"), SelZ("release\x00")
 	clsNSString = Cls("NSString")
-	selAlloc, selInitBytes, selAutorel = Sel("alloc"), Sel("initWithBytes:length:encoding:"), Sel("autorelease")
-	selUTF8String, selLength = Sel("UTF8String"), Sel("lengthOfBytesUsingEncoding:")
-	selAddObserver, selRemoveObserver = Sel("addObserver:selector:name:object:"), Sel("removeObserver:name:object:")
+	selAlloc, selInitBytes, selAutorel = SelZ("alloc\x00"), SelZ("initWithBytes:length:encoding:\x00"), SelZ("autorelease\x00")
+	selByteLength = SelZ("lengthOfBytesUsingEncoding:\x00")
+	selGetBytes, selLength = SelZ("getBytes:maxLength:usedLength:encoding:options:range:remainingRange:\x00"), SelZ("length\x00")
+	selAddObserver, selRemoveObserver = SelZ("addObserver:selector:name:object:\x00"), SelZ("removeObserver:name:object:\x00")
 }
 
 var selGetName, addIvar, getIvar, ivarOffset uintptr
@@ -186,6 +189,20 @@ func Sel(name string) SEL {
 	return s
 }
 
+// SelZ registers a NUL-terminated selector name without a Go intern-table
+// entry or a copy. Use string constants at setup; keep the returned selector
+// for message sends. sel_registerName owns its name. Safe from any goroutine.
+func SelZ(name string) SEL {
+	if len(name) < 2 || name[len(name)-1] != 0 {
+		panic("objc: selector needs a NUL-terminated name")
+	}
+	internMu.Lock()
+	s := SEL(missFrame.Call1(selRegister, uintptr(unsafe.Pointer(unsafe.StringData(name)))))
+	runtime.KeepAlive(name)
+	internMu.Unlock()
+	return s
+}
+
 var (
 	clsNSString                        ID
 	selAlloc, selInitBytes, selAutorel SEL
@@ -219,7 +236,7 @@ func Str(s string) ID {
 // Retain sends -retain and returns the object.
 func Retain(id ID) ID { return Send(id, selRetain) }
 
-var selRetain, selRelease, selUTF8String, selLength SEL
+var selRetain, selRelease, selGetBytes, selLength, selByteLength SEL
 
 // Release sends -release.
 func Release(id ID) { Send(id, selRelease) }
@@ -309,10 +326,87 @@ func AppendUTF8(dst []byte, str ID) []byte {
 	if str == 0 {
 		return dst
 	}
-	p := uintptr(Send(str, selUTF8String))
-	n := int(Send1(str, selLength, 4 /* NSUTF8StringEncoding */))
-	if p == 0 || n == 0 {
+	n := int(Send(str, selLength))
+	if n == 0 {
 		return dst
 	}
-	return append(dst, unsafe.Slice((*byte)(ffi.PtrFromC(p)), n)...)
+	// A warm destination usually has room. On growth, size it exactly rather
+	// than retaining three bytes per UTF-16 unit for a whole document.
+	if cap(dst)-len(dst) < n+4 {
+		dst = slices.Grow(dst, int(Send1(str, selByteLength, 4))+4)
+	}
+	used, ok := copyUTF8(dst, str, 0, n)
+	if !ok {
+		return dst
+	}
+	// Four spare bytes guarantee no scalar was left behind. At capacity the
+	// conversion may be partial: query the exact size and retry only then.
+	if cap(dst)-len(dst)-used < 4 {
+		size := int(Send1(str, selByteLength, 4))
+		if used < size {
+			dst = slices.Grow(dst, size+4)
+			used, ok = copyUTF8(dst, str, 0, n)
+			if !ok {
+				return dst
+			}
+		}
+	}
+	return dst[:len(dst)+used]
+}
+
+// AppendUTF8Range appends a range in UTF-16 units directly into dst, without
+// an intermediate UTF8String buffer. The range must contain whole scalars.
+func AppendUTF8Range(dst []byte, str ID, loc, n int) []byte {
+	if str == 0 || n <= 0 {
+		return dst
+	}
+	// A range is usually an edit of a few units; its worst-case reservation
+	// avoids a substring or a second native traversal.
+	dst = slices.Grow(dst, 3*n)
+	used, ok := copyUTF8(dst, str, loc, n)
+	if !ok {
+		return dst
+	}
+	return dst[:len(dst)+used]
+}
+
+// UTF8RangeLen is the exact byte length of an NSString range in UTF-16
+// units. It computes the size without a temporary string or byte buffer.
+func UTF8RangeLen(str ID, loc, n int) int {
+	if str == 0 || n <= 0 {
+		return 0
+	}
+	used, _ := getUTF8(nil, 0, str, loc, n)
+	return used
+}
+
+// CopyUTF8Range copies an NSString range in UTF-16 units into dst, which
+// must have room for UTF8RangeLen bytes. It returns the bytes copied.
+func CopyUTF8Range(dst []byte, str ID, loc, n int) int {
+	if len(dst) == 0 || str == 0 || n <= 0 {
+		return 0
+	}
+	used, _ := copyUTF8(dst[:0:len(dst)], str, loc, n)
+	return used
+}
+
+// copyUTF8 returns the bytes converted into dst's unused capacity.
+func copyUTF8(dst []byte, str ID, loc, n int) (int, bool) {
+	buf := dst[:cap(dst)]
+	used, ok := getUTF8(unsafe.Pointer(&buf[len(dst)]), len(buf)-len(dst), str, loc, n)
+	runtime.KeepAlive(buf)
+	return used, ok
+}
+
+func getUTF8(p unsafe.Pointer, size int, str ID, loc, n int) (int, bool) {
+	checkMain()
+	used := F.Scratch()
+	used[0] = 0
+	ok := F.Reset().Arg(uintptr(str)).Arg(uintptr(selGetBytes)).
+		ArgPtr(p).Arg(uintptr(size)).ArgPtr(unsafe.Pointer(&used[0])).
+		Arg(4 /* NSUTF8StringEncoding */).Arg(0).
+		// NSRange needs two registers; only x7 remains, so Darwin spills the
+		// whole range and every following argument to the stack.
+		Arg(0).Arg(uintptr(loc)).Arg(uintptr(n)).Arg(0).Call(MsgSend).Bool()
+	return int(used[0]), ok
 }
