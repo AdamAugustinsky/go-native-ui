@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gonativeui/gpu"
@@ -343,19 +344,21 @@ func TestAnimNothingWhileHidden(t *testing.T) {
 // TestAnimNotUsedNothingRuns: an image nobody draws (a list row not built)
 // does nothing at all, however many frames pass.
 func TestAnimNotUsedNothingRuns(t *testing.T) {
-	fs := useFake(t, uniform(20, 100, 0))
-	r := newRig(t, Options{})
-	r.start()
-	r.frame(1_000*ms, Present{Visible: true})
-	r.waitFrame()
-	renders, ring := fs.renders.Load(), r.anim().nring
-	for i := 0; i < 20; i++ {
-		r.c.Poll()
-	}
-	time.Sleep(20 * time.Millisecond)
-	if fs.renders.Load() != renders || r.anim().nring != ring {
-		t.Error("an image that was not drawn kept decoding")
-	}
+	bubble(t, func(t *testing.T) {
+		fs := useFake(t, uniform(20, 100, 0))
+		r := newRig(t, Options{})
+		r.start()
+		r.frame(1_000*ms, Present{Visible: true})
+		r.waitFrame()
+		renders, ring := fs.renders.Load(), r.anim().nring
+		for i := 0; i < 20; i++ {
+			r.c.Poll()
+		}
+		synctest.Wait() // every worker idle: nothing more is coming
+		if fs.renders.Load() != renders || r.anim().nring != ring {
+			t.Error("an image that was not drawn kept decoding")
+		}
+	})
 }
 
 // ---- memory ---------------------------------------------------------------------

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -193,33 +194,41 @@ func TestMissingFieldsKeepDefaultsAndRoundTrip(t *testing.T) {
 }
 
 func TestDebounceSavesInTheBackgroundAndDoesNotStarve(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "p.json")
-	s, _ := Open(p, defaults, Options{Debounce: 40 * time.Millisecond})
-	defer s.Close()
-	// A change every 5 ms, far more often than the 40 ms wait: the wait does
-	// not restart, so the file appears while changes are still arriving. A
-	// wait that restarted would never save while they arrive, so the stream
-	// goes on until the file is there, up to a deadline far above a save on
-	// a busy runner (a save took over 360 ms on Windows arm64 CI).
-	t0 := time.Now()
-	end := t0.Add(10 * time.Second)
-	var seen bool
-	changes := 0
-	for i := 0; time.Now().Before(end); i++ {
-		s.Update(func(v *settings) { v.Zoom = float64(i + 2) })
-		changes++
-		if _, err := os.Stat(p); err == nil {
-			seen = true
-			break
+	synctest.Test(t, func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "p.json")
+		s, _ := Open(p, defaults, Options{Debounce: 40 * time.Millisecond})
+		defer s.Close()
+		// A change every 5 ms, far more often than the 40 ms wait: the wait does
+		// not restart, so the file appears while changes are still arriving. A
+		// wait that restarted would never save while they arrive, so the stream
+		// goes on until the file is there or 10 s pass. The clock is the
+		// testing/synctest bubble's: it moves only while every goroutine waits,
+		// so a slow save (over 360 ms on Windows arm64 CI) takes no time on it.
+		t0 := time.Now()
+		end := t0.Add(10 * time.Second)
+		var seen bool
+		changes := 0
+		for i := 0; time.Now().Before(end); i++ {
+			s.Update(func(v *settings) { v.Zoom = float64(i + 2) })
+			changes++
+			if _, err := os.Stat(p); err == nil {
+				seen = true
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !seen {
-		t.Fatalf("no save during %v of changes (%d of them)", time.Since(t0).Round(time.Millisecond), changes)
-	}
-	t.Logf("saved %v into a stream of changes (%d changes)", time.Since(t0).Round(time.Millisecond), changes)
-	s.Set(settings{Theme: "final"})
-	waitFile(t, p, func(b []byte) bool { return strings.Contains(string(b), `"final"`) })
+		if !seen {
+			t.Fatalf("no save during %v of changes (%d of them)", time.Since(t0).Round(time.Millisecond), changes)
+		}
+		// On the bubble's clock the save comes when the first change's wait
+		// ends, whatever the machine's load: within the 5 ms step after it.
+		if d := time.Since(t0); d < 40*time.Millisecond || d > 45*time.Millisecond {
+			t.Errorf("saved %v after the first change, want the 40 ms debounce", d)
+		}
+		t.Logf("saved %v into a stream of changes (%d changes)", time.Since(t0).Round(time.Millisecond), changes)
+		s.Set(settings{Theme: "final"})
+		waitFile(t, p, func(b []byte) bool { return strings.Contains(string(b), `"final"`) })
+	})
 }
 
 func TestCorruptFileIsKeptAsideAndStoreStillWorks(t *testing.T) {
@@ -404,36 +413,38 @@ func checkNotLoaded(t *testing.T, s *Store[settings], p string, original []byte,
 }
 
 func TestSaveErrorIsReportedAndRetried(t *testing.T) {
-	dir := t.TempDir()
-	blocker := filepath.Join(dir, "blocker")
-	p := filepath.Join(blocker, "p.json") // its parent is a file: cannot be written
-	var calls atomic.Int32
-	s, _ := Open(p, defaults, Options{Debounce: time.Millisecond, OnError: func(error) { calls.Add(1) }})
-	os.WriteFile(blocker, []byte("a file"), 0o600) // fails only the save, not the initial read
-	s.Update(func(v *settings) { v.Theme = "dark" })
-	deadline := time.Now().Add(5 * time.Second)
-	for s.Err() == nil {
-		if time.Now().After(deadline) {
-			t.Fatal("the failed save was not reported")
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		blocker := filepath.Join(dir, "blocker")
+		p := filepath.Join(blocker, "p.json") // its parent is a file: cannot be written
+		var calls atomic.Int32
+		s, _ := Open(p, defaults, Options{Debounce: time.Millisecond, OnError: func(error) { calls.Add(1) }})
+		os.WriteFile(blocker, []byte("a file"), 0o600) // fails only the save, not the initial read
+		s.Update(func(v *settings) { v.Theme = "dark" })
+		deadline := time.Now().Add(5 * time.Second)
+		for s.Err() == nil {
+			if time.Now().After(deadline) {
+				t.Fatal("the failed save was not reported")
+			}
+			time.Sleep(time.Millisecond)
 		}
-		time.Sleep(time.Millisecond)
-	}
-	if calls.Load() == 0 {
-		t.Error("OnError not called")
-	}
-	if err := s.Flush(); err == nil {
-		t.Error("Flush hid the error")
-	}
-	os.Remove(blocker) // the disk problem goes away
-	if err := s.Flush(); err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	if s.Err() != nil {
-		t.Errorf("Err %v after a good save", s.Err())
-	}
-	if b, _ := os.ReadFile(p); !strings.Contains(string(b), "dark") {
-		t.Errorf("file %q", b)
-	}
+		if calls.Load() == 0 {
+			t.Error("OnError not called")
+		}
+		if err := s.Flush(); err == nil {
+			t.Error("Flush hid the error")
+		}
+		os.Remove(blocker) // the disk problem goes away
+		if err := s.Flush(); err != nil {
+			t.Fatalf("retry: %v", err)
+		}
+		if s.Err() != nil {
+			t.Errorf("Err %v after a good save", s.Err())
+		}
+		if b, _ := os.ReadFile(p); !strings.Contains(string(b), "dark") {
+			t.Errorf("file %q", b)
+		}
+	})
 }
 
 func TestUnchangedValueIsNotRewritten(t *testing.T) {
@@ -459,17 +470,19 @@ func TestUnchangedValueIsNotRewritten(t *testing.T) {
 }
 
 func TestAfterCloseChangesStayInMemory(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "p.json")
-	s, _ := Open(p, defaults, Options{Debounce: time.Millisecond})
-	s.Close()
-	s.Set(settings{Theme: "late"})
-	time.Sleep(30 * time.Millisecond)
-	if _, err := os.Stat(p); err == nil {
-		t.Error("a closed store wrote")
-	}
-	if s.Get().Theme != "late" {
-		t.Error("value lost")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "p.json")
+		s, _ := Open(p, defaults, Options{Debounce: time.Millisecond})
+		s.Close()
+		s.Set(settings{Theme: "late"})
+		time.Sleep(30 * time.Millisecond)
+		if _, err := os.Stat(p); err == nil {
+			t.Error("a closed store wrote")
+		}
+		if s.Get().Theme != "late" {
+			t.Error("value lost")
+		}
+	})
 }
 
 // Close can be called again, and at the same time from several goroutines: each

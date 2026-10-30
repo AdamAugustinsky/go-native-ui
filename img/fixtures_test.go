@@ -10,8 +10,10 @@ import (
 	"image/jpeg"
 	"image/png"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/gpu"
 )
 
@@ -219,6 +221,16 @@ func settle(t testing.TB, c *Cache, build func()) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// bubble runs f in a testing/synctest bubble with the core clock's synctest
+// switch on, so the cache's workers park where the bubble sees them: its clock
+// then moves only while every goroutine waits, and synctest.Wait means that
+// no decode is running.
+func bubble(t *testing.T, f func(t *testing.T)) {
+	t.Helper()
+	core.UseSynctestForTesting(t)
+	synctest.Test(t, f)
 }
 
 // decoded is a decode result's pixels, read back from the pool.

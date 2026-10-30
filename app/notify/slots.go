@@ -443,13 +443,16 @@ type parked struct {
 // held; the app's last drain stores them while records free and gives up
 // those it cannot (lastDrain), and from then on a response that cannot be
 // stored is given up at once (Stats.LostAtExit).
-var parking = struct {
+var parking struct {
 	mu      sync.Mutex
 	list    []*parked
 	running bool          // the retry goroutine runs
-	wake    chan struct{} // makes it try at once
 	ended   chan struct{} // closed when it has ended
-}{wake: make(chan struct{}, 1)}
+	// wake makes it try at once. Each run of the goroutine makes its own, so
+	// a testing/synctest bubble that starts the goroutine owns the channel it
+	// blocks on (a channel made outside a bubble does not count as blocking).
+	wake atomic.Pointer[chan struct{}]
+}
 
 func park(action int64, reply, data []byte) *parked {
 	buf := make([]byte, 0, len(reply)+len(data))
@@ -469,7 +472,9 @@ func (p *parked) wait() {
 	if !parking.running {
 		parking.running = true
 		parking.ended = make(chan struct{})
-		go retryParked(parking.ended)
+		wake := make(chan struct{}, 1)
+		parking.wake.Store(&wake)
+		go retryParked(wake, parking.ended)
 	}
 	parking.mu.Unlock()
 	wakeParked()
@@ -515,17 +520,19 @@ func giveUp(lost []*parked) {
 // wakeParked coalesces record releases and newly parked responses. It also
 // covers a release between a failed reservation and parking the response.
 func wakeParked() {
-	select {
-	case parking.wake <- struct{}{}:
-	default:
+	if w := parking.wake.Load(); w != nil {
+		select {
+		case *w <- struct{}{}:
+		default:
+		}
 	}
 }
 
 // retryParked stores responses when a record frees; no timer runs while the
 // dispatcher is blocked and no record can become available.
-func retryParked(ended chan struct{}) {
+func retryParked(wake, ended chan struct{}) {
 	defer close(ended)
-	for range parking.wake {
+	for range wake {
 		parking.mu.Lock()
 		done, lost := storeParked(false)
 		empty := len(parking.list) == 0
@@ -556,10 +563,7 @@ func lastDrain(final bool) bool {
 		// Also when it has found the list empty (running is false then) and is
 		// still answering what it stored: the drain ends after the answers.
 		if running {
-			select {
-			case parking.wake <- struct{}{}:
-			default:
-			}
+			wakeParked()
 		}
 		<-ended
 	}

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gonativeui/core"
@@ -88,54 +89,56 @@ func TestTerminalSimulationParseBudget(t *testing.T) {
 // A writer blocks at the high-water mark, resumes at the low one, and a
 // Close unblocks it; nothing written before the Close is lost.
 func TestTerminalInboxBackpressure(t *testing.T) {
-	woke := 0
-	in := newTerminalInbox(TerminalInboxOpts{HighWater: 1024, LowWater: 256, Wake: func() { woke++ }})
-	done := make(chan error, 1)
-	var wrote int
-	go func() {
-		n, err := in.Write(make([]byte, 4096))
-		wrote = n
-		done <- err
-	}()
-	queued := func() int { in.mu.Lock(); defer in.mu.Unlock(); return in.queued }
-	waitFor := func(what string, f func() bool) {
-		t.Helper()
-		for end := time.Now().Add(5 * time.Second); !f(); time.Sleep(time.Millisecond) {
-			if time.Now().After(end) {
-				t.Fatal("timed out waiting for", what)
-			}
+	core.UseSynctestForTesting(t)
+	synctest.Test(t, func(t *testing.T) {
+		woke := 0
+		in := newTerminalInbox(TerminalInboxOpts{HighWater: 1024, LowWater: 256, Wake: func() { woke++ }})
+		done := make(chan error, 1)
+		var wrote int
+		go func() {
+			n, err := in.Write(make([]byte, 4096))
+			wrote = n
+			done <- err
+		}()
+		queued := func() int { in.mu.Lock(); defer in.mu.Unlock(); return in.queued }
+		synctest.Wait() // the writer is blocked in Write, or has returned
+		if w := func() int { in.mu.Lock(); defer in.mu.Unlock(); return in.wait }(); w != 1 {
+			t.Fatalf("%d writers blocked, want 1", w)
 		}
-	}
-	waitFor("the writer to block", func() bool { in.mu.Lock(); defer in.mu.Unlock(); return in.wait == 1 })
-	if q := queued(); q != 1024 {
-		t.Fatalf("queued %d at the high-water mark, want 1024", q)
-	}
-	// The UI parses down to just above the low-water mark: still blocked.
-	var buf []byte
-	buf = in.take(buf)
-	in.parsed(700)
-	time.Sleep(10 * time.Millisecond)
-	if q := queued(); q != 324 {
-		t.Fatalf("queued %d, want 324: the writer resumed above the low-water mark", q)
-	}
-	in.parsed(100) // 224 ≤ 256: resume, fill to the mark again, block
-	waitFor("the writer to refill", func() bool { return queued() == 1024 })
-	in.Close()
-	if err := <-done; !errors.Is(err, ErrTerminalInboxClosed) {
-		t.Fatalf("blocked Write after Close returned %v", err)
-	}
-	if wrote != 1024+800 {
-		t.Errorf("Write reported %d bytes, want %d queued before the Close", wrote, 1024+800)
-	}
-	if n := len(buf) + len(in.take(nil)); n != wrote {
-		t.Errorf("%d bytes reached the UI, %d were written", n, wrote)
-	}
-	if _, err := in.Write([]byte("x")); !errors.Is(err, ErrTerminalInboxClosed) {
-		t.Errorf("Write after Close returned %v", err)
-	}
-	if woke < 2 || in.hits != 2 || in.blocked <= 0 {
-		t.Errorf("wakes %d, high-water hits %d, blocked %v", woke, in.hits, in.blocked)
-	}
+		if q := queued(); q != 1024 {
+			t.Fatalf("queued %d at the high-water mark, want 1024", q)
+		}
+		time.Sleep(time.Millisecond) // of the bubble's clock: the writer's first block lasts exactly this
+		// The UI parses down to just above the low-water mark: still blocked.
+		var buf []byte
+		buf = in.take(buf)
+		in.parsed(700)
+		synctest.Wait()
+		if q := queued(); q != 324 {
+			t.Fatalf("queued %d, want 324: the writer resumed above the low-water mark", q)
+		}
+		in.parsed(100) // 224 ≤ 256: resume, fill to the mark again, block
+		synctest.Wait()
+		if q := queued(); q != 1024 {
+			t.Fatalf("queued %d after the resume, want the writer to refill to 1024", q)
+		}
+		in.Close()
+		if err := <-done; !errors.Is(err, ErrTerminalInboxClosed) {
+			t.Fatalf("blocked Write after Close returned %v", err)
+		}
+		if wrote != 1024+800 {
+			t.Errorf("Write reported %d bytes, want %d queued before the Close", wrote, 1024+800)
+		}
+		if n := len(buf) + len(in.take(nil)); n != wrote {
+			t.Errorf("%d bytes reached the UI, %d were written", n, wrote)
+		}
+		if _, err := in.Write([]byte("x")); !errors.Is(err, ErrTerminalInboxClosed) {
+			t.Errorf("Write after Close returned %v", err)
+		}
+		if woke < 2 || in.hits != 2 || in.blocked != time.Millisecond {
+			t.Errorf("wakes %d, high-water hits %d, blocked %v (want 1ms)", woke, in.hits, in.blocked)
+		}
+	})
 }
 
 // ptyReader hands out data in reads of 1 byte to 16 KiB, as a pty does.

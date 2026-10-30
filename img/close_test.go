@@ -128,22 +128,24 @@ func TestEmptyInlineBytesFail(t *testing.T) {
 // Lease contract says; only decodes still running when the wait ends are
 // left to their workers.
 func TestCloseReleasesOnItsGoroutine(t *testing.T) {
-	c := NewCache(Options{Renderer: newFakeGPU(), Workers: 1, Wake: func() {}})
-	l := newBlockingLease(encPNG(t, gradient(16, 16)))
-	c.Request(Key{Hash: 1, W: 16, H: 16}, Leased(l))
-	<-l.started
-	go func() {
-		time.Sleep(50 * time.Millisecond) // Close is waiting by then
-		close(l.open)
-	}()
-	c.Close(10 * time.Second)
-	if n := l.released.Load(); n != 1 {
-		t.Fatalf("lease released %d times when Close returned, want 1", n)
-	}
-	if on, me := l.releasedOn.Load(), goroutineID(); on != me {
-		t.Fatalf("lease released on goroutine %d, not on Close's (%d)", on, me)
-	}
-	if n := c.bufs.held(); n != 0 {
-		t.Errorf("%d buffers hold memory after Close", n)
-	}
+	bubble(t, func(t *testing.T) {
+		c := NewCache(Options{Renderer: newFakeGPU(), Workers: 1, Wake: func() {}})
+		l := newBlockingLease(encPNG(t, gradient(16, 16)))
+		c.Request(Key{Hash: 1, W: 16, H: 16}, Leased(l))
+		<-l.started
+		go func() {
+			time.Sleep(50 * time.Millisecond) // on the bubble's clock: Close is waiting by then, whatever the load
+			close(l.open)
+		}()
+		c.Close(10 * time.Second)
+		if n := l.released.Load(); n != 1 {
+			t.Fatalf("lease released %d times when Close returned, want 1", n)
+		}
+		if on, me := l.releasedOn.Load(), goroutineID(); on != me {
+			t.Fatalf("lease released on goroutine %d, not on Close's (%d)", on, me)
+		}
+		if n := c.bufs.held(); n != 0 {
+			t.Errorf("%d buffers hold memory after Close", n)
+		}
+	})
 }

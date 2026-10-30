@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gonativeui/core"
@@ -169,6 +170,18 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
+// bubble runs f in a testing/synctest bubble with the core clock's synctest
+// switch on: the Service's debounce timers, its Parkers and the harness's
+// timeouts then run on the bubble's fake clock. A 100 ms quiet window costs no
+// real time, and the clock moves only once every goroutine is blocked, so what
+// the Service did before a check no longer depends on the machine's load.
+// Tests that read real mtimes or measure allocations stay outside.
+func bubble(t *testing.T, f func(t *testing.T)) {
+	t.Helper()
+	core.UseSynctestForTesting(t)
+	synctest.Test(t, f)
+}
+
 // await returns the first result accepted by match, polling as needed.
 // Results it passes over are kept for later awaits (release them yourself).
 func (h *harness) await(timeout time.Duration, match func(Result) bool) Result {
@@ -239,48 +252,50 @@ func TestServiceList(t *testing.T) {
 }
 
 func TestServiceSupersede(t *testing.T) {
-	h := newHarness(t)
-	// Both workers are held, so id 1's requests stay queued.
-	h.s.List(10, "block:ten", SortName, false)
-	h.s.List(11, "block:eleven", SortName, false)
-	for h.fs.started.Load() < 2 {
-		time.Sleep(time.Millisecond)
-	}
-	h.s.List(1, "n:3:old", SortName, false)
-	h.s.List(1, "n:4:new", SortName, false)
-	close(h.fs.gate)
-	var got []Result
-	deadline := time.Now().Add(2 * time.Second)
-	for len(got) < 3 && time.Now().Before(deadline) {
-		h.buf = h.s.Poll(h.buf[:0])
-		got = append(got, h.buf...)
-		time.Sleep(time.Millisecond)
-	}
-	if len(got) != 3 {
-		t.Fatalf("%d results, want 3", len(got))
-	}
-	for _, r := range got {
-		if r.ID == 1 {
-			checkFake(t, r.Listing, "n:4:new")
+	bubble(t, func(t *testing.T) {
+		h := newHarness(t)
+		// Both workers are held, so id 1's requests stay queued.
+		h.s.List(10, "block:ten", SortName, false)
+		h.s.List(11, "block:eleven", SortName, false)
+		for h.fs.started.Load() < 2 {
+			time.Sleep(time.Millisecond)
 		}
-		h.s.Release(r.Listing, r.Lease)
-	}
-	if c := h.fs.calls.Load(); c != 3 {
-		t.Errorf("fake listed %d times, want 3: the superseded request must never run", c)
-	}
+		h.s.List(1, "n:3:old", SortName, false)
+		h.s.List(1, "n:4:new", SortName, false)
+		close(h.fs.gate)
+		var got []Result
+		deadline := time.Now().Add(2 * time.Second)
+		for len(got) < 3 && time.Now().Before(deadline) {
+			h.buf = h.s.Poll(h.buf[:0])
+			got = append(got, h.buf...)
+			time.Sleep(time.Millisecond)
+		}
+		if len(got) != 3 {
+			t.Fatalf("%d results, want 3", len(got))
+		}
+		for _, r := range got {
+			if r.ID == 1 {
+				checkFake(t, r.Listing, "n:4:new")
+			}
+			h.s.Release(r.Listing, r.Lease)
+		}
+		if c := h.fs.calls.Load(); c != 3 {
+			t.Errorf("fake listed %d times, want 3: the superseded request must never run", c)
+		}
 
-	// A request superseded while running is discarded, not delivered.
-	h2 := newHarness(t)
-	h2.s.List(1, "block:a", SortName, false)
-	for h2.fs.started.Load() < 1 {
-		time.Sleep(time.Millisecond)
-	}
-	h2.s.List(1, "n:5:b", SortName, false)
-	close(h2.fs.gate)
-	r := h2.await(2*time.Second, isListing(1))
-	checkFake(t, r.Listing, "n:5:b")
-	h2.s.Release(r.Listing, r.Lease)
-	h2.expectNone(80 * time.Millisecond)
+		// A request superseded while running is discarded, not delivered.
+		h2 := newHarness(t)
+		h2.s.List(1, "block:a", SortName, false)
+		for h2.fs.started.Load() < 1 {
+			time.Sleep(time.Millisecond)
+		}
+		h2.s.List(1, "n:5:b", SortName, false)
+		close(h2.fs.gate)
+		r := h2.await(2*time.Second, isListing(1))
+		checkFake(t, r.Listing, "n:5:b")
+		h2.s.Release(r.Listing, r.Lease)
+		h2.expectNone(80 * time.Millisecond)
+	})
 }
 
 func TestServicePoolReuse(t *testing.T) {
@@ -406,130 +421,136 @@ func TestServiceStress(t *testing.T) {
 }
 
 func TestServiceWatchDebounce(t *testing.T) {
-	h := newHarness(t)
-	h.s.List(1, "n:4:w", SortName, false)
-	h.s.Watch(1, "/some/dir")
-	h.await(2*time.Second, isListing(1))
-	// Wait for the watcher to exist (control goroutine).
-	for i := 0; ; i++ {
-		if added, _ := h.w.snapshot(); len(added) > 0 {
-			break
+	bubble(t, func(t *testing.T) {
+		h := newHarness(t)
+		h.s.List(1, "n:4:w", SortName, false)
+		h.s.Watch(1, "/some/dir")
+		h.await(2*time.Second, isListing(1))
+		// Wait for the watcher to exist (control goroutine).
+		for i := 0; ; i++ {
+			if added, _ := h.w.snapshot(); len(added) > 0 {
+				break
+			}
+			if i > 1000 {
+				t.Fatal("watch never added")
+			}
+			time.Sleep(time.Millisecond)
 		}
-		if i > 1000 {
-			t.Fatal("watch never added")
+		before := h.fs.calls.Load()
+		for i := 0; i < 6; i++ {
+			h.w.emit(Change{1, ChangeDir})
 		}
-		time.Sleep(time.Millisecond)
-	}
-	before := h.fs.calls.Load()
-	for i := 0; i < 6; i++ {
-		h.w.emit(Change{1, ChangeDir})
-	}
-	r := h.await(2*time.Second, isListing(1))
-	if !r.Refresh {
-		t.Error("watch relist not marked Refresh")
-	}
-	checkFake(t, r.Listing, "n:4:w")
-	h.s.Release(r.Listing, r.Lease)
-	h.expectNone(100 * time.Millisecond)
-	if c := h.fs.calls.Load() - before; c != 1 {
-		t.Errorf("%d relists for 6 events in one window, want 1", c)
-	}
+		r := h.await(2*time.Second, isListing(1))
+		if !r.Refresh {
+			t.Error("watch relist not marked Refresh")
+		}
+		checkFake(t, r.Listing, "n:4:w")
+		h.s.Release(r.Listing, r.Lease)
+		h.expectNone(100 * time.Millisecond)
+		if c := h.fs.calls.Load() - before; c != 1 {
+			t.Errorf("%d relists for 6 events in one window, want 1", c)
+		}
 
-	// A change for an unwatched id does nothing; Unwatch stops relists.
-	h.w.emit(Change{99, ChangeDir})
-	h.expectNone(80 * time.Millisecond)
-	h.s.Unwatch(1)
-	time.Sleep(20 * time.Millisecond)
-	h.w.emit(Change{1, ChangeDir})
-	h.expectNone(100 * time.Millisecond)
+		// A change for an unwatched id does nothing; Unwatch stops relists.
+		h.w.emit(Change{99, ChangeDir})
+		h.expectNone(80 * time.Millisecond)
+		h.s.Unwatch(1)
+		time.Sleep(20 * time.Millisecond)
+		h.w.emit(Change{1, ChangeDir})
+		h.expectNone(100 * time.Millisecond)
+	})
 }
 
 func TestServiceWatchGoneOverflowError(t *testing.T) {
-	h := newHarness(t)
-	h.s.List(1, "n:2:a", SortName, false)
-	h.s.List(2, "n:3:b", SortName, false)
-	h.s.Watch(1, "/a")
-	h.s.Watch(2, "/b")
-	h.await(2*time.Second, isListing(1))
-	h.await(2*time.Second, isListing(2))
-	for i := 0; ; i++ {
-		if added, _ := h.w.snapshot(); len(added) == 2 {
-			break
+	bubble(t, func(t *testing.T) {
+		h := newHarness(t)
+		h.s.List(1, "n:2:a", SortName, false)
+		h.s.List(2, "n:3:b", SortName, false)
+		h.s.Watch(1, "/a")
+		h.s.Watch(2, "/b")
+		h.await(2*time.Second, isListing(1))
+		h.await(2*time.Second, isListing(2))
+		for i := 0; ; i++ {
+			if added, _ := h.w.snapshot(); len(added) == 2 {
+				break
+			}
+			if i > 1000 {
+				t.Fatal("watches never added")
+			}
+			time.Sleep(time.Millisecond)
 		}
-		if i > 1000 {
-			t.Fatal("watches never added")
-		}
-		time.Sleep(time.Millisecond)
-	}
 
-	h.w.emit(Change{1, ChangeOverflow})
-	got := map[uint32]bool{}
-	for len(got) < 2 {
-		r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultListing })
-		got[r.ID] = r.Refresh
-		h.s.Release(r.Listing, r.Lease)
-	}
-	if !got[1] || !got[2] {
-		t.Errorf("overflow refreshed %v, want both marked Refresh", got)
-	}
-
-	h.w.emit(Change{2, ChangeGone})
-	r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultGone })
-	if r.ID != 2 {
-		t.Errorf("gone %+v", r)
-	}
-	h.expectNone(80 * time.Millisecond)
-	for i := 0; ; i++ {
-		if _, removed := h.w.snapshot(); len(removed) > 0 && removed[len(removed)-1] == 2 {
-			break
+		h.w.emit(Change{1, ChangeOverflow})
+		got := map[uint32]bool{}
+		for len(got) < 2 {
+			r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultListing })
+			got[r.ID] = r.Refresh
+			h.s.Release(r.Listing, r.Lease)
 		}
-		if i > 1000 {
-			t.Fatal("gone id never removed from the watcher")
+		if !got[1] || !got[2] {
+			t.Errorf("overflow refreshed %v, want both marked Refresh", got)
 		}
-		time.Sleep(time.Millisecond)
-	}
-	h.w.emit(Change{2, ChangeDir}) // no longer watched
-	h.expectNone(80 * time.Millisecond)
 
-	h.w.mu.Lock()
-	h.w.addErr = errors.New("no inotify")
-	h.w.mu.Unlock()
-	h.s.Watch(3, "/c")
-	r = h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultWatchError })
-	if r.ID != 3 || r.Err == nil {
-		t.Errorf("watch error %+v", r)
-	}
+		h.w.emit(Change{2, ChangeGone})
+		r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultGone })
+		if r.ID != 2 {
+			t.Errorf("gone %+v", r)
+		}
+		h.expectNone(80 * time.Millisecond)
+		for i := 0; ; i++ {
+			if _, removed := h.w.snapshot(); len(removed) > 0 && removed[len(removed)-1] == 2 {
+				break
+			}
+			if i > 1000 {
+				t.Fatal("gone id never removed from the watcher")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		h.w.emit(Change{2, ChangeDir}) // no longer watched
+		h.expectNone(80 * time.Millisecond)
+
+		h.w.mu.Lock()
+		h.w.addErr = errors.New("no inotify")
+		h.w.mu.Unlock()
+		h.s.Watch(3, "/c")
+		r = h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultWatchError })
+		if r.ID != 3 || r.Err == nil {
+			t.Errorf("watch error %+v", r)
+		}
+	})
 }
 
 // A watch event while the user's List is still outstanding must not mark
 // the answer as a passive refresh.
 func TestServiceRefreshFlag(t *testing.T) {
-	h := newHarness(t)
-	h.s.Watch(1, "/a")
-	h.s.List(1, "block:x", SortName, false)
-	for h.fs.started.Load() < 1 {
-		time.Sleep(time.Millisecond)
-	}
-	for i := 0; ; i++ {
-		if added, _ := h.w.snapshot(); len(added) > 0 {
-			break
+	bubble(t, func(t *testing.T) {
+		h := newHarness(t)
+		h.s.Watch(1, "/a")
+		h.s.List(1, "block:x", SortName, false)
+		for h.fs.started.Load() < 1 {
+			time.Sleep(time.Millisecond)
 		}
-		if i > 1000 {
-			t.Fatal("watch never added")
+		for i := 0; ; i++ {
+			if added, _ := h.w.snapshot(); len(added) > 0 {
+				break
+			}
+			if i > 1000 {
+				t.Fatal("watch never added")
+			}
+			time.Sleep(time.Millisecond)
 		}
-		time.Sleep(time.Millisecond)
-	}
-	h.w.emit(Change{1, ChangeDir})
-	time.Sleep(60 * time.Millisecond)
-	h.buf = h.s.Poll(h.buf[:0]) // arms and runs the debounce: relists the same path
-	time.Sleep(40 * time.Millisecond)
-	h.buf = h.s.Poll(h.buf[:0])
-	close(h.fs.gate)
-	r := h.await(2*time.Second, isListing(1))
-	if r.Refresh {
-		t.Error("answer to an outstanding List reported as Refresh")
-	}
-	h.s.Release(r.Listing, r.Lease)
+		h.w.emit(Change{1, ChangeDir})
+		time.Sleep(60 * time.Millisecond)
+		h.buf = h.s.Poll(h.buf[:0]) // arms and runs the debounce: relists the same path
+		time.Sleep(40 * time.Millisecond)
+		h.buf = h.s.Poll(h.buf[:0])
+		close(h.fs.gate)
+		r := h.await(2*time.Second, isListing(1))
+		if r.Refresh {
+			t.Error("answer to an outstanding List reported as Refresh")
+		}
+		h.s.Release(r.Listing, r.Lease)
+	})
 }
 
 // The UI-thread side must not allocate once warm: Poll when idle, and a
@@ -638,101 +659,107 @@ func TestServiceResortKeepsSnapshotAndAvoidsIO(t *testing.T) {
 }
 
 func TestServiceCancelRetiresIDsAndRejectsOldWorkers(t *testing.T) {
-	h := newHarness(t)
-	h.s.List(1, "block:old", SortName, false)
-	waitFor(t, "old listing", time.Second, func() bool { return h.fs.started.Load() > 0 })
-	h.s.Cancel(1)
-	req := h.s.List(1, "n:4:new", SortName, false)
-	close(h.fs.gate)
-	r := h.await(time.Second, isListing(1))
-	if r.Req != req {
-		t.Fatal("old generation delivered")
-	}
-	checkFake(t, r.Listing, "n:4:new")
-	h.s.Release(r.Listing, r.Lease)
-	h.s.Cancel(1)
-	for id := uint32(2); id < 10002; id++ {
+	bubble(t, func(t *testing.T) {
+		h := newHarness(t)
+		h.s.List(1, "block:old", SortName, false)
+		waitFor(t, "old listing", time.Second, func() bool { return h.fs.started.Load() > 0 })
+		h.s.Cancel(1)
+		req := h.s.List(1, "n:4:new", SortName, false)
+		close(h.fs.gate)
+		r := h.await(time.Second, isListing(1))
+		if r.Req != req {
+			t.Fatal("old generation delivered")
+		}
+		checkFake(t, r.Listing, "n:4:new")
+		h.s.Release(r.Listing, r.Lease)
+		h.s.Cancel(1)
+		for id := uint32(2); id < 10002; id++ {
+			h.s.mu.Lock()
+			h.s.state(id)
+			h.s.mu.Unlock()
+			h.s.Cancel(id)
+		}
 		h.s.mu.Lock()
-		h.s.state(id)
+		ids, dirty := len(h.s.ids), len(h.s.dirtyIDs)
 		h.s.mu.Unlock()
-		h.s.Cancel(id)
-	}
-	h.s.mu.Lock()
-	ids, dirty := len(h.s.ids), len(h.s.dirtyIDs)
-	h.s.mu.Unlock()
-	if ids != 0 || dirty != 0 {
-		t.Fatalf("retained %d ids, %d dirty ids", ids, dirty)
-	}
-	h.expectNone(50 * time.Millisecond)
+		if ids != 0 || dirty != 0 {
+			t.Fatalf("retained %d ids, %d dirty ids", ids, dirty)
+		}
+		h.expectNone(50 * time.Millisecond)
+	})
 }
 
 func TestServiceFullRingParksUntilPollOrClose(t *testing.T) {
-	for _, closeFull := range []bool{false, true} {
-		h := newHarness(t)
-		h.s.mu.Lock()
-		h.s.ring = core.NewRing[resMsg](2)
-		h.s.mu.Unlock()
-		for id := uint32(1); id <= 8; id++ {
-			h.s.List(id, "n:1:park", SortName, false)
-		}
-		waitFor(t, "both producers parked", time.Second, func() bool {
+	bubble(t, func(t *testing.T) {
+		for _, closeFull := range []bool{false, true} {
+			h := newHarness(t)
 			h.s.mu.Lock()
-			defer h.s.mu.Unlock()
-			return h.s.ringWait[0] && h.s.ringWait[1]
-		})
-		before := h.fs.calls.Load()
-		time.Sleep(20 * time.Millisecond)
-		if h.fs.calls.Load() != before {
-			t.Fatal("producer made progress without a ring slot")
-		}
-		if closeFull {
-			start := time.Now()
-			h.s.Close()
-			if time.Since(start) > time.Second {
-				t.Fatal("Close did not release parked producers")
-			}
-		} else {
+			h.s.ring = core.NewRing[resMsg](2)
+			h.s.mu.Unlock()
 			for id := uint32(1); id <= 8; id++ {
-				r := h.await(time.Second, isListing(id))
-				h.s.Release(r.Listing, r.Lease)
+				h.s.List(id, "n:1:park", SortName, false)
+			}
+			waitFor(t, "both producers parked", time.Second, func() bool {
+				h.s.mu.Lock()
+				defer h.s.mu.Unlock()
+				return h.s.ringWait[0] && h.s.ringWait[1]
+			})
+			before := h.fs.calls.Load()
+			time.Sleep(20 * time.Millisecond)
+			if h.fs.calls.Load() != before {
+				t.Fatal("producer made progress without a ring slot")
+			}
+			if closeFull {
+				start := time.Now()
+				h.s.Close()
+				if time.Since(start) > time.Second {
+					t.Fatal("Close did not release parked producers")
+				}
+			} else {
+				for id := uint32(1); id <= 8; id++ {
+					r := h.await(time.Second, isListing(id))
+					h.s.Release(r.Listing, r.Lease)
+				}
 			}
 		}
-	}
+	})
 }
 
 func TestServiceContentDebounceDoesNotWakeUI(t *testing.T) {
-	h := newHarness(t)
-	h.s.List(1, "n:4:content", SortName, false)
-	h.s.Watch(1, "/content")
-	r := h.await(time.Second, isListing(1))
-	h.s.Release(r.Listing, r.Lease)
-	waitFor(t, "watch", time.Second, func() bool { return h.watchAdded(1) })
-	h.drainWake()
-	h.w.emit(Change{1, ChangeContent})
-	waitFor(t, "dirty", time.Second, func() bool { h.s.mu.Lock(); defer h.s.mu.Unlock(); return len(h.s.dirtyIDs) == 1 })
-	h.expectQuiet(80 * time.Millisecond)
-	h.w.emit(Change{1, ChangeContent})
-	h.expectQuiet(100 * time.Millisecond)
-	r = h.await(time.Second, isListing(1))
-	if !r.Refresh {
-		t.Fatal("content change was not a refresh")
-	}
-	h.s.Release(r.Listing, r.Lease)
-	// A sustained stream has a hard deadline; structure takes precedence.
-	h.s.mu.Lock()
-	st := h.s.ids[1]
-	now := time.Now()
-	h.s.dirtyLocked(st, now, true)
-	for i := 1; i < 20; i++ {
-		h.s.dirtyLocked(st, now.Add(time.Duration(i)*50*time.Millisecond), true)
-	}
-	due := st.dirtyDue
-	h.s.dirtyLocked(st, now.Add(100*time.Millisecond), false)
-	structural := st.dirtyDue
-	h.s.mu.Unlock()
-	if !due.Equal(now.Add(contentMaxWait)) || !structural.Equal(now.Add(100*time.Millisecond+h.s.debounce)) {
-		t.Fatalf("deadlines: content=%v structure=%v", due.Sub(now), structural.Sub(now))
-	}
+	bubble(t, func(t *testing.T) {
+		h := newHarness(t)
+		h.s.List(1, "n:4:content", SortName, false)
+		h.s.Watch(1, "/content")
+		r := h.await(time.Second, isListing(1))
+		h.s.Release(r.Listing, r.Lease)
+		waitFor(t, "watch", time.Second, func() bool { return h.watchAdded(1) })
+		h.drainWake()
+		h.w.emit(Change{1, ChangeContent})
+		waitFor(t, "dirty", time.Second, func() bool { h.s.mu.Lock(); defer h.s.mu.Unlock(); return len(h.s.dirtyIDs) == 1 })
+		h.expectQuiet(80 * time.Millisecond)
+		h.w.emit(Change{1, ChangeContent})
+		h.expectQuiet(100 * time.Millisecond)
+		r = h.await(time.Second, isListing(1))
+		if !r.Refresh {
+			t.Fatal("content change was not a refresh")
+		}
+		h.s.Release(r.Listing, r.Lease)
+		// A sustained stream has a hard deadline; structure takes precedence.
+		h.s.mu.Lock()
+		st := h.s.ids[1]
+		now := time.Now()
+		h.s.dirtyLocked(st, now, true)
+		for i := 1; i < 20; i++ {
+			h.s.dirtyLocked(st, now.Add(time.Duration(i)*50*time.Millisecond), true)
+		}
+		due := st.dirtyDue
+		h.s.dirtyLocked(st, now.Add(100*time.Millisecond), false)
+		structural := st.dirtyDue
+		h.s.mu.Unlock()
+		if !due.Equal(now.Add(contentMaxWait)) || !structural.Equal(now.Add(100*time.Millisecond+h.s.debounce)) {
+			t.Fatalf("deadlines: content=%v structure=%v", due.Sub(now), structural.Sub(now))
+		}
+	})
 }
 
 func TestServicePoolBoundsExceptionalListings(t *testing.T) {
@@ -805,28 +832,30 @@ func TestServiceSetWakeTargetsNextResult(t *testing.T) {
 }
 
 func TestServicePoolIdleReclaimsLargeWorkingSet(t *testing.T) {
-	s := NewServiceWith(nil, func(string, *Listing) error { return nil })
-	defer s.Close()
-	for range 8 {
-		s.mu.Lock()
-		l, slot := s.getListingLocked(0)
-		if cap(l.Entries) < 400_000 {
-			l.Entries = make([]Entry, 400_000)
-		} else {
-			l.Entries = l.Entries[:400_000]
+	bubble(t, func(t *testing.T) {
+		s := NewServiceWith(nil, func(string, *Listing) error { return nil })
+		defer s.Close()
+		for range 8 {
+			s.mu.Lock()
+			l, slot := s.getListingLocked(0)
+			if cap(l.Entries) < 400_000 {
+				l.Entries = make([]Entry, 400_000)
+			} else {
+				l.Entries = l.Entries[:400_000]
+			}
+			s.freeSlotLocked(slot)
+			s.mu.Unlock()
 		}
-		s.freeSlotLocked(slot)
+		s.mu.Lock()
+		if s.pooledBytes <= listingPoolBytes || s.poolDue.IsZero() {
+			s.mu.Unlock()
+			t.Fatal("large pool was not warmed or its expiry was not armed")
+		}
+		s.poolDue = time.Now().Add(-time.Second)
 		s.mu.Unlock()
-	}
-	s.mu.Lock()
-	if s.pooledBytes <= listingPoolBytes || s.poolDue.IsZero() {
-		s.mu.Unlock()
-		t.Fatal("large pool was not warmed or its expiry was not armed")
-	}
-	s.poolDue = time.Now().Add(-time.Second)
-	s.mu.Unlock()
-	s.kick()
-	waitFor(t, "idle trim", time.Second, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.pooledBytes == 0 && s.poolDue.IsZero() })
+		s.kick()
+		waitFor(t, "idle trim", time.Second, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.pooledBytes == 0 && s.poolDue.IsZero() })
+	})
 }
 
 func TestServiceSimulatedDebounceAndResultOrder(t *testing.T) {

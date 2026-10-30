@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -87,33 +88,47 @@ func parkers() map[string]func() *Parker {
 	}
 }
 
+// settled runs f with a settle that lets a goroutine reach its Park: a 50 ms
+// sleep for the pipe, whose reader no testing/synctest bubble can see blocked,
+// and for the channel fallback a bubble, where it is synctest.Wait (every
+// goroutine has blocked) and the waits on time take none.
+func settled(t *testing.T, name string, f func(t *testing.T, settle func())) {
+	if name == "pipe" {
+		f(t, func() { time.Sleep(50 * time.Millisecond) })
+		return
+	}
+	synctest.Test(t, func(t *testing.T) { f(t, synctest.Wait) })
+}
+
 func TestParkerWakeBeforeWaitIsKept(t *testing.T) {
 	for name, mk := range parkers() {
 		t.Run(name, func(t *testing.T) {
-			p := mk()
-			defer p.Close()
-			p.Unpark()
-			p.Unpark() // coalesces into the same token
-			within(t, 5*time.Second, "Park after Unpark", func() {
-				if !p.Park() {
-					t.Error("Park returned false on an open Parker")
+			settled(t, name, func(t *testing.T, settle func()) {
+				p := mk()
+				defer p.Close()
+				p.Unpark()
+				p.Unpark() // coalesces into the same token
+				within(t, 5*time.Second, "Park after Unpark", func() {
+					if !p.Park() {
+						t.Error("Park returned false on an open Parker")
+					}
+				})
+				// The token was one: the next Park waits until another Unpark.
+				var woke atomic.Bool
+				go func() { p.Park(); woke.Store(true) }()
+				settle()
+				if woke.Load() {
+					t.Fatal("a second Park returned without a token")
+				}
+				p.Unpark()
+				deadline := time.Now().Add(5 * time.Second)
+				for !woke.Load() {
+					if time.Now().After(deadline) {
+						t.Fatal("Unpark did not wake a parked goroutine")
+					}
+					time.Sleep(time.Millisecond)
 				}
 			})
-			// The token was one: the next Park waits until another Unpark.
-			var woke atomic.Bool
-			go func() { p.Park(); woke.Store(true) }()
-			time.Sleep(50 * time.Millisecond)
-			if woke.Load() {
-				t.Fatal("a second Park returned without a token")
-			}
-			p.Unpark()
-			deadline := time.Now().Add(5 * time.Second)
-			for !woke.Load() {
-				if time.Now().After(deadline) {
-					t.Fatal("Unpark did not wake a parked goroutine")
-				}
-				time.Sleep(time.Millisecond)
-			}
 		})
 	}
 }
@@ -209,33 +224,35 @@ func TestParkerPingPong(t *testing.T) {
 func TestParkerClose(t *testing.T) {
 	for name, mk := range parkers() {
 		t.Run(name, func(t *testing.T) {
-			p := mk()
-			var res atomic.Int32 // 0 parked, 1 returned true, 2 returned false
-			go func() {
-				if p.Park() {
-					res.Store(1)
-				} else {
-					res.Store(2)
+			settled(t, name, func(t *testing.T, settle func()) {
+				p := mk()
+				var res atomic.Int32 // 0 parked, 1 returned true, 2 returned false
+				go func() {
+					if p.Park() {
+						res.Store(1)
+					} else {
+						res.Store(2)
+					}
+				}()
+				settle()
+				p.Close()
+				deadline := time.Now().Add(5 * time.Second)
+				for res.Load() == 0 {
+					if time.Now().After(deadline) {
+						t.Fatal("Close did not wake the parked goroutine")
+					}
+					time.Sleep(time.Millisecond)
 				}
-			}()
-			time.Sleep(50 * time.Millisecond)
-			p.Close()
-			deadline := time.Now().Add(5 * time.Second)
-			for res.Load() == 0 {
-				if time.Now().After(deadline) {
-					t.Fatal("Close did not wake the parked goroutine")
+				if res.Load() != 2 {
+					t.Error("a Park woken by Close returned true")
 				}
-				time.Sleep(time.Millisecond)
-			}
-			if res.Load() != 2 {
-				t.Error("a Park woken by Close returned true")
-			}
-			within(t, 5*time.Second, "operations after Close", func() {
-				if p.Park() {
-					t.Error("Park after Close returned true")
-				}
-				p.Unpark() // no panic, no block
-				p.Close()  // idempotent
+				within(t, 5*time.Second, "operations after Close", func() {
+					if p.Park() {
+						t.Error("Park after Close returned true")
+					}
+					p.Unpark() // no panic, no block
+					p.Close()  // idempotent
+				})
 			})
 		})
 	}
