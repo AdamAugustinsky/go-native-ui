@@ -300,6 +300,12 @@ func (pl *Pilot) Close() {
 			pl.shapes = nil
 		}
 		if pl.src != nil {
+			for _, p := range pl.panes {
+				p.release(p.rc.l, p.rc.lease)
+				p.release(p.v.l, p.v.lease)
+				p.rc.l, p.rc.lease, p.rc.active = nil, 0, false
+				p.v.reset()
+			}
 			pl.src.Close()
 		}
 		if pl.sys != nil {
