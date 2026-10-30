@@ -66,17 +66,20 @@ func TestNamePrefetchFollowsScrollRelistAndFont(t *testing.T) {
 	pl, f := nameBench(t, 10000, true)
 	s, p := pl.a.Text, pl.panes[0]
 	pl.queueNames(0, f, 0, 32)
+	pl.flushNames()
 	awaitNames(t, pl, f, 0, nameVisible+nameMargin)
 	if _, ok := s.CachedRun(f, p.v.l.Name(int(p.v.entryAt(1000)))); ok {
 		t.Fatal("prefetch shaped beyond the bounded neighborhood")
 	}
 	pl.queueNames(0, f, 1000, 1032)
+	pl.flushNames()
 	// A relist can return the same pooled Listing pointer with another lease.
 	// The preceding range must be cancelled even though the address is equal.
 	p.v.lease++
 	p.fver++
 	f2 := s.Font(text.FontDesc{Mono: true, SizePt: 12, Scale: 1.5})
 	pl.queueNames(0, f2, 4000, 4032)
+	pl.flushNames()
 	awaitNames(t, pl, f2, 4000, 4032)
 	if _, ok := s.CachedRun(f, p.v.l.Name(int(p.v.entryAt(1000)))); ok {
 		t.Fatal("stale scroll range was imported after the relist")
@@ -115,16 +118,16 @@ func BenchmarkListingNameFirstFrame(b *testing.B) {
 						copy(p.v.l.Name(int(p.v.entryAt(row)))[:7], pref)
 					}
 					p.fver++
+					if mode == "Ready" {
+						// An earlier frame queued them. Await only completion,
+						// leaving import in the timed path: checking the public
+						// cache here would import it outside the measurement.
+						pl.queueNames(0, f, 0, 32)
+						pl.flushNames()
+						waitNameWorkers(b, pl.shapes, nameVisible+nameMargin)
+					}
 					b.StartTimer()
 					pl.queueNames(0, f, 0, 32)
-					if mode == "Ready" {
-						b.StopTimer()
-						// Await only completion, leaving import in the timed path.
-						// Poll uses bounded work; checking the public cache here
-						// would import it outside the measurement.
-						waitNameWorkers(b, pl.shapes, nameVisible+nameMargin)
-						b.StartTimer()
-					}
 					if pl.shapes != nil {
 						pl.shapes.Poll(s, nameSlots)
 					}
@@ -137,6 +140,7 @@ func BenchmarkListingNameFirstFrame(b *testing.B) {
 						s.Shape(f, name)
 					}
 					ns += time.Since(start).Nanoseconds()
+					pl.flushNames()
 				}
 				b.ReportMetric(float64(ns)/float64(b.N), "shape-ns/frame")
 				b.ReportMetric(float64(misses)/float64(b.N), "misses/frame")
@@ -166,6 +170,7 @@ func BenchmarkListingNameScroll(b *testing.B) {
 			pl, f := nameBench(b, max(10000, b.N+128), mode == "Workers")
 			s, p := pl.a.Text, pl.panes[0]
 			pl.queueNames(0, f, 0, 32)
+			pl.flushNames()
 			if pl.shapes != nil {
 				awaitNames(b, pl, f, 0, 96)
 			}
@@ -193,6 +198,7 @@ func BenchmarkListingNameScroll(b *testing.B) {
 					s.Shape(f, name)
 				}
 				ns += time.Since(start).Nanoseconds()
+				pl.flushNames()
 			}
 			b.ReportMetric(float64(ns)/float64(b.N), "shape-ns/frame")
 			b.ReportMetric(float64(misses)/float64(b.N), "misses/frame")

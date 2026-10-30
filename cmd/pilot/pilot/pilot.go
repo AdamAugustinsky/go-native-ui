@@ -130,6 +130,7 @@ type Pilot struct {
 	shapes     *text.Prefetcher
 	nameDesc   text.FontDesc
 	nameRanges [2]nameRange
+	nameFlush  [2]nameFlush
 	sym        symbols
 	a          *app.App
 	src        Source

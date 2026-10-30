@@ -26,6 +26,7 @@ type shapeJob struct {
 	state     uint8
 	cancelled bool
 	group     uint32
+	key       uint64 // its entry in Prefetcher.index, 0 for none
 	font      FontKey
 	desc      FontDesc
 	name      []byte
@@ -37,14 +38,18 @@ type shapeJob struct {
 // jobs. Idle workers park without polling. One worker is the serial shaping
 // fallback; multiple workers share no mutable font or native call state.
 type Prefetcher struct {
-	mu     core.Mutex
-	jobs   []shapeJob
-	park   []*core.Parker
-	wg     sync.WaitGroup
-	wake   func()
-	next   int
-	ready  int
-	closed bool
+	mu      core.Mutex
+	jobs    []shapeJob
+	index   *core.Table // live requests by group, font and bytes, to slot
+	free    []int32     // free slots, a stack
+	release []int32     // Cancel's scratch: ready results to close
+	park    []*core.Parker
+	wg      sync.WaitGroup
+	wake    func()
+	next    int
+	queued  int
+	ready   int
+	closed  bool
 }
 
 // NewPrefetcher starts workers (clamped to 1..8), each on its own OS thread,
@@ -55,10 +60,13 @@ type Prefetcher struct {
 func NewPrefetcher(workers, capacity int, wake func()) (*Prefetcher, error) {
 	workers = min(max(workers, 1), 8)
 	capacity = min(max(capacity, workers), 1024)
-	p := &Prefetcher{jobs: make([]shapeJob, capacity), park: make([]*core.Parker, workers), wake: wake}
+	p := &Prefetcher{jobs: make([]shapeJob, capacity), index: core.NewTable(capacity),
+		free: make([]int32, capacity), release: make([]int32, 0, capacity),
+		park: make([]*core.Parker, workers), wake: wake}
 	for i := range p.jobs {
 		p.jobs[i].name = make([]byte, 0, PrefetchTextLimit)
 		p.jobs[i].result.reserve(128)
+		p.free[i] = int32(capacity - 1 - i)
 	}
 	started := make(chan error, workers)
 	for i := range p.park {
@@ -98,59 +106,94 @@ func (p *Prefetcher) Submit(group uint32, s *System, f FontKey, b []byte) bool {
 		p.mu.Unlock()
 		return true
 	}
-	free := -1
-	for i := range p.jobs {
-		j := &p.jobs[i]
-		if j.state == shapeFree {
-			if free < 0 {
-				free = i
-			}
-		} else if !j.cancelled && j.group == group && j.font == f && j.desc == d && bytes.Equal(j.name, b) {
+	key := hashRun(f, b) ^ uint64(group+1)*0xBF58476D1CE4E5B9 | 1
+	v, indexed := p.index.Get(key)
+	if indexed {
+		if j := &p.jobs[v]; j.group == group && j.font == f && j.desc == d && bytes.Equal(j.name, b) {
 			p.mu.Unlock()
 			return true
 		}
 	}
-	if free < 0 {
+	if len(p.free) == 0 {
 		p.mu.Unlock()
 		return false
 	}
-	j := &p.jobs[free]
-	j.group, j.font, j.desc, j.cancelled = group, f, d, false
+	i := p.free[len(p.free)-1]
+	p.free = p.free[:len(p.free)-1]
+	j := &p.jobs[i]
+	j.group, j.font, j.desc, j.cancelled, j.key = group, f, d, false, 0
+	if !indexed { // a different request under the same key goes unindexed
+		j.key = key
+		p.index.Put(key, uint32(i))
+	}
 	j.name = append(j.name[:0], b...)
 	j.state = shapeQueued
+	p.queued++
+	wake := p.queued == 1 // a worker parks only when it finds no queued job
 	p.mu.Unlock()
-	for _, park := range p.park {
-		park.Unpark()
+	if wake {
+		for _, park := range p.park {
+			park.Unpark()
+		}
 	}
 	return true
+}
+
+// unindex drops job i's index entry; mu is held.
+func (p *Prefetcher) unindex(i int) {
+	j := &p.jobs[i]
+	if j.key != 0 {
+		if v, ok := p.index.Get(j.key); ok && int(v) == i {
+			p.index.Delete(j.key)
+		}
+		j.key = 0
+	}
+}
+
+// freeJob returns job i to the free stack; mu is held.
+func (p *Prefetcher) freeJob(i int) {
+	p.unindex(i)
+	p.jobs[i].state, p.jobs[i].desc = shapeFree, FontDesc{}
+	p.free = append(p.free, int32(i))
 }
 
 // Cancel discards queued and finished results for group; an in-flight native
 // call may finish, but its result will be discarded. It never waits for it.
 func (p *Prefetcher) Cancel(group uint32) {
-	for i := range p.jobs {
-		p.mu.Lock()
-		j := &p.jobs[i]
-		release := false
-		if j.group == group {
-			switch j.state {
-			case shapeQueued:
-				j.state, j.desc = shapeFree, FontDesc{}
-			case shapeRunning:
-				j.cancelled = true
-			case shapeReady:
-				j.state, release = shapeImporting, true
-				p.ready--
-			}
-		}
+	p.mu.Lock()
+	if p.closed {
 		p.mu.Unlock()
-		if release {
-			j.result.Close()
-			p.mu.Lock()
-			j.state, j.desc = shapeFree, FontDesc{}
-			p.mu.Unlock()
+		return
+	}
+	p.release = p.release[:0]
+	for i := range p.jobs {
+		j := &p.jobs[i]
+		if j.group != group {
+			continue
+		}
+		switch j.state {
+		case shapeQueued:
+			p.queued--
+			p.freeJob(i)
+		case shapeRunning:
+			j.cancelled = true
+			p.unindex(i)
+		case shapeReady:
+			j.state = shapeImporting
+			p.ready--
+			p.unindex(i)
+			p.release = append(p.release, int32(i))
 		}
 	}
+	p.mu.Unlock()
+	for _, i := range p.release {
+		p.jobs[i].result.Close()
+	}
+	p.mu.Lock()
+	for _, i := range p.release {
+		p.freeJob(int(i))
+	}
+	p.mu.Unlock()
 }
 
 // Poll consumes at most limit results at a frame's safe point, returning the
@@ -177,7 +220,7 @@ func (p *Prefetcher) Poll(s *System, limit int) int {
 		}
 		j.result.Close()
 		p.mu.Lock()
-		j.state, j.desc = shapeFree, FontDesc{}
+		p.freeJob(i)
 		p.mu.Unlock()
 		limit--
 	}
@@ -211,6 +254,7 @@ func (p *Prefetcher) take() int {
 		i := (p.next + n) % len(p.jobs)
 		if p.jobs[i].state == shapeQueued {
 			p.jobs[i].state = shapeRunning
+			p.queued--
 			p.next = (i + 1) % len(p.jobs)
 			return i
 		}
@@ -249,7 +293,9 @@ func (p *Prefetcher) worker(index int, started chan<- error) {
 		if discard {
 			j.result.Close()
 			p.mu.Lock()
-			j.state, j.desc = shapeFree, FontDesc{}
+			if p.jobs != nil {
+				p.freeJob(i)
+			}
 			p.mu.Unlock()
 		} else if wake && p.wake != nil {
 			p.wake()

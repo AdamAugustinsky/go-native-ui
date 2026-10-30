@@ -13,6 +13,12 @@ const (
 	nameSlots   = 2*(nameVisible+2*nameMargin) + 2
 )
 
+// nameFlush is a pane's range change waiting for flushNames.
+type nameFlush struct {
+	pending, cancel bool
+	first, last     int // the visible rows, submitted first
+}
+
 type nameRange struct {
 	listing     *fs.Listing
 	lease, ver  uint32
@@ -44,10 +50,44 @@ func (pl *Pilot) prepareNames() {
 	pl.shapes.Poll(pl.a.Text, nameSlots)
 }
 
-// queueNames copies only the bounded neighborhood, never the listing. A
-// relist, filter, font or range change cancels the previous generation of work.
-// Requests are visible-first, then ahead, then behind. Chunking avoids
-// cancelling almost-identical requests on every row of a steady scroll.
+// flushNames submits the ranges queueNames changed, after the frame's rows
+// are built: the rows it shows were shaped meanwhile, so they cost a cache
+// lookup, and the workers shape the margins without contending with the
+// frame's own CoreText calls.
+func (pl *Pilot) flushNames() {
+	if pl.shapes == nil {
+		return
+	}
+	for i := range pl.nameFlush {
+		f := &pl.nameFlush[i]
+		if !f.pending {
+			continue
+		}
+		f.pending = false
+		if f.cancel {
+			pl.shapes.Cancel(pl.panes[i].id)
+		}
+		p, r := pl.panes[i], &pl.nameRanges[i]
+		if p.v.l != r.listing || p.v.lease != r.lease || p.fver != r.ver { // the view changed during the frame
+			continue // queueNames notes the new one next frame
+		}
+		n := p.v.nRows()
+		for _, span := range [3][2]int{{f.first, f.last}, {f.last, r.last}, {r.first, f.first}} {
+			for row := span[0]; row < min(span[1], n); row++ {
+				name := p.v.l.Name(int(p.v.entryAt(row)))
+				if len(name) <= text.PrefetchTextLimit && !pl.shapes.Submit(p.id, pl.a.Text, r.font, name) {
+					r.retry = true
+				}
+			}
+		}
+	}
+}
+
+// queueNames notes the bounded neighborhood to shape; flushNames copies it,
+// never the listing. A relist, filter, font or range change cancels the
+// previous generation of work. Requests are visible-first, then ahead, then
+// behind. Chunking avoids cancelling almost-identical requests on every row
+// of a steady scroll.
 func (pl *Pilot) queueNames(i int, font text.FontKey, first, last int) {
 	if pl.shapes == nil {
 		return
@@ -67,19 +107,13 @@ func (pl *Pilot) queueNames(i int, font text.FontKey, first, last int) {
 	if *old == next {
 		return
 	}
+	f := &pl.nameFlush[i]
 	if old.listing != next.listing || old.lease != next.lease || old.ver != next.ver || old.request != next.request ||
 		old.font != next.font || old.desc != next.desc || old.first != lo || old.last != hi {
-		pl.shapes.Cancel(p.id)
+		f.cancel = true
 	}
 	*old = next
-	for _, span := range [3][2]int{{first, last}, {last, hi}, {lo, first}} {
-		for row := span[0]; row < span[1]; row++ {
-			name := p.v.l.Name(int(p.v.entryAt(row)))
-			if len(name) <= text.PrefetchTextLimit && !pl.shapes.Submit(p.id, pl.a.Text, font, name) {
-				old.retry = true
-			}
-		}
-	}
+	f.pending, f.first, f.last = true, first, last
 }
 
 // initialNames starts work as soon as an initial listing lands, while Init

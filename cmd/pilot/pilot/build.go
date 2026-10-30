@@ -97,6 +97,7 @@ func (pl *Pilot) Build(c *ui.Context) {
 	pl.work()
 	pl.prepareNames()
 	pl.draw(c)
+	pl.flushNames()
 	pl.workLeft(c)
 	k.End()
 	pl.prevFocus = c.FocusKey()
