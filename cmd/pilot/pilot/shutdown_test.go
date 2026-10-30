@@ -61,10 +61,11 @@ func TestCloseDoesNotWaitForTheIconStyleRead(t *testing.T) {
 		release()
 		t.Fatal("Close did not return with the style read blocked")
 	}
+	before := wakes.Load() // text prefetch may have completed before Close
 	release()
 	time.Sleep(50 * time.Millisecond)
-	if pl.sys.latest.Load() != 0 || wakes.Load() != 0 {
-		t.Errorf("a read that returned after Close published %d (want 0) and woke %d times", pl.sys.latest.Load(), wakes.Load())
+	if pl.sys.latest.Load() != 0 || wakes.Load() != before {
+		t.Errorf("a read that returned after Close published %d (want 0) and woke %d times", pl.sys.latest.Load(), wakes.Load()-before)
 	}
 	// and a request queued behind it is not started
 	pl.sys.requestStyle()
@@ -107,6 +108,7 @@ func TestCloseStopsThePlacesWorker(t *testing.T) {
 	}
 	ch := pl.probed
 	pl.Close()
+	before := wakes.Load() // text prefetch may have completed before Close
 	release()
 	if !waitGroupDone(&pl.probeWG, 2*time.Second) {
 		t.Fatal("the places worker did not end after its probe returned")
@@ -114,8 +116,8 @@ func TestCloseStopsThePlacesWorker(t *testing.T) {
 	if n := probes.Load(); n != 1 {
 		t.Errorf("%d probes: the worker went on after Close", n)
 	}
-	if len(ch) != 0 || wakes.Load() != 0 {
-		t.Errorf("after Close the worker published %d results and woke %d times", len(ch), wakes.Load())
+	if len(ch) != 0 || wakes.Load() != before {
+		t.Errorf("after Close the worker published %d results and woke %d times", len(ch), wakes.Load()-before)
 	}
 }
 

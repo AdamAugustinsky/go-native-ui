@@ -705,6 +705,7 @@ func (p *pane) reconcileStep(b *budget) {
 
 // swapIn replaces the shown listing by the reconciled one.
 func (p *pane) swapIn() {
+	p.fver++ // invalidate speculative work even when a pooled listing reuses its address
 	rc, v := &p.rc, &p.v
 	old, oldLease := v.l, v.lease
 	v.l, v.lease = rc.l, rc.lease

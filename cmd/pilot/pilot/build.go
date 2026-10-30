@@ -95,6 +95,7 @@ func (pl *Pilot) Build(c *ui.Context) {
 	pl.applyScroll()
 	pl.update(c)
 	pl.work()
+	pl.prepareNames()
 	pl.draw(c)
 	pl.workLeft(c)
 	k.End()
@@ -378,6 +379,7 @@ func (pl *Pilot) drawList(c *ui.Context, r *theme.Resolved, i int, p *pane, pane
 		d.Scale, d.TabularDigits = r.Scale, true
 		sizeFont = k.TextSystem().Font(d)
 	}
+	pl.queueNames(i, body, t.First, t.Last)
 	iconW := theme.Snap(fileIconPt * s)
 	if v.l != nil {
 		pl.frameRows += t.Last - t.First
