@@ -287,11 +287,13 @@ On top, shared by every backend:
 - **Run cache:** keyed by (hash of bytes, font, size). It stores
   pointer-free glyph arrays in a slab; a full cache keeps the runs of
   recent access epochs and drops the rest (D86). File names are
-  shaped once, mostly on workers, and prefetched for a listing as it loads.
-  Shaping off the main thread assumes CoreText's immutable objects and the
-  DirectWrite shared factory are thread-safe. Phase 2 verifies this per
-  object type; the fallback is one shaping thread. The main thread
-  only shapes cache misses for rows that just scrolled into view.
+  shaped once, mostly on workers (`text.Prefetcher`: two by default, each
+  with its own shaper and native faces), and prefetched for a listing as it
+  loads; the frame imports finished runs before it builds boxes
+  (`System.ImportRun`). Worker and main-thread shaping are checked to give
+  the same runs on macOS; one worker is the serial fallback. The main thread
+  only shapes cache misses for rows that just scrolled into view, and a
+  changed range goes to the workers after the frame's rows are built.
 - **Glyph cache:** keyed by (face, glyph, size, subpixel-x variant 0–3),
   pointing into the atlas.
 - **Ellipsis truncation, alignment and caret positions** are computed by us
