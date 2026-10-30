@@ -63,9 +63,20 @@ type LabelOpts struct {
 	// Wrap breaks the text into lines at the width it is given (the parent's
 	// by default).
 	Wrap bool
+	// MetaPt, when set, sets the text in the UI face at MetaPt points with
+	// tabular figures, on the style's line: Rex's metadata (times, sizes,
+	// counts, hints), quieter than the label beside it but of its family.
+	MetaPt float32
 	// MonoPt, when set, sets the text in the monospaced face at MonoPt
-	// points on the style's line: Rex's metadata (times, sizes, paths).
+	// points on the style's line: what is machine text (a path, a code to
+	// type in). MetaPt wins when both are set.
 	MonoPt float32
+}
+
+// MetaFont is Rex's metadata face at sizePt points: the UI face with
+// tabular figures (LabelOpts.MetaPt). Asking for it each frame is a lookup.
+func MetaFont(k *base.Kit, sizePt float32) text.FontKey {
+	return k.TextSystem().Font(text.FontDesc{SizePt: sizePt, TabularDigits: true, Scale: k.Scale()})
 }
 
 // labelColor is o's colour: Label when none was set.
@@ -127,7 +138,10 @@ func labelStyle(k *base.Kit, o *LabelOpts) {
 		k.ApplySize(ui.TextSize(0), ui.Px(st.Cell))
 	}
 	font := st.Font
-	if o.MonoPt > 0 {
+	switch {
+	case o.MetaPt > 0:
+		font = MetaFont(k, o.MetaPt)
+	case o.MonoPt > 0:
 		font = k.TextSystem().Font(text.FontDesc{SizePt: o.MonoPt, Mono: true, Scale: k.Scale()})
 	}
 	c.NextFont(font)

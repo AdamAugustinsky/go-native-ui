@@ -100,8 +100,11 @@ type TabsRecipe struct {
 	// caps, PillShadow its two shadows (y offset and blur in points; the
 	// alphas at rest in a key window, scaled toward ShadowInactive of them
 	// while the window is not key).
-	Pill           [2]Pair
-	PillRim        Pair
+	Pill    [2]Pair
+	PillRim Pair
+	// PillRimAround draws the rim all the way round the pill, a hairline
+	// outline, rather than on its end caps alone (Rex's).
+	PillRimAround  bool
 	PillShadow     [2]Pair
 	PillShadowGeom [2][2]float32
 	ShadowInactive float32
@@ -328,6 +331,13 @@ func (b *TabBar) PillRect() [4]float32 { return b.pillRect }
 
 // Dragging reports whether a tab is being dragged.
 func (b *TabBar) Dragging() bool { return b.dragging }
+
+// Held is the id of the tab the left button went down on and still holds
+// (0 for none), as of the last Update: an app that takes a tab dragged out
+// of the strip (onto its content, to split it there) follows the pointer
+// while it is held, and acts on the release, when Held is still the tab's
+// before that frame's Update.
+func (b *TabBar) Held() uint64 { return b.press }
 
 // Update applies the frame's input to the bar before anything that depends
 // on the choice is built: presses, the close buttons, middle clicks, drags,
@@ -758,7 +768,9 @@ func (b *TabBar) Begin(k *base.Kit, label string, tabs []Tab, sel int, o TabsOpt
 		c.NextShadows(ui.Shadow{OffY: g[0][0] * s, Sigma: g[0][1] * s, Color: scaled(rc.PillShadow[0], sh, r.T)},
 			ui.Shadow{OffY: g[1][0] * s, Sigma: g[1][1] * s, Color: scaled(rc.PillShadow[1], sh, r.T)})
 		c.NextBorder(rc.PillRim.At(r.T), max(1, s/2))
-		c.NextBorderSides(ui.SideLeft | ui.SideRight)
+		if !rc.PillRimAround {
+			c.NextBorderSides(ui.SideLeft | ui.SideRight)
+		}
 		c.BoxKeyed(ui.DrawBackground|ui.DrawShadow|ui.DrawBorder|base.Floating, ui.KeyN(b.key, 6), nil)
 	}
 

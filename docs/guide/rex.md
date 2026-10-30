@@ -88,8 +88,10 @@ tokens for nothing.
   chip is the button's own box. Do not draw the chip or set the greys in the
   app.
 - Colour choices (swatches) are circles.
-- Metadata (times, sizes, counts, hints) is `LabelOpts.MonoPt`, the
-  monospaced face Rex sets it in.
+- Metadata (times, sizes, counts, hints) is `LabelOpts.MetaPt`: the UI face
+  with tabular figures, a step smaller than what it describes, so it reads
+  as the same voice, quieter. `MonoPt` is for machine text only (a path, a
+  code to type in).
 - Text someone needs to read (a hint, a notice, metadata) is `Label2`, never
   `Label3`: Zap's hints in `Label3` measured under 2:1 against their pane.
   `Label3` is for what is disabled or a placeholder.

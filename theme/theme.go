@@ -191,6 +191,7 @@ type Resolved struct {
 	rolesBase [2]Colors    // as the theme defines them
 	sys       SystemValues // what SetSystem last gave
 	acc       uint32       // what SetAccent last gave
+	tint      [2]uint32    // what Retint last gave, light and dark
 	followSys bool
 	own       [NumRoles]bool // Theme.Own
 	motion    Motion         // the theme's, before Reduce Motion
@@ -365,14 +366,52 @@ func (r *Resolved) SetAccent(accent uint32) {
 	if !r.followAccent {
 		return
 	}
-	r.pal = r.base
-	if accent != 0 {
-		r.pal[0] = r.base[0].WithAccent(accent)
-		r.pal[1] = r.base[1].WithAccent(accent)
-	}
 	r.acc = accent
+	r.palettes()
 	r.applyRoles()
 	r.Mix(r.T)
+}
+
+// Retint makes the accent light in light mode and dark in dark in a running
+// window, over the theme's and the system's: the app's colour of the moment
+// (Zap's spaces each take their own). The roles change as Theme.SetAccent
+// changes them: OnAccent readable on it, Link deepened or lifted until it
+// reads, the focus ring's and the selection's hue. 0, 0 returns to the
+// theme's accent. Calling it again with the same colours does nothing, so a
+// window may call it every frame; it allocates nothing.
+func (r *Resolved) Retint(light, dark uint32) {
+	if r.tint == [2]uint32{light, dark} {
+		return
+	}
+	r.tint = [2]uint32{light, dark}
+	r.palettes()
+	r.applyRoles()
+	r.Mix(r.T)
+}
+
+// palettes applies the system's accent (when followed) and Retint's to the
+// theme's palettes.
+func (r *Resolved) palettes() {
+	for m := range r.pal {
+		p := r.base[m]
+		if r.followAccent && r.acc != 0 {
+			p = p.WithAccent(r.acc)
+		}
+		if a := r.tint[m]; a != 0 {
+			p = p.WithAccent(a)
+			p.OnAccent = onAccent(p.Accent)
+		}
+		r.pal[m] = p
+	}
+}
+
+// onAccent is the label colour on accent a: white where it reads at 4.5:1,
+// near-black where it does not.
+func onAccent(a uint32) uint32 {
+	if Contrast(0xFFFFFFFF, a) < 4.5 {
+		return 0x111111FF
+	}
+	return 0xFFFFFFFF
 }
 
 // SetSystem applies what the system says (the Follower calls it when that
@@ -419,6 +458,12 @@ func (r *Resolved) applyRoles() {
 			c[Accent] = a
 			c[FocusRing] = a&^0xFF | c[FocusRing]&0xFF
 			c[Selection] = a
+		}
+		if a := r.tint[m] | 0xFF; r.tint[m] != 0 {
+			p := &r.base[m]
+			c[Accent], c[Selection], c[OnAccent] = a, a, onAccent(a)
+			c[FocusRing] = a&^0xFF | c[FocusRing]&0xFF
+			c[Link] = readableOn(a, m == 1, [3]uint32{p.Background, p.Surface, p.SurfaceRaised})
 		}
 		derive(&c, m, r.rolesBase[m][SidebarSel])
 		r.roles[m] = c

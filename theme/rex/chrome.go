@@ -140,18 +140,35 @@ func (ch *chrome) BeginSurface(c *ui.Context, r *theme.Resolved, s theme.Surface
 		if !flat {
 			ch.drawFill(c, r, s, &kg)
 		}
-		// Top highlight and bottom glow, straight parts of the edges only.
+		// Top highlight and bottom glow, the pane's whole width and round its
+		// corners (the pane's clip is square: each takes the corners' radii,
+		// at least as tall as they are, so that it ends where the pane does
+		// rather than short of the corners).
 		x0, x1 := rad, w-rad
-		theme.At(c, x0, 0, x1-x0, 11*kk)
+		th := max(11*kk, rad)
+		theme.At(c, 0, 0, w, th)
 		hi, hi0 := tone(r, 0xFFFFFF, 0xFFFFFF, 1, 0.035, dim), tone(r, 0xFFFFFF, 0xFFFFFF, 1, 0.035, 0)
 		c.NextBG4(hi, hi, hi0, hi0)
+		c.NextRadii(rad, rad, 0, 0)
 		c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
-		theme.At(c, x0, h-16*kk, x1-x0, 13*kk)
+		gh := max(16*kk, rad)
+		theme.At(c, 0, h-gh, w, gh-3*kk)
 		gl, gl0 := tone(r, 0xFFFFE8, 0xFFEFD0, 0.6, 0.05, dim), tone(r, 0xFFFFE8, 0xFFEFD0, 0.6, 0.05, 0)
 		c.NextBG4(gl0, gl0, gl, gl)
+		c.NextRadii(0, 0, max(rad-3*kk, 0), max(rad-3*kk, 0))
 		c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
-		theme.At(c, x0, h-3*kk, x1-x0, kk)
-		c.NextBG(tone(r, 0xFFFFF4, 0xFFFFFF, 0.85, 0, dim))
+		// a glint along the foot, fading out toward the corners
+		glint := tone(r, 0xFFFFF4, 0xFFFFFF, 0.85, 0, dim)
+		g0 := glint &^ 0xFF
+		capW := min(rad, (x1-x0)/2)
+		theme.At(c, x0, h-3*kk, capW, kk)
+		c.NextBG4(g0, glint, g0, glint)
+		c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
+		theme.At(c, x0+capW, h-3*kk, max(x1-x0-2*capW, 0), kk)
+		c.NextBG(glint)
+		c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
+		theme.At(c, x1-capW, h-3*kk, capW, kk)
+		c.NextBG4(glint, g0, glint, g0)
 		c.BoxKeyed(ui.DrawBackground|fl, kg.Next(), nil)
 		// The last row is a darker line, like the sides' hairline.
 		theme.At(c, x0, h-kk, x1-x0, kk)

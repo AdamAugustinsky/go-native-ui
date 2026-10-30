@@ -132,6 +132,11 @@ type KeyEvent struct {
 	Down bool
 	// Repeat is true for the auto-repeat of a held key.
 	Repeat bool
+	// Time is when the key went down or up, in the platform's monotonic
+	// nanoseconds (platform.Now's timebase); 0 when the platform does not
+	// say. Several keys can come in one frame: this tells them apart, so an
+	// app can read a rhythm (typing against a lone shortcut).
+	Time int64
 	// Char is the character the key types on the user's layout, as
 	// platform.Event.Char gives it (printable ASCII, lower case, never the
 	// shifted one), whatever the modifiers; 0 when the key types none or
