@@ -22,6 +22,9 @@ type shelf struct {
 }
 
 type page struct {
+	head   int32  // intrusive list of resident entries
+	seen   uint64 // eviction operation that last inspected this page
+	cold   bool   // all residents may be evicted in that operation
 	tex    gpu.TextureID
 	dim    int32 // actual texture size; later pages do not relocate this one's UVs
 	shelf  [maxShelf]shelf

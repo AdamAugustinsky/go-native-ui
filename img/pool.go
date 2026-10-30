@@ -2,19 +2,9 @@ package img
 
 import (
 	"sync/atomic"
-	"unsafe"
 
 	"gonativeui/core"
 )
-
-// pixbuf is a pooled buffer: decoded pixels, or a copy of inline source
-// bytes. Its memory is C memory on macOS (outside the Go heap, so decoded
-// images do not pace the collector) and a Go array elsewhere.
-type pixbuf struct {
-	mem  unsafe.Pointer
-	size int
-	keep []byte // the Go array (not macOS), kept reachable here
-}
 
 // bufPool hands out buffers by index. The table has a fixed length, so a
 // buffer's record never moves: its owner reads it without the lock once the
@@ -83,7 +73,7 @@ func (p *bufPool) get(n int, fr *cframe) int32 {
 		p.free = p.free[:len(p.free)-1]
 		d := &p.bufs[j]
 		p.freeBytes -= int64(d.size)
-		freeMem(d.mem, fr)
+		d.free(fr)
 		*d = pixbuf{}
 		p.unused = append(p.unused, j)
 	}
@@ -96,8 +86,7 @@ func (p *bufPool) get(n int, fr *cframe) int32 {
 	p.inUse += int64(n)
 	p.mu.Unlock()
 	b := &p.bufs[i]
-	b.mem, b.keep = allocMem(n, fr)
-	b.size = n
+	b.alloc(n, fr)
 	return i
 }
 
@@ -107,7 +96,7 @@ func (p *bufPool) size(i int32) int64 { return int64(p.bufs[i].size) }
 
 // bytes is buffer i's memory, n bytes long.
 func (p *bufPool) bytes(i int32, n int) []byte {
-	return unsafe.Slice((*byte)(p.bufs[i].mem), n)
+	return p.bufs[i].bytes(n)
 }
 
 // put returns buffer i. Free memory beyond the pool's limits is released,
@@ -141,7 +130,7 @@ func (p *bufPool) release(limit int64, fr *cframe) {
 		p.free = p.free[:len(p.free)-1]
 		d := &p.bufs[j]
 		p.freeBytes -= int64(d.size)
-		freeMem(d.mem, fr)
+		d.free(fr)
 		*d = pixbuf{}
 		p.unused = append(p.unused, j)
 	}
@@ -177,7 +166,7 @@ func (p *bufPool) drain(fr *cframe) {
 	p.mu.Lock()
 	for _, j := range p.free {
 		d := &p.bufs[j]
-		freeMem(d.mem, fr)
+		d.free(fr)
 		*d = pixbuf{}
 		p.unused = append(p.unused, j)
 	}
