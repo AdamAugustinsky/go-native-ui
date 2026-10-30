@@ -4,6 +4,7 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,9 +74,26 @@ func rexlookAllowed(f ui.Finding) bool {
 // nudges it DisclosureDX (0.5 pt, measured on AppKit) right of its 13 pt hit
 // box's middle, and at 1× the chevron is as wide as the box, so it reaches a
 // pixel past it; the ink is inside.
+//
+// Off macOS it also takes the gallery's fontWide samples (catalogueFontWide in
+// cmd/gallery/gallery): their frames are AppKit's, measured on macOS, and the
+// system's font is wider than San Francisco.
 func galleryAllowed(f ui.Finding) bool {
-	return f.Check == ui.AuditOverflow && f.Delta <= 1 && strings.HasPrefix(f.Where, "image {floating} in ListItem ") &&
-		strings.HasPrefix(f.OtherWhere, "box {floating clickable} in ListItem ")
+	if f.Check != ui.AuditOverflow {
+		return false
+	}
+	if f.Delta <= 1 && strings.HasPrefix(f.Where, "image {floating} in ListItem ") && strings.HasPrefix(f.OtherWhere, "box {floating clickable} in ListItem ") {
+		return true
+	}
+	if runtime.GOOS == "darwin" {
+		return false
+	}
+	for _, w := range [...]string{`Link "Learn more"`, `Label "Large Title`, `Group "Name:"`, `Group "Email address:"`} {
+		if strings.HasPrefix(f.Where, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // userSeeds reads the seeds and steps from the environment; explore is the
