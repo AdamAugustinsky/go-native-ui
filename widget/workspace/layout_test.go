@@ -590,3 +590,12 @@ func TestSoloKeepsFocusAndUnfix(t *testing.T) {
 		t.Errorf("Unfix left the list at %v pt", l.Fixed(zList))
 	}
 }
+
+// Reset keeps the key and the options set before it.
+func TestResetKeepsOptions(t *testing.T) {
+	l := Layout{Key: 7, SoloKeepsFocus: true, DividersOffTab: true}
+	l.Reset(1)
+	if l.Key != 7 || !l.SoloKeepsFocus || !l.DividersOffTab {
+		t.Errorf("after Reset: key %v, SoloKeepsFocus %v, DividersOffTab %v", l.Key, l.SoloKeepsFocus, l.DividersOffTab)
+	}
+}

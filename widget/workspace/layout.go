@@ -154,10 +154,10 @@ type Layout struct {
 	kbd   bool // the keyboard moved the focus: NextPane announces it
 }
 
-// Reset makes the layout a single pane, focused.
+// Reset makes the layout a single pane, focused. Key and the options
+// (SoloKeepsFocus, DividersOffTab) are kept.
 func (l *Layout) Reset(id PaneID) {
-	key := l.Key
-	*l = Layout{Key: key, root: -1}
+	*l = Layout{Key: l.Key, SoloKeepsFocus: l.SoloKeepsFocus, DividersOffTab: l.DividersOffTab, root: -1}
 	if id == 0 {
 		return
 	}

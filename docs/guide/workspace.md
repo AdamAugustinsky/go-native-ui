@@ -24,7 +24,7 @@ A `workspace.Layout` is app-owned, pointer-free state in fixed arrays, at most
 | `Close(id)` | takes the pane out; its neighbour takes the room |
 | `SetHidden(id, bool)` | the pane keeps its place and size, with no room |
 | `SetEmpty(id, bool)` | the pane stays on screen, but the focus passes it by |
-| `SetSolo(id)` | one pane over the whole work area (a narrow window); it takes the focus unless `SoloKeepsFocus` |
+| `SetSolo(id)` | one pane over the whole work area (a narrow window); it takes the focus unless `SoloKeepsFocus`. While a pane is solo, `SetFocus` cannot reach the others: to focus a newly opened pane, `SetSolo(0)`, `SetFocus`, then set the solo pane again |
 | `SetZoom(id)` | one pane maximised; the others keep their rects for the animation |
 | `SetLimits(id, Limits{Min, Max, Yield})` | least and greatest size in points; `Yield` gives up the room instead of squeezing |
 | `SetFixed(id, pt)` / `Fixed(id)` / `Unfix(id)` | the pane keeps a size in points instead of a share; drags change it. `pt` 0 or less is `Unfix`, so clamp a stored size first |
