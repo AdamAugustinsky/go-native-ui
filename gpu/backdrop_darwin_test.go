@@ -19,6 +19,34 @@ import (
 	"gonativeui/internal/objc"
 )
 
+func TestBackdropCapacityAcrossTargets(t *testing.T) {
+	r := newTestRenderer(t)
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	r.sizeBackdrops(401, 41, 1600, 1000)
+	first := r.bd.tex
+	for range 2 * instanceCalmFrames {
+		r.sizeBackdrops(201, 31, 800, 600)
+		r.sizeBackdrops(401, 41, 1600, 1000)
+	}
+	if r.bd.tex != first {
+		t.Fatal("alternating targets replaced sufficient capacity")
+	}
+	for range instanceCalmFrames {
+		r.sizeBackdrops(40, 10, 800, 600)
+	}
+	if r.bd.tw != 128 || r.bd.th != 32 || r.bd.tex == first {
+		t.Fatalf("sustained small demand retains %dx%d", r.bd.tw, r.bd.th)
+	}
+	shrunk := r.bd.tex
+	for range 2 * instanceCalmFrames {
+		r.sizeBackdrops(40, 10, 800, 600)
+	}
+	if r.bd.tex != shrunk {
+		t.Fatal("steady small demand churned scratch textures")
+	}
+}
+
 // bdModel is the CPU model of a backdrop, step by step as backdrop_darwin.go
 // computes it: the region's down×down block means (bilinear taps clamped to
 // the region's pixel centres), a separable Gaussian with normalised edges,

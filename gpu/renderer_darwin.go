@@ -33,9 +33,6 @@ var ErrNoDevice = errors.New("gpu: no Metal device")
 // buffer.
 const ringSlots = 3
 
-// initialQuads is the starting instance capacity of every ring slot.
-const initialQuads = 4096
-
 // stageFloor is the smallest staging buffer: glyph updates are small.
 const stageFloor = 64 << 10
 
@@ -43,10 +40,6 @@ const stageFloor = 64 << 10
 // quarter of its staging buffer before the buffer shrinks (each slot has
 // every third frame: about three seconds at 60 Hz).
 const stageCalmFrames = 60
-
-// runTextures matches quadMSL's table at texture slots 3..10. Slots 0..2
-// remain the backdrop/YUV bindings, whose runs cannot share conversions.
-const runTextures = 8
 
 var (
 	rsNewBuffer    = objc.Sel("newBufferWithLength:options:")
@@ -92,6 +85,7 @@ var (
 	rsSetVBytes    = objc.Sel("setVertexBytes:length:atIndex:")
 	rsSetFSampler  = objc.Sel("setFragmentSamplerState:atIndex:")
 	rsSetFTexture  = objc.Sel("setFragmentTexture:atIndex:")
+	rsSetFTextures = objc.Sel("setFragmentTextures:withRange:")
 	rsDraw         = objc.Sel("drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:")
 	rsReplace      = objc.Sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:")
 	rsGetBytes     = objc.Sel("getBytes:bytesPerRow:fromRegion:mipmapLevel:")
@@ -139,6 +133,7 @@ func loadMetal() error {
 }
 
 type ringSlot struct {
+	demand instanceDemand
 	buf    objc.ID
 	mem    unsafe.Pointer // contents of buf (persistently mapped)
 	quads  int            // capacity in quads
@@ -211,6 +206,7 @@ type Renderer struct {
 	offW, offH        int
 	readback          []byte
 	bd                backdropKit
+	bindings          [3 + runTextures]objc.ID // stable memory for setFragmentTextures:withRange:
 	destroyed         bool
 }
 
@@ -364,6 +360,9 @@ func (r *Renderer) FreeTexture(t TextureID) {
 	if !ok || i == 0 || (r.kinds[i] == texYUV && !r.xtex[i].owned) { // an import is the renderer's to end
 		return
 	}
+	// Poll once when a batch of frees begins. Collect at the safe point (or
+	// the next Encode) retires the rest, even if no further free follows.
+	collect := len(r.retiring) == 0
 	r.retiring = append(r.retiring, retiredTex{r.textures[i], r.serial, r.ids.remove(i)})
 	for _, p := range r.xtex[i].planes {
 		if p != 0 {
@@ -371,7 +370,9 @@ func (r *Renderer) FreeTexture(t TextureID) {
 		}
 	}
 	r.textures[i], r.xtex[i] = 0, xtex{}
-	r.collect()
+	if collect {
+		r.collect()
+	}
 }
 
 // TextureCounts reports the live textures (texture 0 included) and the freed
@@ -397,24 +398,28 @@ func (r *Renderer) TextureBytes() int64 {
 // without waiting, and releases the freed textures no unfinished frame may
 // sample. A command buffer that is not committed yet is unfinished: it
 // retires only when Encode reuses its slot.
-func (r *Renderer) collect() {
+func (r *Renderer) collect() (committed bool) {
 	pending := r.serial + 1 // the oldest frame still to finish
 	for i := range r.slots {
 		s := &r.slots[i]
-		if s.ucb != 0 && objc.Send(s.ucb, rsStatus) >= 4 { // Completed, Error
-			r.noteCompleted(s.ucb)
-			objc.Release(s.ucb)
-			s.ucb = 0
-			s.stageLen = 0
-		}
-		if s.cb != 0 && objc.Send(s.cb, rsStatus) >= 4 {
-			r.noteCompleted(s.cb)
-			objc.Release(s.cb)
-			s.cb = 0
-			r.releaseLeases(s)
-		}
-		if s.cb != 0 || s.ucb != 0 {
-			pending = min(pending, s.serial)
+		for k, cb := range [2]objc.ID{s.ucb, s.cb} {
+			if cb == 0 {
+				continue
+			}
+			st := objc.Send(cb, rsStatus)
+			if st >= 4 { // Completed, Error
+				r.noteCompleted(cb, st)
+				objc.Release(cb)
+				if k == 0 {
+					s.ucb, s.stageLen = 0, 0
+				} else {
+					s.cb = 0
+					r.releaseLeases(s)
+				}
+			} else {
+				pending = min(pending, s.serial)
+				committed = committed || st >= 2
+			}
 		}
 	}
 	if r.waker != 0 && objc.Send(r.waker, rsStatus) >= 4 {
@@ -432,6 +437,7 @@ func (r *Renderer) collect() {
 	}
 	clear(r.retiring[n:])
 	r.retiring = r.retiring[:n]
+	return committed
 }
 
 // mtlErrorDeviceRemoved is MTLCommandBufferErrorDeviceRemoved: the GPU was
@@ -440,8 +446,8 @@ const mtlErrorDeviceRemoved = 11
 
 // noteCompleted reads the outcome of a finished command buffer: one that
 // failed because the device was removed makes the renderer lost.
-func (r *Renderer) noteCompleted(cb objc.ID) {
-	if objc.Send(cb, rsStatus) != 5 { // Error
+func (r *Renderer) noteCompleted(cb objc.ID, status objc.ID) {
+	if status != 5 { // Error
 		return
 	}
 	if e := objc.Send(cb, rsCBError); e != 0 && objc.Send(e, rsCode) == mtlErrorDeviceRemoved {
@@ -461,25 +467,10 @@ func (r *Renderer) Collect() {
 	if r.ext.leased == 0 && len(r.retiring) == 0 && r.waker == 0 {
 		return
 	}
-	r.collect()
-	if len(r.retiring) > 0 && r.waker == 0 && r.committedInFlight() {
+	committed := r.collect()
+	if len(r.retiring) > 0 && r.waker == 0 && committed {
 		r.armWake()
 	}
-}
-
-// committedInFlight reports whether a ring slot's frame or staged upload is
-// committed to the GPU and has not completed.
-func (r *Renderer) committedInFlight() bool {
-	for i := range r.slots {
-		for _, cb := range [2]objc.ID{r.slots[i].cb, r.slots[i].ucb} {
-			if cb != 0 {
-				if st := objc.Send(cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 var (
@@ -716,13 +707,7 @@ func (r *Renderer) waitSubmitted(i int) {
 // growSlot (re)allocates a ring slot's instance buffer. The caller must have
 // retired the slot's previous command buffer first.
 func (r *Renderer) growSlot(s *ringSlot, quads int) error {
-	n := s.quads
-	if n == 0 {
-		n = initialQuads
-	}
-	for n < quads {
-		n *= 2
-	}
+	n := sizeClass(quads, initialQuads)
 	buf := objc.Send2(r.device, rsNewBuffer, uintptr(n*quadSize), 0) // MTLResourceStorageModeShared
 	if buf == 0 {
 		return errors.New("gpu: instance buffer allocation failed")
@@ -741,22 +726,22 @@ func (r *Renderer) growSlot(s *ringSlot, quads int) error {
 // handler, so no callbacks and no Go allocation. A command buffer that was
 // never committed is dropped without waiting.
 func (r *Renderer) retire(s *ringSlot) {
-	if s.ucb != 0 { // committed by flushStaged
-		if st := objc.Send(s.ucb, rsStatus); st >= 2 && st < 4 {
-			objc.Send(s.ucb, rsWait)
+	for _, cb := range [2]objc.ID{s.ucb, s.cb} {
+		if cb == 0 {
+			continue
 		}
-		objc.Release(s.ucb)
-		s.ucb = 0
+		st := objc.Send(cb, rsStatus)
+		if st >= 2 && st < 4 { // Committed, Scheduled
+			objc.Send(cb, rsWait)
+			st = objc.Send(cb, rsStatus)
+		}
+		r.noteCompleted(cb, st)
+		objc.Release(cb)
+	}
+	if s.ucb != 0 {
 		s.stageLen = 0
 	}
-	if s.cb != 0 {
-		if st := objc.Send(s.cb, rsStatus); st >= 2 && st < 4 { // Committed, Scheduled
-			objc.Send(s.cb, rsWait)
-		}
-		r.noteCompleted(s.cb)
-		objc.Release(s.cb)
-		s.cb = 0
-	}
+	s.ucb, s.cb = 0, 0
 	r.releaseLeases(s)
 	if s.stageShrink > 0 && s.stageLen == 0 { // its upload is done and nothing is staged
 		if s.stageShrink < s.stageCap {
@@ -779,7 +764,7 @@ func (r *Renderer) retire(s *ringSlot) {
 // not be committed later.
 //
 // Encode allocates nothing on the Go heap once the renderer and list are
-// warm. It grows the ring slot only if the list is larger than any before.
+// warm. Instance capacity follows demand with hysteresis (capacity.go).
 func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]float32, list *DrawList) {
 	r.draws = 0
 	if width <= 0 || height <= 0 {
@@ -808,8 +793,8 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 			extra = len(list.Backdrops)
 		}
 	}
-	if len(quads)+extra > s.quads {
-		if err := r.growSlot(s, len(quads)+extra); err != nil {
+	if n := s.demand.capacity(s.quads, len(quads)+extra); n != s.quads {
+		if err := r.growSlot(s, n); err != nil {
 			panic(err)
 		}
 	}
@@ -831,18 +816,19 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		all := unsafe.Slice((*Quad)(s.mem), len(quads)+extra)
 		inst = all[:len(quads)]
 		blur, pre = r.prepareBackdrops(target, width, height, list, inst, all[len(quads):])
+	} else {
+		r.sizeBackdrops(0, 0, width, height)
 	}
 	objc.Send1(r.color0, rsSetTexture, target)
 	F.Reset().Arg(uintptr(r.color0)).Arg(uintptr(rsSetClear)).
 		ArgRect(float64(clear[0]), float64(clear[1]), float64(clear[2]), float64(clear[3])).Call(objc.MsgSend)
-	enc := r.beginPass(cmdBuf, r.rpd, s)
+	enc := r.beginPass(cmdBuf, r.rpd, s, r.textures[0])
 
 	// Shape quads join the open run. Plain textures share a small table;
 	// only table overflow, YUV conversion changes and backdrops end a run.
 	var table [runTextures]TextureID
 	ntex := 0
 	bound, yuv := TextureID(0), false
-	objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
 	r.use(s, 0)
 	if pre > 0 {
 		r.draw(enc, len(quads), pre)
@@ -862,8 +848,7 @@ nextQuad:
 			b := list.Backdrops[q.Tex]
 			r.encodeBackdrop(objc.ID(cmdBuf), target, width, height, q, &b, &inst[i])
 			objc.Send1(r.bd.loadCol0, rsSetTexture, target)
-			enc = r.beginPass(cmdBuf, r.bd.load, s)
-			objc.Send2(enc, rsSetFTexture, uintptr(r.bd.tex[0]), 0)
+			enc = r.beginPass(cmdBuf, r.bd.load, s, r.bd.tex[0])
 			r.draw(enc, i, 1)
 			bound, yuv = 0, false
 			ntex = 0
@@ -916,7 +901,7 @@ nextQuad:
 
 // beginPass begins an encoder of the main pass with descriptor rpd (its
 // target set) and binds the quad pipeline and slot s's instances.
-func (r *Renderer) beginPass(cmdBuf uintptr, rpd objc.ID, s *ringSlot) objc.ID {
+func (r *Renderer) beginPass(cmdBuf uintptr, rpd objc.ID, s *ringSlot, texture objc.ID) objc.ID {
 	enc := objc.Send1(objc.ID(cmdBuf), rsEncoder, uintptr(rpd))
 	objc.Send1(enc, rsSetPipeline, uintptr(r.pipeline))
 	objc.Send3(enc, rsSetVBuffer, uintptr(s.buf), 0, 0)
@@ -924,9 +909,12 @@ func (r *Renderer) beginPass(cmdBuf uintptr, rpd objc.ID, s *ringSlot) objc.ID {
 	objc.Send3(enc, rsSetVBytes, uintptr(unsafe.Pointer(&viewportArg)), 8, 1)
 	objc.Send2(enc, rsSetFSampler, uintptr(r.sampler), 0)
 	r.beginYUV(enc)
-	for slot := range runTextures {
-		objc.Send2(enc, rsSetFTexture, uintptr(r.empty), uintptr(3+slot))
+	r.bindings[0] = texture
+	for slot := 1; slot < len(r.bindings); slot++ {
+		r.bindings[slot] = r.empty
 	}
+	// NSRange is two integer registers on arm64.
+	objc.Send3(enc, rsSetFTextures, uintptr(unsafe.Pointer(&r.bindings[0])), 0, uintptr(len(r.bindings)))
 	return enc
 }
 

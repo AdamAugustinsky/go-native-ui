@@ -277,12 +277,18 @@ func backdropsAsShapes(dst []Quad, l *DrawList) {
 func backdropShape(dst []Quad, i int, l *DrawList) {
 	q := &dst[i]
 	b, ok := l.backdropOf(q)
-	if ok && b.Base&0xFF != 0 && backdropOverNothing(l.Quads, i) {
+	backdropFallback(q, b, ok && b.Base&0xFF != 0 && backdropOverNothing(l.Quads, i))
+}
+
+// backdropFallback uses the caller's overlap result, avoiding a second
+// prefix scan when Metal has already decided whether to blur the quad.
+func backdropFallback(q *Quad, b Backdrop, emptyBase bool) {
+	if emptyBase {
 		c := b.Over(b.Base)
 		q.Color = [4]uint32{c, c, c, c}
 	}
 	q.Mode = ModeShape
-	if from, to, fades := fadeSpan(q, &b); ok && fades {
+	if from, to, fades := fadeSpan(q, &b); fades {
 		fadeShape(q, from, to)
 	}
 }

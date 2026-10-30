@@ -353,7 +353,7 @@ func TestBatching(t *testing.T) {
 
 func TestRingGrowth(t *testing.T) {
 	r := newTestRenderer(t)
-	const n = initialQuads*2 + 100
+	const n = 1<<13 + 100
 	list := &DrawList{}
 	for i := 0; i < n; i++ {
 		x := float32(i % 200)

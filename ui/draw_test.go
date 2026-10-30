@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"runtime"
 	"testing"
 
 	"gonativeui/gpu"
@@ -8,6 +9,52 @@ import (
 )
 
 func quadsOf(h *harness) []gpu.Quad { return h.list.Quads }
+
+func TestShadowBandsMatchFullShadow(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	renderer, err := gpu.NewOffscreenRenderer()
+	if err != nil {
+		t.Skip(err)
+	}
+	defer renderer.Destroy()
+	h := newHarness(t, 160, 120)
+	h.frame(func(c *Context) {
+		c.NextSize(Px(120), Px(80))
+		c.Box(0, "card")
+	})
+	b := &h.c.boxes[h.c.order[1]]
+	b.flags = DrawBackground | DrawShadow | DrawBorder
+	b.rect = [4]float32{20.25, 20.75, 140.25, 100.75}
+	b.bd.Width, b.bd.Color = 3, 0x11223380
+	b.radii = [4]float32{8, 16, 12, 4}
+	clip := [4]float32{10.25, 9.75, 150.25, 110.75}
+	got, want := make([]byte, 160*120*4), make([]byte, 160*120*4)
+	for _, opacity := range []float32{1, 0.5} {
+		for _, alpha := range []uint32{255, 128} {
+			for _, fade := range [][2]float32{{}, {80, 150}} {
+				for _, sigma := range []float32{0, 1.5, 5} {
+					b.opacity = opacity
+					b.bg = [4]uint32{0xFF000000 | alpha, 0x00FF0000 | alpha, 0x0000FF00 | alpha, 0xFFFFFF00 | alpha}
+					b.shadow[0] = Shadow{OffX: -7.5, OffY: 12.25, Sigma: sigma, Color: 0x123456FF}
+					h.c.emitFade = fade
+					var bands gpu.DrawList
+					h.c.emit(&bands, h.c.order[1], clip)
+					full := gpu.DrawList{Quads: []gpu.Quad{bands.Quads[0], bands.Quads[len(bands.Quads)-1]}}
+					full.Quads[0].Clip = clip
+					renderer.RenderToRGBA(160, 120, [4]float32{}, &bands, got)
+					renderer.RenderToRGBA(160, 120, [4]float32{}, &full, want)
+					for i := range got {
+						d := int(got[i]) - int(want[i])
+						if d < -1 || d > 1 {
+							t.Fatalf("opacity %g alpha %d fade %v sigma %g: byte %d is %d, want %d", opacity, alpha, fade, sigma, i, got[i], want[i])
+						}
+					}
+				}
+			}
+		}
+	}
+}
 
 func TestEmitOrderAndStyle(t *testing.T) {
 	h := newHarness(t, 400, 300)
@@ -25,21 +72,21 @@ func TestEmitOrderAndStyle(t *testing.T) {
 		c.Pop()
 	})
 	qs := quadsOf(h)
-	if len(qs) != 4 {
-		t.Fatalf("%d quads, want shadow, shadow, card, child", len(qs))
+	if len(qs) != 10 {
+		t.Fatalf("%d quads, want eight shadow bands, card, child", len(qs))
 	}
 	if qs[0].Soft != 6 || qs[0].Rect != [4]float32{0, 4, 100, 64} || qs[0].Radii != [4]float32{8, 8, 8, 8} {
 		t.Errorf("shadow 0: %+v", qs[0])
 	}
-	if qs[1].Soft != 2 {
-		t.Errorf("shadow 1: %+v", qs[1])
+	if qs[4].Soft != 2 {
+		t.Errorf("shadow 1: %+v", qs[4])
 	}
-	card := qs[2]
+	card := qs[8]
 	if card.Mode != gpu.ModeShape || card.Color != [4]uint32{0xFF0000FF, 0x00FF00FF, 0x0000FFFF, 0xFFFFFFFF} ||
 		card.Border != 2 || card.BorderColor != 0x112233FF || card.Soft != 0 || card.Clip != [4]float32{0, 0, 400, 300} {
 		t.Errorf("card: %+v", card)
 	}
-	child := qs[3]
+	child := qs[9]
 	if child.Clip != [4]float32{0, 0, 100, 60} || child.Rect != [4]float32{0, 0, 10, 10} {
 		t.Errorf("child must be clipped to the card: %+v", child)
 	}

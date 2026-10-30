@@ -301,6 +301,19 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 	sized := r[2] > r[0] && r[3] > r[1]
 
 	if b.flags&DrawShadow != 0 {
+		// Only the background's fully opaque interior hides the shadow.
+		// Integer band edges keep adjacent clips from blending twice.
+		opaque := sized && b.flags&DrawBackground != 0 && b.bdrop == 0 && c.emitFade == [2]float32{}
+		for _, bg := range b.bg {
+			opaque = opaque && b.col(bg)&255 == 255
+		}
+		var hole [4]float32
+		if opaque {
+			inset := max(b.radii[0], b.radii[1], b.radii[2], b.radii[3], 0) + max(b.bd.Width, 0) + 1
+			hole = [4]float32{float32(math.Ceil(float64(r[0] + inset))), float32(math.Ceil(float64(r[1] + inset))),
+				float32(math.Floor(float64(r[2] - inset))), float32(math.Floor(float64(r[3] - inset)))}
+			opaque = !empty(hole)
+		}
 		for i := range b.shadow {
 			s := &b.shadow[i]
 			if s.Color&255 == 0 {
@@ -312,6 +325,21 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 				continue
 			}
 			col := b.col(s.Color)
+			if opaque {
+				for _, band := range [4][4]float32{
+					{clip[0], clip[1], clip[2], min(clip[3], hole[1])},
+					{clip[0], max(clip[1], hole[3]), clip[2], clip[3]},
+					{clip[0], max(clip[1], hole[1]), min(clip[2], hole[0]), min(clip[3], hole[3])},
+					{max(clip[0], hole[2]), max(clip[1], hole[1]), clip[2], min(clip[3], hole[3])},
+				} {
+					if empty(band) {
+						continue
+					}
+					q := c.quad(l)
+					q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, band, [4]uint32{col, col, col, col}, b.radii, s.Sigma
+				}
+				continue
+			}
 			q := c.quad(l)
 			q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, clip, [4]uint32{col, col, col, col}, b.radii, s.Sigma
 		}

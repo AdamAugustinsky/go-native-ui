@@ -274,9 +274,6 @@ const (
 // even WARP).
 var ErrNoDevice = errors.New("gpu: no Direct3D 11 device")
 
-// initialQuads is the starting capacity of the instance ring, in quads.
-const initialQuads = 4096
-
 // ringSlots is the number of frame fences in rotation (see textures.go).
 const ringSlots = 3
 
@@ -305,6 +302,7 @@ type retiredTex struct {
 //
 // Every pointer handed to the OS lives in a field of this heap object.
 type Renderer struct {
+	demand    instanceDemand
 	lossState // DeviceLost, Epoch: see devloss.go
 
 	dev, ctx   uintptr // ID3D11Device, ID3D11DeviceContext
@@ -338,7 +336,8 @@ type Renderer struct {
 	blob      uintptr
 	errBlob   uintptr
 	target    uintptr
-	srvArg    uintptr
+	srvArgs   [runTextures]uintptr
+	batches   []textureBatch
 	clear     [4]float32
 	blendFac  [4]float32
 	vp        viewport
@@ -495,9 +494,6 @@ func (r *Renderer) build() error {
 
 	r.stride = quadSize
 	r.blendFac = [4]float32{}
-	if err := r.growRing(initialQuads); err != nil {
-		return err
-	}
 
 	// The texture a quad naming a freed texture samples: one transparent texel.
 	r.emptyTex, r.emptySRV = r.newD3DTexture(TexRGBA8, 1, 1)
@@ -600,6 +596,7 @@ func (r *Renderer) releaseDeviceObjects() {
 		*p = 0
 	}
 	r.offW, r.offH = 0, 0
+	r.capQuads, r.head, r.demand = 0, 0, instanceDemand{}
 }
 
 // compile compiles quadHLSL's entry point with D3DCompile and returns the
@@ -634,13 +631,7 @@ func (r *Renderer) compile(entry, target []byte) (uintptr, error) {
 // The old buffer is released; D3D11 keeps it alive while queued commands
 // still read it.
 func (r *Renderer) growRing(quads int) error {
-	n := r.capQuads
-	if n == 0 {
-		n = initialQuads
-	}
-	for n < quads {
-		n *= 2
-	}
+	n := sizeClass(quads, initialQuads)
 	r.bd = bufferDesc{ByteWidth: uint32(n * quadSize), Usage: usageDynamic, BindFlags: bindVertexBuffer, CPUAccessFlags: cpuAccessWrite}
 	r.out = 0
 	if hr := win32.HR(win32.Com(r.dev, vtDeviceCreateBuffer, uintptr(unsafe.Pointer(&r.bd)), 0, uintptr(unsafe.Pointer(&r.out)))); hr < 0 {
@@ -839,8 +830,8 @@ func (r *Renderer) Stage(t TextureID, x, y, w, h int, pixels []byte, stride int)
 //
 // clear is written to the target as is, so it should be premultiplied. The
 // instance data is appended to the ring (see Renderer). Encode allocates
-// nothing on the Go heap once the renderer and list are warm; it grows the
-// ring only if the list is larger than any before.
+// nothing on the Go heap once the renderer and list are warm; instance capacity
+// follows demand with hysteresis (capacity.go).
 func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]float32, list *DrawList) {
 	r.draws = 0
 	if width <= 0 || height <= 0 {
@@ -855,8 +846,8 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	if list != nil {
 		quads = list.Quads
 	}
-	if len(quads) > r.capQuads {
-		if err := r.growRing(len(quads)); err != nil {
+	if n := r.demand.capacity(r.capQuads, len(quads)); n != r.capQuads {
+		if err := r.growRing(n); err != nil {
 			panic(err)
 		}
 	}
@@ -872,6 +863,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 		dst := unsafe.Slice((*Quad)(unsafe.Add(win32.Ptr(r.mapped.Data), r.head*quadSize)), n)
 		copy(dst, quads)
 		backdropsAsShapes(dst, list)
+		r.batches = textureBatches(r.batches, dst)
 		win32.Com(ctx, vtContextUnmap, r.vb, 0)
 		base = r.head
 		r.head += n
@@ -900,25 +892,19 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	win32.Com(ctx, vtContextPSSetShader, r.ps, 0, 0)
 	win32.Com(ctx, vtContextPSSetSamplers, 0, 1, uintptr(unsafe.Pointer(&r.sampler)))
 
-	// Shape quads don't read the bound texture, so they join whatever run is
-	// open; only a texture quad with a different texture ends it.
-	bound := TextureID(0)
-	r.bindTexture(ctx, bound)
-	runStart := 0
-	for i := range quads {
-		q := &quads[i]
-		if q.Mode == ModeShape || q.Mode == ModeCapsule || q.Mode == ModeBackdrop || q.Tex == bound {
-			continue
+	if len(quads) > 0 {
+		for _, b := range r.batches {
+			for slot := range r.srvArgs {
+				r.srvArgs[slot] = r.emptySRV
+				if slot < b.n {
+					if k, ok := r.ids.lookup(b.textures[slot]); ok {
+						r.srvArgs[slot] = r.srvs[k]
+					}
+				}
+			}
+			win32.Com(ctx, vtContextPSSetShaderResources, 0, runTextures, uintptr(unsafe.Pointer(&r.srvArgs[0])))
+			r.draw(ctx, base+b.first, b.count)
 		}
-		if i > runStart {
-			r.draw(ctx, base+runStart, i-runStart)
-		}
-		runStart = i
-		bound = q.Tex
-		r.bindTexture(ctx, bound)
-	}
-	if len(quads) > runStart {
-		r.draw(ctx, base+runStart, len(quads)-runStart)
 	}
 	r.fence()
 	runtime.KeepAlive(r)
@@ -927,15 +913,6 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 // Backdrops reports whether the renderer blurs ModeBackdrop quads: Direct3D
 // 11 does not yet, and draws their fallback colour.
 func (r *Renderer) Backdrops() bool { return false }
-
-// bindTexture binds texture t; a freed or unknown id binds the empty texture.
-func (r *Renderer) bindTexture(ctx uintptr, t TextureID) {
-	r.srvArg = r.emptySRV
-	if i, ok := r.ids.lookup(t); ok {
-		r.srvArg = r.srvs[i]
-	}
-	win32.Com(ctx, vtContextPSSetShaderResources, 0, 1, uintptr(unsafe.Pointer(&r.srvArg)))
-}
 
 // draw issues one instanced triangle-strip draw of count quads starting at
 // instance first (StartInstanceLocation, which offsets the per-instance

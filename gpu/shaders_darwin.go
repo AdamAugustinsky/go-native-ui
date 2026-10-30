@@ -128,6 +128,9 @@ static float rrect_shadow(float2 p, float4 rect, float4 radii, float sigma) {
 	float r = p.x < 0.0 ? (p.y < 0.0 ? radii.x : radii.w)
 	                    : (p.y < 0.0 ? radii.y : radii.z);
 	r = min(r, min(h.x, h.y));
+	if (all(abs(p) < h - (3.0 * sigma + r))) {
+		return 1.0;
+	}
 	float lo = p.y - h.y, hi = p.y + h.y;
 	float start = clamp(-3.0 * sigma, lo, hi);
 	float end = clamp(3.0 * sigma, lo, hi);
