@@ -137,7 +137,12 @@ func (c *compositor) prepare(full image.Rectangle, disp uint8) image.Rectangle {
 }
 
 // drawGIF composites opaque palette entries directly, skipping transparency.
-func (c *compositor) drawGIF(indices []byte, full image.Rectangle, pal *[256]uint32, disp uint8, interlaced bool) {
+func (c *compositor) drawGIF(indices []byte, full image.Rectangle, pal *[256]uint32, disp uint8, interlaced, opaque bool) {
+	// Opaque pixels overwrite the disposed area in the same pass. A frame
+	// that restores previous still needs the disposed pixels in its snapshot.
+	if opaque && disp != disposePrevious && c.prevRect.In(full) {
+		c.prevDisp = disposeNone
+	}
 	r := c.prepare(full, disp)
 	if r.Empty() {
 		return
@@ -157,9 +162,16 @@ func (c *compositor) drawGIF(indices []byte, full image.Rectangle, pal *[256]uin
 				continue
 			}
 			dst := c.canvas.Pix[c.canvas.PixOffset(r.Min.X, y):][:r.Dx()*4]
-			for x, v := range src[r.Min.X-full.Min.X : r.Max.X-full.Min.X] {
-				if p := pal[v]; p != 0 {
-					binary.LittleEndian.PutUint32(dst[x*4:], p)
+			src = src[r.Min.X-full.Min.X : r.Max.X-full.Min.X]
+			if opaque {
+				for x, v := range src {
+					binary.LittleEndian.PutUint32(dst[x*4:], pal[v])
+				}
+			} else {
+				for x, v := range src {
+					if p := pal[v]; p != 0 {
+						binary.LittleEndian.PutUint32(dst[x*4:], p)
+					}
 				}
 			}
 		}
