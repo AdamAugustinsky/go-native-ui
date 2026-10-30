@@ -131,6 +131,13 @@ func FuzzRunCacheDifferential(f *testing.F) {
 	for _, s := range diffTextSeeds {
 		f.Add([]byte(s), []byte{4, 16, 32, 0, 1, 2, 0, 2, 3, 0, 1, 2, 1, 1, 2, 2, 0, 0, 3, 0, 0})
 	}
+	// Leave a cold epoch behind while a hot run spans several epoch buckets.
+	trace := []byte{4, 64, 128, 0, 0, 0, 0, 1, 0}
+	for range 520 {
+		trace = append(trace, 1, 1, 0)
+	}
+	trace = append(trace, 0, 2, 0, 0, 3, 0, 0, 4, 0, 2, 0, 0)
+	f.Add([]byte("cold\x00hot\x00office fi\x00日本語\x00new"), trace)
 	s := workerSystem(f)
 	fonts := []FontKey{s.Font(FontDesc{SizePt: 13, Scale: 1}), s.Font(FontDesc{SizePt: 16, Scale: 1})}
 	f.Fuzz(func(t *testing.T, data, ops []byte) {

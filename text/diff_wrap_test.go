@@ -19,6 +19,7 @@ func diffEqualBuild(t *testing.T, got, want *paraBuild, p *Para) {
 func FuzzWrapDifferential(f *testing.F) {
 	for _, s := range diffTextSeeds {
 		f.Add([]byte(s), uint16(80), uint8(3), uint16(0))
+		f.Add([]byte(s), uint16(61), uint8(73), uint16(5))
 	}
 	s := workerSystem(f)
 	fonts := []FontKey{s.Font(FontDesc{SizePt: 13, Scale: 1}), s.Font(FontDesc{SizePt: 16, Scale: 1, Weight: 700})}

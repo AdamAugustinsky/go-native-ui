@@ -44,6 +44,9 @@ func FuzzPrefetchDifferential(f *testing.F) {
 	for _, s := range diffTextSeeds {
 		f.Add([]byte(s), []byte{4, 0, 0, 0, 0, 0, 0, 2, 1, 0, 0, 2, 1, 1, 0, 0, 3, 0, 0, 5, 0, 0})
 	}
+	f.Add([]byte("copied 日本語"), []byte{1,
+		0, 0, 0, 0, 1, 1, 0, 2, 2, 3, 1, 0, 2, 1, 0,
+		0, 0, 4, 0, 0, 4, 3, 8, 0, 0, 0, 5, 4, 0, 0, 5, 0, 0, 6, 0, 0, 0, 0, 0})
 	s, direct := workerSystem(f), workerSystem(f)
 	desc := FontDesc{SizePt: 13, Scale: 1}
 	font, df := s.Font(desc), direct.Font(desc)

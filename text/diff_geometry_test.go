@@ -79,6 +79,7 @@ func FuzzCaretDifferential(f *testing.F) {
 func FuzzRangeRectsDifferential(f *testing.F) {
 	for _, s := range diffTextSeeds {
 		f.Add([]byte(s), uint16(80), uint8(0), uint16(1))
+		f.Add([]byte(s), uint16(20), uint8(5), uint16(0xffff))
 	}
 	s := workerSystem(f)
 	font := s.Font(FontDesc{Family: "Helvetica Neue", SizePt: 13, Scale: 2})
