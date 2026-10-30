@@ -236,7 +236,7 @@ func TestResampleRGBAOrientations(t *testing.T) {
 	}
 	m := base.SubImage(image.Rect(3, 2, 19, 14)).(*image.RGBA)
 	for o := 1; o <= 8; o++ {
-		for _, size := range [][2]int{{8, 6}, {5, 7}, {1, 1}, {19, 23}} {
+		for _, size := range [][2]int{{8, 6}, {6, 8}, {5, 7}, {1, 1}, {19, 23}} {
 			stride := size[0]*4 + 8
 			want, got := make([]byte, stride*size[1]), make([]byte, stride*size[1])
 			resample(want, stride, size[0], size[1], rgbaReference{m}, o)

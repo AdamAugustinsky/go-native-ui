@@ -1,6 +1,7 @@
 package img
 
 import (
+	"encoding/binary"
 	"image"
 	"image/color"
 )
@@ -85,11 +86,15 @@ func resampleRGBA(dst []byte, stride, tw, th int, src *image.RGBA, orient int) {
 				d := dst[y*stride:][:tw*4]
 				p := base + 2*y*ys
 				for x := 0; x < tw; x++ {
-					a, b := src.Pix[p:][:4], src.Pix[p+xs:][:4]
-					c, e := src.Pix[p+ys:][:4], src.Pix[p+ys+xs:][:4]
-					for k := 0; k < 4; k++ {
-						d[x*4+k] = byte((uint16(a[k]) + uint16(b[k]) + uint16(c[k]) + uint16(e[k]) + 2) >> 2)
-					}
+					a := binary.LittleEndian.Uint32(src.Pix[p:])
+					b := binary.LittleEndian.Uint32(src.Pix[p+xs:])
+					c := binary.LittleEndian.Uint32(src.Pix[p+ys:])
+					e := binary.LittleEndian.Uint32(src.Pix[p+ys+xs:])
+					// Two 16-bit lanes hold four 8-bit sums without carry.
+					const mask, round = uint32(0x00ff00ff), uint32(0x00020002)
+					rb := (((a & mask) + (b & mask) + (c & mask) + (e & mask) + round) >> 2) & mask
+					ga := ((((a >> 8) & mask) + ((b >> 8) & mask) + ((c >> 8) & mask) + ((e >> 8) & mask) + round) >> 2) & mask
+					binary.LittleEndian.PutUint32(d[x*4:], rb|ga<<8)
 					p += 2 * xs
 				}
 			}
