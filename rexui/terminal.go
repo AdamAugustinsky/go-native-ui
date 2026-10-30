@@ -18,15 +18,16 @@ import (
 
 // Terminal draws a term.Terminal (libghostty-vt, D74) in the Rex terminal
 // palette and turns the user's keys, pointer, scrolling, focus and pastes
-// into the bytes the program expects. It owns no pty: the app feeds the
-// program's output with TerminalState.Feed and sends TerminalState.TakeInput
-// to the program, over a WebSocket for a3-app's remote terminal or to a
-// local pty (cmd/termdemo).
+// into the bytes the program expects. It owns no pty: the app writes the
+// program's output to the state's TerminalInbox (or Feeds it on the UI
+// thread) and sends TerminalState.TakeInput to the program, over a
+// WebSocket for a3-app's remote terminal or to a local pty (cmd/termdemo).
 //
 //	s, err := rexui.NewTerminal(term.Options{Scrollback: 5000})
+//	in := s.OpenInbox(rexui.TerminalInboxOpts{Wake: win.Wake})
+//	go func() { in.ReadFrom(ptyFile); in.Close() }() // blocks while the view is behind
 //	…
-//	s.Feed(bytesFromTheProgram) // on the UI thread
-//	sig := rexui.Terminal(k, "shell", s, rexui.TerminalOpts{})
+//	sig := rexui.Terminal(k, "shell", s, rexui.TerminalOpts{Scheduler: sched})
 //	if sig.Resized { /* tell the pty sig.Cols × sig.Rows */ }
 //	toProgram = s.TakeInput(toProgram[:0])
 //
@@ -67,10 +68,16 @@ import (
 //
 // # Output pacing
 //
-// Feed queues bytes; each frame parses them for at most
-// TerminalOpts.FeedBudget (4 ms) and asks for another frame when some
-// remain, so `cat` of a large file keeps the window drawing at the display's
-// rate while the library parses at its own speed.
+// Output reaches the view through a TerminalInbox (OpenInbox), which a
+// reader goroutine writes to and which blocks it while too much is queued,
+// or through Feed on the UI thread, which queues without a bound. Each frame
+// parses queued output for a bounded time and asks for another frame when
+// some remains, so `cat` of a large file keeps the window drawing at the
+// display's rate while the library parses at its own speed. Alone, a view
+// parses for TerminalOpts.FeedBudget (4 ms); a window with several shares
+// one budget through a TerminalScheduler (TerminalOpts.Scheduler), which
+// serves the focused pane first and lets hidden ones drain in turn. No
+// output is ever dropped. See docs/design/terminal-output-pacing.md.
 func Terminal(k *base.Kit, label string, s *TerminalState, o TerminalOpts) TerminalSignal {
 	c, r := k.Context(), k.Theme()
 	var sig TerminalSignal
@@ -124,7 +131,14 @@ func Terminal(k *base.Kit, label string, s *TerminalState, o TerminalOpts) Termi
 	sig.Cols, sig.Rows = s.T.Size()
 
 	s.input(c, id, key, focused, pad, o, &sig)
-	s.feed(c, o)
+	if q := o.Scheduler; q != nil {
+		q.Add(s)
+		s.feedCap, s.wantFocus = o.FeedBudget, focused || o.Focus >= 0.5
+		q.Run(c)
+		s.seen, s.seenOK = c.Frame(), true
+	} else {
+		s.feed(c, o)
+	}
 	if focused != s.focused {
 		s.focused = focused
 		s.out = s.T.EncodeFocus(s.out, focused)
@@ -159,8 +173,13 @@ type TerminalOpts struct {
 	// the view does not have the keyboard focus, for a pane the app shows
 	// as active.
 	Focus float32
-	// FeedBudget bounds the time spent parsing fed output per frame (0: 4 ms).
+	// FeedBudget bounds the time spent parsing this view's output per frame
+	// (0: 4 ms). With a Scheduler it caps this view's part of the shared
+	// budget instead (0: no cap of its own).
 	FeedBudget time.Duration
+	// Scheduler, when set, parses this view's output within a budget shared
+	// with the window's other terminals (TerminalScheduler).
+	Scheduler *TerminalScheduler
 	// AllowClipboard lets the program write the clipboard (OSC 52) through
 	// ui.Context.ClipboardSet; without it the request comes back in
 	// TerminalSignal.ClipboardRequest for the app to allow or not.
@@ -196,12 +215,30 @@ type TerminalState struct {
 	// T is the terminal. Use it on the UI thread only.
 	T *term.Terminal
 
-	pending []byte
+	pending []byte // output being parsed: fed bytes, or the inbox's taken
 	off     int
-	out     []byte
-	clip    []byte
-	link    []byte
-	sel     []byte
+	inbox   *TerminalInbox
+	rate    parseRate
+
+	fromInbox   int // bytes of pending[off:] from the inbox
+	inboxParsed int // inbox bytes parsed, to credit
+	fed         int64
+	parsedTotal int64
+	peak        int
+	parsedFrame int
+	parseTime   time.Duration
+	behind      int
+
+	sched               *TerminalScheduler
+	seen                uint32 // the frame of the last view, with seenOK
+	seenOK, wantFocus   bool
+	feedCap, capUsed    time.Duration
+	capFrame, peakFrame uint32
+
+	out  []byte
+	clip []byte
+	link []byte
+	sel  []byte
 
 	rows    []termRow
 	old     []termRow // last frame's rows during capture
@@ -257,16 +294,29 @@ func NewTerminal(o term.Options) (*TerminalState, error) {
 }
 
 // Feed queues the program's output; the view parses it over the next
-// frames (TerminalOpts.FeedBudget). Call it on the UI thread.
+// frames. Call it on the UI thread. It keeps every byte and, as it cannot
+// block the UI thread, has no bound: a producer that can outrun the parser
+// (a pty, a socket) should write to OpenInbox's TerminalInbox instead,
+// which holds it back. TerminalStats.Fed counts what came this way.
 func (s *TerminalState) Feed(p []byte) {
 	if s.off == len(s.pending) {
 		s.pending, s.off = s.pending[:0], 0
 	}
 	s.pending = append(s.pending, p...)
+	s.fed += int64(len(p))
 }
 
-// Pending is the number of fed bytes not parsed yet.
-func (s *TerminalState) Pending() int { return len(s.pending) - s.off }
+// Pending is the number of bytes fed or written to the inbox and not
+// parsed yet.
+func (s *TerminalState) Pending() int {
+	n := len(s.pending) - s.off
+	if s.inbox != nil {
+		s.inbox.mu.Lock()
+		n += s.inbox.queued - s.fromInbox
+		s.inbox.mu.Unlock()
+	}
+	return n
+}
 
 // TakeInput appends the bytes for the program (keys, pastes, mouse and
 // focus reports, answers to its queries) to dst and forgets them.
@@ -291,32 +341,26 @@ func (s *TerminalState) FindNext(backward bool) int { return s.T.FindNext(backwa
 // first), for sizing a window to a grid.
 func (s *TerminalState) CellSize() (w, h float32) { return s.cellW, s.cellH }
 
-// Close closes the terminal.
-func (s *TerminalState) Close() { s.T.Close() }
-
-// feed parses queued output for at most the frame's budget.
-func (s *TerminalState) feed(c *ui.Context, o TerminalOpts) {
-	if s.off == len(s.pending) {
-		return
+// Close closes the terminal, leaves its scheduler and closes its inbox,
+// which unblocks its writers.
+func (s *TerminalState) Close() {
+	if s.sched != nil {
+		s.sched.Remove(s)
 	}
+	if s.inbox != nil {
+		s.inbox.Close()
+	}
+	s.T.Close()
+}
+
+// feed parses queued output for at most the view's own budget.
+func (s *TerminalState) feed(c *ui.Context, o TerminalOpts) {
 	budget := o.FeedBudget
 	if budget <= 0 {
 		budget = 4 * time.Millisecond
 	}
-	const chunk = 64 << 10
-	start := time.Now()
-	for s.off < len(s.pending) {
-		n := min(chunk, len(s.pending)-s.off)
-		s.T.Write(s.pending[s.off : s.off+n])
-		s.off += n
-		if time.Since(start) >= budget {
-			break
-		}
-	}
-	if s.off < len(s.pending) {
+	if s.feedFrame(budget, &s.rate) {
 		c.RequestFrame()
-	} else {
-		s.pending, s.off = s.pending[:0], 0
 	}
 }
 
