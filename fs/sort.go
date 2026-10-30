@@ -59,16 +59,33 @@ var (
 
 const sorterIdle = 30 * time.Second
 
-func getSorter() *sorter {
+// getSorter returns free scratch for n entries: the smallest that already
+// fits them, else the largest, so with two sorts at once (the service's two
+// workers) a big listing does not regrow small scratch while big scratch sits
+// free.
+func getSorter(n int) *sorter {
 	sorterMu.Lock()
 	defer sorterMu.Unlock()
-	if n := len(sorterFree); n > 0 {
-		s := sorterFree[n-1]
-		sorterFree[n-1] = nil
-		sorterFree = sorterFree[:n-1]
-		return s
+	best := -1
+	for i, s := range sorterFree {
+		if best < 0 {
+			best = i
+			continue
+		}
+		b, c := cap(sorterFree[best].off), cap(s.off)
+		if c > n && (b <= n || c < b) || b <= n && c > b {
+			best = i
+		}
 	}
-	return new(sorter)
+	if best < 0 {
+		return new(sorter)
+	}
+	s := sorterFree[best]
+	last := len(sorterFree) - 1
+	sorterFree[best] = sorterFree[last]
+	sorterFree[last] = nil
+	sorterFree = sorterFree[:last]
+	return s
 }
 
 func putSorter(s *sorter) {
@@ -109,7 +126,7 @@ func trimSorters() {
 // Unused scratch is released after 30 seconds idle; a later call warms it again.
 // It may be called from any goroutine on a Listing it owns.
 func Sort(l *Listing, key SortKey, desc bool) {
-	s := getSorter()
+	s := getSorter(len(l.Entries))
 	s.sort(l, key, desc)
 	putSorter(s)
 }

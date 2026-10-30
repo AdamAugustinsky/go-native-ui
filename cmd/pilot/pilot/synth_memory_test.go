@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"runtime"
 	"slices"
+	"sync"
 	"testing"
 
 	"gonativeui/core"
@@ -74,6 +75,20 @@ func TestLargeTwoPaneServiceReuse(t *testing.T) {
 			}
 		}
 	}
+	// The two workers may sort at once in any round, the large listing on
+	// either; rounds alone need not overlap before the measured ones (on an
+	// idle host they seldom do). Sort two large listings at once first, as an
+	// overlapping round would, so the sort scratch is warm for both.
+	var big [2]fs.Listing
+	var wg sync.WaitGroup
+	for i := range big {
+		FillSynth(&big[i], 1_000_000, 0)
+	}
+	for i := range big {
+		wg.Go(func() { fs.Sort(&big[i], fs.SortName, false) })
+	}
+	wg.Wait()
+	big = [2]fs.Listing{}
 	for range 8 {
 		round()
 	}

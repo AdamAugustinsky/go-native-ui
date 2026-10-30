@@ -32,7 +32,7 @@ func Filter(l *Listing, query []byte, dst []uint32) []uint32 {
 		}
 		return dst
 	}
-	s := getSorter()
+	s := getSorter(len(l.Entries))
 	s.bits = FilterBits(l, query, s.bits, 0, len(l.Entries))
 	for _, i := range l.Order {
 		if s.bits[i/64]&(uint64(1)<<(i%64)) != 0 {
