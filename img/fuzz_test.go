@@ -26,6 +26,7 @@ func FuzzImageParsers(f *testing.F) {
 		f.Add(b, uint32(8), uint32(8))
 	}
 	f.Add(animgen.APNG(8, 8, disposalFrames(), 0), uint32(0xffffffff), uint32(0xffffffff))
+	header := animgen.APNG(1, 1, []animgen.Frame{{Image: animgen.Solid(1, 1, cRed), DelayMs: 10}}, 0)
 	f.Fuzz(func(t *testing.T, data []byte, w, h uint32) {
 		if len(data) > 64<<10 {
 			t.Skip()
@@ -87,7 +88,7 @@ func FuzzImageParsers(f *testing.F) {
 		}
 		// A valid checksummed APNG header carries arbitrary dimensions all
 		// the way to the cap check without allocating a corresponding image.
-		b := animgen.APNG(1, 1, []animgen.Frame{{Image: animgen.Solid(1, 1, cRed), DelayMs: 10}}, 0)
+		b := bytes.Clone(header)
 		binary.BigEndian.PutUint32(b[16:], w)
 		binary.BigEndian.PutUint32(b[20:], h)
 		b = fuzzPNGChecksums(b)
@@ -183,6 +184,9 @@ func checkFuzzGIFReference(t *testing.T, g *gifAnim, data []byte) {
 	}
 	if len(ref.Image) != g.count() {
 		t.Fatal("GIF frame count differs from reference")
+	}
+	if n, delay := gifFrames(data); int(n) != len(ref.Image) || int(delay) != ref.Delay[0]*10 {
+		t.Fatal("GIF scanner count/delay differs from reference")
 	}
 	canvas := image.NewRGBA(image.Rect(0, 0, g.w, g.h))
 	var previous []byte
