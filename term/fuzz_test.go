@@ -67,7 +67,7 @@ type fuzzScreen struct {
 	Bells              int
 }
 
-func fuzzTerminalState(t *testing.T, src []byte, split int) fuzzScreen {
+func fuzzTerminalState(t *testing.T, src []byte, split int) [2]fuzzScreen {
 	t.Helper()
 	tm, err := term.New(term.Options{Cols: 32, Rows: 8, Scrollback: 32, ScrollbackBytes: 256 << 10})
 	if err != nil {
@@ -79,9 +79,15 @@ func fuzzTerminalState(t *testing.T, src []byte, split int) fuzzScreen {
 			t.Fatalf("Write = %d, %v", n, err)
 		}
 	}
+	first := captureFuzzScreen(t, tm, len(src))
 	// Finish an incomplete control sequence and release synchronized output
 	// identically, then append text to expose any buffered UTF-8/parser state.
 	tm.Write([]byte("\x18\x1b[?2026l\r\nend"))
+	return [2]fuzzScreen{first, captureFuzzScreen(t, tm, len(src))}
+}
+
+func captureFuzzScreen(t *testing.T, tm *term.Terminal, n int) fuzzScreen {
+	t.Helper()
 	tm.Update()
 	out := fuzzScreen{Cursor: tm.Cursor(), Modes: tm.Modes(), Title: tm.Title(), Replies: tm.TakeReplies(nil), Bells: tm.TakeBells()}
 	out.Clipboard, out.ClipPending = tm.TakeClipboard(nil)
@@ -112,7 +118,7 @@ func fuzzTerminalState(t *testing.T, src []byte, split int) fuzzScreen {
 	if len(out.Rows) != rows {
 		t.Fatalf("got %d rows", len(out.Rows))
 	}
-	if m := tm.Memory(); m.Primary < 0 || m.Alternate < 0 || m.Primary+m.Alternate > (16<<20)+128*len(src) {
+	if m := tm.Memory(); m.Primary < 0 || m.Alternate < 0 || m.Primary+m.Alternate > (16<<20)+128*n {
 		t.Fatalf("native screen memory: %+v", m)
 	}
 	return out

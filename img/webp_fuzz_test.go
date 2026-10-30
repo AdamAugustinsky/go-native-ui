@@ -4,6 +4,7 @@ package img
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image"
 	"testing"
 )
@@ -13,7 +14,9 @@ import (
 // Bounds are the same as FuzzImageParsers; valid larger images are scanned
 // only, whereas over-limit configurations must fail before pixel decoding.
 func FuzzWebPDecoders(f *testing.F) {
-	for _, b := range [][]byte{nil, []byte("RIFF\x04\x00\x00\x00WEBP"), webpSolid(7, 5, 90, 40, 10, 127), webpAnimation(8, 8, 4, 30, 0), zeroPNG(3, 5), zeroJPEG(3, 5), zeroGIF(3, 5)} {
+	lossless := append([]byte("RIFF\x00\x00\x00\x00WEBP"), riffChunk("VP8L", webpSolid(7, 5, 90, 40, 10, 127))...)
+	binary.LittleEndian.PutUint32(lossless[4:], uint32(len(lossless)-8))
+	for _, b := range [][]byte{nil, []byte("RIFF\x04\x00\x00\x00WEBP"), lossless, webpLossyAlpha, webpLossyAnim, webpAnimation(8, 8, 4, 30, 0), zeroPNG(3, 5), zeroJPEG(3, 5), zeroGIF(3, 5)} {
 		f.Add(b)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
