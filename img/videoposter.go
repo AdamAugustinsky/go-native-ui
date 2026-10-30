@@ -17,7 +17,9 @@ func VideoPoster(path string) Source { return Source{path: path, kind: srcVideoP
 var errVideoUnsupported = fmt.Errorf("img: video poster: %w", errors.ErrUnsupported)
 
 func (w *worker) decodeVideoPoster(c *Cache, j *job) result {
-	pix, pw, ph, err := videoframe.Read(j.src.path, func(ow, oh int) (int, error) {
+	buf := int32(-1)
+	var pad int32
+	pw, ph, err := videoframe.ReadInto(j.src.path, func(ow, oh int) (int, error) {
 		if ow <= 0 || oh <= 0 {
 			return 0, ErrDecode
 		}
@@ -29,8 +31,23 @@ func (w *worker) decodeVideoPoster(c *Cache, j *job) result {
 			return 0, ErrTooLarge
 		}
 		return int(max(tw, th)), nil
+	}, func(pw, ph int) ([]byte, int, error) {
+		if pw <= 0 || ph <= 0 || pw > maxSide || ph > maxSide || int64(pw)*int64(ph) > maxPixels {
+			return nil, 0, ErrTooLarge
+		}
+		pad = atlasPad(int32(pw), int32(ph))
+		bw, bh := pw+2*int(pad), ph+2*int(pad)
+		buf = c.bufs.get(bw*bh*4, &w.fr)
+		if buf < 0 {
+			return nil, 0, ErrTooLarge
+		}
+		pix := c.bufs.bytes(buf, bw*bh*4)
+		return pix[(int(pad)*bw+int(pad))*4:], bw * 4, nil
 	})
 	if err != nil {
+		if buf >= 0 {
+			c.bufs.put(buf, &w.fr)
+		}
 		code := uint8(errDecode)
 		if errors.Is(err, errors.ErrUnsupported) {
 			code = errVideo
@@ -40,16 +57,8 @@ func (w *worker) decodeVideoPoster(c *Cache, j *job) result {
 		}
 		return result{buf: -1, err: code}
 	}
-	pad := atlasPad(int32(pw), int32(ph))
 	bw, bh := pw+2*int(pad), ph+2*int(pad)
-	buf := c.bufs.get(bw*bh*4, &w.fr)
-	if buf < 0 {
-		return result{buf: -1, err: errTooLarge}
-	}
 	dst := c.bufs.bytes(buf, bw*bh*4)
-	for y := 0; y < ph; y++ {
-		copy(dst[((y+int(pad))*bw+int(pad))*4:], pix[y*pw*4:(y+1)*pw*4])
-	}
 	if pad > 0 {
 		padEdges(dst, pw, ph)
 	}

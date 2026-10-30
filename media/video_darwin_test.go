@@ -4,6 +4,7 @@ package media
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,14 +234,33 @@ func videoFrames(plain, turned string) (errs []string) {
 	if want, before := colourAt(p0.Seconds()), colourAt((p0 - 70*time.Millisecond).Seconds()); !closeTo(s.at(40, 48), want, 40) && !closeTo(s.at(40, 48), before, 40) {
 		fail("paused at %v: left %v, want %v", p0, s.at(40, 48), want)
 	}
-	// The renderer's lease on the frame's buffer: one retain while imported,
-	// none once released.
+	// A paused frame has one owned texture: repeated redraws import no
+	// pixel buffers, retain none, and allocate nothing.
 	if rc0 := retainCount(v.cur); v.cur != 0 {
-		v.Frame(r, platform.Now())
-		rc1 := retainCount(v.cur)
-		r.Abandon(0)
-		if rc2 := retainCount(v.cur); rc1 != rc0+1 || rc2 != rc0 {
-			fail("the current frame's retain count: %d, imported %d, released %d", rc0, rc1, rc2)
+		held := s.tex
+		for i := 0; i < 3; i++ {
+			s = frameOf(r, v, 160, 96)
+			if s.tex != held {
+				fail("paused texture changed: %d -> %d", held, s.tex)
+			}
+		}
+		if rc := retainCount(v.cur); rc != rc0 {
+			fail("paused retain count %d -> %d", rc0, rc)
+		}
+		if n := testing.AllocsPerRun(60, func() {
+			v.Frame(r, platform.Now())
+			r.Abandon(0)
+		}); n != 0 {
+			fail("paused Frame: %v allocations", n)
+		}
+		r.SimulateDeviceLoss()
+		if err := r.Rebuild(0, 0); err != nil {
+			fail("rebuild: %v", err)
+		} else {
+			restored := frameOf(r, v, 160, 96)
+			if restored.tex != held || !closeTo(restored.at(40, 48), s.at(40, 48), 1) {
+				fail("paused snapshot was not restored after device loss")
+			}
 		}
 	}
 
@@ -331,4 +351,26 @@ func videoFrames(plain, turned string) (errs []string) {
 		fail("turned: top %v bottom %v", s.at(48, 30), s.at(48, 130))
 	}
 	return errs
+}
+
+func TestVideoUsesOwnerWake(t *testing.T) {
+	plain, _ := testClips(t, onMain)
+	var wakes atomic.Int32
+	var v *Video
+	var err error
+	onMain(func() { v, err = OpenVideo(plain, VideoOptions{Muted: true, Wake: func() { wakes.Add(1) }}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer onMain(v.Close)
+	for end := time.Now().Add(10 * time.Second); wakes.Load() == 0 && time.Now().Before(end); {
+		onMain(func() { pump(time.Millisecond) })
+	}
+	if wakes.Load() != 1 {
+		t.Fatalf("load wakes %d, want 1", wakes.Load())
+	}
+	onMain(func() { v.Play(); v.Play() })
+	if wakes.Load() != 2 {
+		t.Fatalf("load and first Play woke %d times, want 2", wakes.Load())
+	}
 }
