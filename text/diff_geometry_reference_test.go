@@ -1,0 +1,299 @@
+package text
+
+// Frozen linear caret oracle from main at 2836ce5a.
+type diffOldRunView RunView
+
+// Caret geometry: the mapping between byte offsets in a shaped string and x
+// positions, for text editing. It works on a diffOldRunView alone (Clusters and
+// Text), so it is the same for every backend and allocates nothing.
+//
+// Glyph x positions are pen positions, which a mark may place left of the
+// glyph before it; cells are therefore taken from the running maximum of X.
+// Positions may be negative (a line's hanging white space, left of its
+// origin; see ParaView.LineRun): the running maximum starts at the first
+// glyph's when that is left of 0.
+//
+// Model. A glyph maps to the grapheme cluster that contains its shaper
+// cluster's first character (shapers report clusters per character or per
+// glyph run, not per user-perceived character: CoreText gives a combining
+// mark its own string index). Neighbouring glyphs that map to the same
+// grapheme form a group, occupying the x interval [xl, xr] between the
+// group's first glyph and the glyph after it. A group stands for the
+// graphemes from its own start up to the start of the next group in logical
+// order; when that is more than one (a ligature such as "fi" is one glyph for
+// two graphemes) the interval is divided evenly among them. Caret stops are
+// therefore exactly the grapheme boundaries, in logical order from the left
+// edge of a left-to-right group or the right edge of a right-to-left one
+// (ClusterRTL).
+//
+// A caret at a boundary between two groups is drawn where the character after
+// it starts (the leading edge of that character's group); the end of the text
+// is the trailing edge of the logically last group. At a bidi boundary the
+// same x belongs to two offsets, which is why HitByte, the inverse, returns
+// the offset of the group the point is in.
+
+// diffOldGlyphGroup is the extent of one group (see the model above).
+type diffOldGlyphGroup struct {
+	lo, hi int     // glyphs [lo, hi)
+	start  int     // byte offset of the group's first grapheme
+	end    int     // byte offset where the next group (in logical order) starts
+	xl, xr float32 // x interval
+	rtl    bool
+}
+
+// clusterOf is the grapheme boundary at or before the cluster of glyph j.
+func (v *diffOldRunView) clusterOf(j int) int {
+	c := int(v.Clusters[j] &^ ClusterRTL)
+	return GraphemeStart(v.Text, c)
+}
+
+// hasClusters reports whether the view carries cluster information.
+func (v *diffOldRunView) hasClusters() bool {
+	return len(v.Clusters) == len(v.Glyphs) && len(v.Glyphs) > 0
+}
+
+// groupAt returns the group that glyph j belongs to.
+func (v *diffOldRunView) groupAt(j int) diffOldGlyphGroup {
+	s := v.clusterOf(j)
+	lo, hi := j, j+1
+	for lo > 0 && v.clusterOf(lo-1) == s {
+		lo--
+	}
+	for hi < len(v.Glyphs) && v.clusterOf(hi) == s {
+		hi++
+	}
+	g := diffOldGlyphGroup{lo: lo, hi: hi, start: s, end: len(v.Text), rtl: v.Clusters[j]&ClusterRTL != 0}
+	g.xl, g.xr = v.cellStart(lo), v.cellStart(hi)
+	g.end = v.groupEnd(lo, hi, s)
+	return g
+}
+
+// cellStart is where glyph j's cell begins: the greatest pen position up to
+// and including it (a mark placed to the left of its base does not pull the
+// cell back), and for j == len(Glyphs) the end of the run.
+func (v *diffOldRunView) cellStart(j int) float32 {
+	m := v.xStart()
+	for k := 0; k < j && k < len(v.X); k++ {
+		m = max(m, v.X[k])
+	}
+	if j >= len(v.X) {
+		return max(m, v.Advance)
+	}
+	return max(m, v.X[j])
+}
+
+// xStart is where the running maximum of X starts: 0, or the first glyph's
+// position when it is negative.
+func (v *diffOldRunView) xStart() float32 {
+	if len(v.X) > 0 && v.X[0] < 0 {
+		return v.X[0]
+	}
+	return 0
+}
+
+// graphemes counts the grapheme clusters of v.Text in [from, to).
+func (v *diffOldRunView) graphemes(from, to int) int {
+	n := 0
+	for off := from; off < to; off = NextGrapheme(v.Text, off) {
+		n++
+	}
+	return n
+}
+
+// stopX is the x of the k-th boundary of the group (0 = its start, n = its end).
+func (g *diffOldGlyphGroup) stopX(k, n int) float32 {
+	if n <= 0 {
+		n = 1
+	}
+	f := float32(k) / float32(n)
+	if g.rtl {
+		return g.xr - (g.xr-g.xl)*f
+	}
+	return g.xl + (g.xr-g.xl)*f
+}
+
+// CaretX returns the x position, in pixels from the run origin, of the caret
+// at byte offset off of the shaped text. off is clamped to the text and an
+// offset inside a grapheme cluster is moved back to its start.
+func (v diffOldRunView) CaretX(off int) float32 {
+	if len(v.Glyphs) == 0 {
+		return 0
+	}
+	off = min(max(off, 0), len(v.Text))
+	if !v.hasClusters() {
+		return v.evenCaretX(off)
+	}
+	off = GraphemeStart(v.Text, off)
+	// The group with the greatest start at or before off; if there is none
+	// (the text begins with characters that have no glyph), the first one.
+	best, bestStart := -1, -1
+	first, firstStart := 0, len(v.Text)+1
+	for j := range v.Glyphs {
+		c := v.clusterOf(j)
+		if c <= off && c > bestStart {
+			best, bestStart = j, c
+		}
+		if c < firstStart {
+			first, firstStart = j, c
+		}
+	}
+	if best < 0 {
+		g := v.groupAt(first)
+		return g.stopX(0, 1)
+	}
+	g := v.groupAt(best)
+	n := v.graphemes(g.start, g.end)
+	k := v.graphemes(g.start, min(off, g.end))
+	return g.stopX(k, n)
+}
+
+// HitByte returns the byte offset of the caret stop nearest to x (pixels from
+// the run origin): 0 left of the text for left-to-right text, and the end of
+// the text right of it. The offset is a grapheme boundary.
+func (v diffOldRunView) HitByte(x float32) int {
+	if len(v.Glyphs) == 0 {
+		return 0
+	}
+	if !v.hasClusters() {
+		return v.evenHitByte(x)
+	}
+	// The glyph under x: the last one whose cell starts at or before it.
+	j := 0
+	m := v.xStart()
+	for k := range v.Glyphs {
+		if m = max(m, v.X[k]); m <= x {
+			j = k
+		}
+	}
+	g := v.groupAt(j)
+	n := v.graphemes(g.start, g.end)
+	bestK, bestD := 0, float32(-1)
+	for k := 0; k <= n; k++ {
+		d := g.stopX(k, n) - x
+		if d < 0 {
+			d = -d
+		}
+		if bestD < 0 || d < bestD {
+			bestK, bestD = k, d
+		}
+	}
+	off := g.start
+	for ; bestK > 0; bestK-- {
+		off = NextGrapheme(v.Text, off)
+	}
+	return off
+}
+
+// evenCaretX and evenHitByte are the fallback for views without clusters:
+// the advance is divided evenly among the graphemes, left to right.
+func (v diffOldRunView) evenCaretX(off int) float32 {
+	n := v.graphemes(0, len(v.Text))
+	if n == 0 {
+		return 0
+	}
+	return v.Advance * float32(v.graphemes(0, GraphemeStart(v.Text, off))) / float32(n)
+}
+
+func (v diffOldRunView) evenHitByte(x float32) int {
+	n := v.graphemes(0, len(v.Text))
+	if n == 0 || v.Advance <= 0 {
+		return 0
+	}
+	k := int(x/v.Advance*float32(n) + 0.5)
+	k = min(max(k, 0), n)
+	off := 0
+	for ; k > 0; k-- {
+		off = NextGrapheme(v.Text, off)
+	}
+	return off
+}
+
+func (v *diffOldRunView) groupCover(g *diffOldGlyphGroup, from, to int) (a, b float32, ok bool) {
+	g.end = v.groupEnd(g.lo, g.hi, g.start)
+	if g.end <= g.start {
+		return g.xl, g.xr, g.start >= from && g.start < to
+	}
+	s, e := max(from, g.start), min(to, g.end)
+	if s >= e {
+		return 0, 0, false
+	}
+	n := v.graphemes(g.start, g.end)
+	a, b = g.stopX(v.graphemes(g.start, s), n), g.stopX(v.graphemes(g.start, e), n)
+	if a > b {
+		a, b = b, a
+	}
+	return a, b, true
+}
+
+func diffOldRangeRects(p *ParaView, from, to int, width float32, dst [][4]float32) [][4]float32 {
+	from, to = max(from, 0), min(to, len(p.Text))
+	if from >= to {
+		return dst
+	}
+	from = GraphemeStart(p.Text, from)
+	if s := GraphemeStart(p.Text, to); s != to {
+		to = NextGrapheme(p.Text, s)
+	}
+	for i := range p.Lines {
+		l := &p.Lines[i]
+		if int(l.End) <= from || int(l.Start) >= to || l.G1 == l.G0 {
+			continue
+		}
+		left := p.LineLeft(i, width)
+		y0, y1 := l.Top, l.Top+l.Height
+		v := diffOldRunView(p.LineRun(i))
+		n := len(v.Glyphs)
+		open := false
+		var x0, x1 float32
+		m := v.xStart() // the running maximum of X: cells, as in caret.go
+		for lo := 0; lo < n; {
+			s := v.clusterOf(lo)
+			hi := lo + 1
+			for hi < n && v.clusterOf(hi) == s {
+				hi++
+			}
+			g := diffOldGlyphGroup{lo: lo, hi: hi, start: s, rtl: v.Clusters[lo]&ClusterRTL != 0}
+			g.xl = max(m, v.X[lo])
+			for k := lo; k < hi; k++ {
+				m = max(m, v.X[k])
+			}
+			if hi < n {
+				g.xr = max(m, v.X[hi])
+			} else {
+				g.xr = max(m, v.Advance)
+			}
+			a, b, in := v.groupCover(&g, from, to)
+			switch {
+			case in && open && a <= x1+0.01:
+				x0, x1 = min(x0, a), max(x1, b)
+			case in:
+				if open {
+					dst = append(dst, [4]float32{left + x0, y0, left + x1, y1})
+				}
+				open, x0, x1 = true, a, b
+			case open:
+				dst = append(dst, [4]float32{left + x0, y0, left + x1, y1})
+				open = false
+			}
+			lo = hi
+		}
+		if open {
+			dst = append(dst, [4]float32{left + x0, y0, left + x1, y1})
+		}
+	}
+	return dst
+}
+
+func (v *diffOldRunView) groupEnd(lo, hi, s int) int {
+	ng := NextGrapheme(v.Text, s)
+	if ng >= len(v.Text) || lo > 0 && v.clusterOf(lo-1) == ng || hi < len(v.Glyphs) && v.clusterOf(hi) == ng {
+		return min(ng, len(v.Text))
+	}
+	end := len(v.Text)
+	for k := range v.Glyphs {
+		if c := v.clusterOf(k); c > s && c < end {
+			end = c
+		}
+	}
+	return end
+}
