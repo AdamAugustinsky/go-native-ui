@@ -37,6 +37,18 @@ func (l *Layout) usable(s int) bool {
 	return p.id != 0 && !p.hidden && !p.empty && !p.dropped && (l.solo == 0 || l.solo == p.id)
 }
 
+// keeps reports whether the focus, already on the pane in slot s, may stay
+// there: the pane is usable, or only the solo pane leaves it out and
+// SoloKeepsFocus is set. SetFocus and the keys still cannot move to such a
+// pane.
+func (l *Layout) keeps(s int) bool {
+	if l.usable(s) {
+		return true
+	}
+	p := &l.slots[s]
+	return l.SoloKeepsFocus && l.solo != 0 && p.id != 0 && !p.hidden && !p.empty && !p.dropped
+}
+
 // refocus moves the focus off the focused pane, which can no longer have it:
 // to the pane used most recently before it that can, else the first that can
 // under near (the node where the pane was, or the neighbour that took its

@@ -537,7 +537,7 @@ func (l *Layout) Arrange(work [4]float32, m Metrics) {
 			l.nl++
 		}
 	}
-	if s := l.Slot(l.focus); s >= 0 && !l.usable(s) {
+	if s := l.Slot(l.focus); s >= 0 && !l.keeps(s) {
 		l.refocus(l.leafOf(int8(s)))
 	}
 }

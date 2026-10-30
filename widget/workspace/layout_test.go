@@ -566,6 +566,25 @@ func TestSoloKeepsFocusAndUnfix(t *testing.T) {
 	if l.Focus() != zChat {
 		t.Errorf("SetSolo moved the focus to %d with SoloKeepsFocus", l.Focus())
 	}
+	work := [4]float32{0, 0, 700, 600}
+	l.Arrange(work, zapMetrics)
+	if l.Focus() != zChat || l.Rect(zSide) != work {
+		t.Errorf("after Arrange: focus %d, side %v; want the chat in use under the covering side pane", l.Focus(), l.Rect(zSide))
+	}
+	l.SetEmpty(zChat, true) // the chat closed under the side pane: the focus must move
+	l.Arrange(work, zapMetrics)
+	if l.Focus() == zChat {
+		t.Error("the focus stayed on an empty chat")
+	}
+	l.SetEmpty(zChat, false)
+	l.SoloKeepsFocus = false
+	l.SetSolo(0)
+	l.SetFocus(zChat)
+	l.SetSolo(zSide)
+	l.Arrange(work, zapMetrics)
+	if l.Focus() != zSide {
+		t.Errorf("without SoloKeepsFocus the focus is on %d, want the solo pane", l.Focus())
+	}
 	l.Unfix(zList)
 	if l.Fixed(zList) != 0 {
 		t.Errorf("Unfix left the list at %v pt", l.Fixed(zList))
