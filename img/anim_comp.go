@@ -1,6 +1,7 @@
 package img
 
 import (
+	"encoding/binary"
 	"image"
 	"image/draw"
 )
@@ -73,25 +74,12 @@ func (c *compositor) fill(r image.Rectangle, snap []byte) {
 // (disp). The first frame cannot restore the previous canvas: that is
 // "background" (a viewer has nothing to restore).
 func (c *compositor) draw(m image.Image, pos image.Point, disp uint8, over bool) {
-	c.dispose()
 	b := m.Bounds()
-	full := image.Rectangle{Min: pos, Max: pos.Add(b.Size())}
-	r := full.Intersect(c.canvas.Rect)
-	if c.frame == 0 && disp == disposePrevious {
-		disp = disposeBackground
-	}
-	c.prevDisp, c.prevRect = disp, r
-	c.frame++
+	r := c.prepare(image.Rectangle{Min: pos, Max: pos.Add(b.Size())}, disp)
 	if r.Empty() {
 		return
 	}
 	n := r.Dx() * 4
-	if disp == disposePrevious {
-		c.snap = grow(c.snap, n*r.Dy())
-		for y := r.Min.Y; y < r.Max.Y; y++ {
-			copy(c.snap[(y-r.Min.Y)*n:], c.canvas.Pix[c.canvas.PixOffset(r.Min.X, y):][:n])
-		}
-	}
 	// The visible part of the frame as premultiplied RGBA, in rows of n bytes.
 	sp := b.Min.Add(r.Min.Sub(pos)) // the source point of r.Min
 	var src []byte
@@ -120,6 +108,58 @@ func (c *compositor) draw(m image.Image, pos image.Point, disp uint8, over bool)
 				t := 255 - a
 				for k := 0; k < 4; k++ {
 					d[x+k] = byte(uint32(s[x+k]) + (uint32(d[x+k])*t+127)/255)
+				}
+			}
+		}
+	}
+}
+
+// prepare disposes the previous frame and saves the area this one restores.
+func (c *compositor) prepare(full image.Rectangle, disp uint8) image.Rectangle {
+	c.dispose()
+	r := full.Intersect(c.canvas.Rect)
+	if c.frame == 0 && disp == disposePrevious {
+		disp = disposeBackground
+	}
+	c.prevDisp, c.prevRect = disp, r
+	c.frame++
+	if r.Empty() {
+		return r
+	}
+	n := r.Dx() * 4
+	if disp == disposePrevious {
+		c.snap = grow(c.snap, n*r.Dy())
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			copy(c.snap[(y-r.Min.Y)*n:], c.canvas.Pix[c.canvas.PixOffset(r.Min.X, y):][:n])
+		}
+	}
+	return r
+}
+
+// drawGIF composites opaque palette entries directly, skipping transparency.
+func (c *compositor) drawGIF(indices []byte, full image.Rectangle, pal *[256]uint32, disp uint8, interlaced bool) {
+	r := c.prepare(full, disp)
+	if r.Empty() {
+		return
+	}
+	passes := 1
+	starts, steps := [4]int{}, [4]int{1}
+	if interlaced {
+		passes = 4
+		starts, steps = [4]int{0, 4, 2, 1}, [4]int{8, 8, 4, 2}
+	}
+	row := 0
+	for pass := 0; pass < passes; pass++ {
+		for y := full.Min.Y + starts[pass]; y < full.Max.Y; y += steps[pass] {
+			src := indices[row*full.Dx():][:full.Dx()]
+			row++
+			if y < r.Min.Y || y >= r.Max.Y {
+				continue
+			}
+			dst := c.canvas.Pix[c.canvas.PixOffset(r.Min.X, y):][:r.Dx()*4]
+			for x, v := range src[r.Min.X-full.Min.X : r.Max.X-full.Min.X] {
+				if p := pal[v]; p != 0 {
+					binary.LittleEndian.PutUint32(dst[x*4:], p)
 				}
 			}
 		}
