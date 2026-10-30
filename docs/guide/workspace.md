@@ -24,15 +24,15 @@ A `workspace.Layout` is app-owned, pointer-free state in fixed arrays, at most
 | `Close(id)` | takes the pane out; its neighbour takes the room |
 | `SetHidden(id, bool)` | the pane keeps its place and size, with no room |
 | `SetEmpty(id, bool)` | the pane stays on screen, but the focus passes it by |
-| `SetSolo(id)` | one pane over the whole work area (a narrow window) |
+| `SetSolo(id)` | one pane over the whole work area (a narrow window); it takes the focus unless `SoloKeepsFocus` |
 | `SetZoom(id)` | one pane maximised; the others keep their rects for the animation |
 | `SetLimits(id, Limits{Min, Max, Yield})` | least and greatest size in points; `Yield` gives up the room instead of squeezing |
-| `SetFixed(id, pt)` / `Fixed(id)` | the pane keeps a size in points instead of a share; drags change it |
+| `SetFixed(id, pt)` / `Fixed(id)` / `Unfix(id)` | the pane keeps a size in points instead of a share; drags change it. `pt` 0 or less is `Unfix`, so clamp a stored size first |
 | `Arrange(work, Metrics)` | places the panes on whole pixels |
 | `Rect(id)`, `Shown(id)`, `Slot(id)`, `Pane(i)`, `Len()` | where each pane is; `Slot` is stable while the pane lives (`theme.Surface.Slot`) |
 | `Focus()`, `SetFocus(id)`, `FocusDir(dir)`, `FocusNext(step)` | the pane in use |
-| `Update(c, Keys)` | a press focuses a pane; dividers drag, and move with the keys while focused; `Keys` moves the focus |
-| `NextPane(c, id, name)`, `NextDivider(c, &d)` | semantics for the pane's and the divider's boxes |
+| `Update(c, Keys)` | a press on a pane's box focuses it (anywhere in its rectangle with `Keys.PressAnywhere`); dividers drag, and move with the keys while focused; `Keys` moves the focus. `Events.Moved` says a divider moved |
+| `NextPane(c, id, name)`, `NextDivider(c, &d)` | semantics for the pane's and the divider's boxes; `DividersOffTab` keeps dividers out of the Tab order |
 | `MarshalJSON`, `Restore(data, known)` | the layout saved with a version; unknown panes and fields are tolerated |
 
 **Focus restoration.** The layout keeps the panes used before, most recent
@@ -106,16 +106,17 @@ const (
 	paneSide
 )
 
-// newPanes is the main window's layout, once.
-func newPanes(st *state.Settings) workspace.Layout {
+// newPanes is the main window's layout, once, from the stored list width.
+func newPanes(listW float32) workspace.Layout {
 	var l workspace.Layout
 	l.Key = ui.HashString(0, "zapfast/pane")
+	l.DividersOffTab = true // Zap keeps its own Tab order (SH-016)
+	// l.SoloKeepsFocus = true would keep the chat in use under a covering side pane
 	l.Reset(paneList)
 	l.Split(paneList, paneChat, workspace.Right, 0.5)
 	l.Split(paneChat, paneSide, workspace.Right, 0.3)
 	l.SetLimits(paneList, workspace.Limits{Min: [2]float32{minListPt}, Max: [2]float32{maxListPt}})
-	l.SetFixed(paneList, st.SidebarWidth)
-	l.SetLimits(paneChat, workspace.Limits{Min: [2]float32{320}})
+	l.SetFixed(paneList, max(listW, minListPt)) // SetFixed(id, 0) would mean "a share"
 	l.SetHidden(paneSide, true)
 	return l
 }
@@ -126,13 +127,18 @@ func (sh *Shell) syncPanes(a *state.Account, open, narrow bool) {
 	l.SetHidden(paneList, s.Panes.ListHidden)
 	side := s.Panes.Pane != state.PaneNone && open
 	l.SetHidden(paneSide, !side)
+	chat := workspace.Limits{}
+	if side { // the chat keeps 320 pt only beside a side pane, so a 720–900 pt window keeps its list
+		chat.Min[0] = 320
+	}
+	l.SetLimits(paneChat, chat)
 	if side {
 		lim := workspace.Limits{Min: [2]float32{240}, Max: [2]float32{640}, Yield: true}
 		if s.Panes.Pane == state.PaneSearch {
 			lim.Min[0], lim.Max[0] = 300, 520
 		}
 		l.SetLimits(paneSide, lim)
-		l.SetFixed(paneSide, sideWidth(s)) // InfoPaneWidth or SearchPaneWidth
+		l.SetFixed(paneSide, max(sideWidth(s), lim.Min[0])) // InfoPaneWidth or SearchPaneWidth
 	}
 	if ref := chatRef(a); open && ref != sh.focusChat { // a chat opened: the conversation is in use
 		l.SetEmpty(paneChat, false)
@@ -154,12 +160,12 @@ func (sh *Shell) syncPanes(a *state.Account, open, narrow bool) {
 }
 
 // in Build, in place of the paneRects arithmetic and noteFocus:
-	sh.panes.Update(c, workspace.Keys{}) // presses; the list's divider
+	ev := sh.panes.Update(c, workspace.Keys{PressAnywhere: true}) // a press anywhere in a pane; the list's divider
 	sh.syncPanes(a, open, narrow)
-	p := th.Surface(theme.SurfacePane, k.Inactive())
-	sh.panes.Arrange([4]float32{max(railW, p.Inset), tbH, W - p.Inset, H - p.Inset},
-		workspace.Metrics{Scale: k.Scale(), Gutter: [2]float32{p.Gutter, p.Gutter}, Min: [2]float32{e.Pt(120), e.Pt(120)}})
-	if w := sh.panes.Fixed(paneList); w != s.Settings.SidebarWidth && w > 0 {
+	sp := th.Surface(theme.SurfacePane, k.Inactive())
+	sh.panes.Arrange([4]float32{max(railW, sp.Inset), tbH, W - sp.Inset, H - sp.Inset},
+		workspace.Metrics{Scale: k.Scale(), Gutter: [2]float32{sp.Gutter, sp.Gutter}, Min: [2]float32{e.Pt(120), e.Pt(120)}})
+	if w := sh.panes.Fixed(paneList); ev.Moved && w > 0 { // only a drag writes the width back
 		s.Settings.SidebarWidth = w
 		s.Touch()
 	}

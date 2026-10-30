@@ -14,6 +14,11 @@ type Keys struct {
 	// Cycle: F6 moves the focus to the next pane and Shift+F6 to the one
 	// before (FocusNext), as on Windows and in GTK.
 	Cycle bool
+	// PressAnywhere: a press of any button anywhere in a shown pane's
+	// rectangle focuses it, whatever box it lands on, for an app whose
+	// content covers the pane's box (a press on a button in the pane). A
+	// press on an overlay drawn over the pane counts as a press in it.
+	PressAnywhere bool
 }
 
 // Events is what Update did.
@@ -35,10 +40,16 @@ type Events struct {
 func (l *Layout) Update(c *ui.Context, keys Keys) Events {
 	before := l.focus
 	var ev Events
+	in := c.Input()
+	pressed := keys.PressAnywhere && in.Inside && (in.Pressed[ui.ButtonLeft] || in.Pressed[ui.ButtonRight] || in.Pressed[ui.ButtonMiddle])
 	for i := 0; i < l.n; i++ {
 		id := l.slots[l.order[i]].id
 		if c.PeekSignal(l.PaneKey(id)).Pressed {
 			l.SetFocus(id)
+		} else if pressed && l.Shown(id) {
+			if r := l.Rect(id); in.MouseX >= r[0] && in.MouseX < r[2] && in.MouseY >= r[1] && in.MouseY < r[3] {
+				l.SetFocus(id)
+			}
 		}
 	}
 	if l.zoom == 0 {
@@ -148,9 +159,12 @@ func (l *Layout) NextPane(c *ui.Context, id PaneID, name string) {
 // NextDivider makes the next box built, the one the look builds for divider d
 // with d.Key (a grab area over the gutter: theme.Chrome.Divider), a divider
 // for the keyboard and the accessibility tree, as base.Kit.NextDivider does: a
-// tab stop, and a ui.RoleSplitter with the first pane's share as its value.
+// tab stop (unless DividersOffTab), and a ui.RoleSplitter with the first
+// pane's share as its value.
 func (l *Layout) NextDivider(c *ui.Context, d *Divider) {
-	c.NextFlags(ui.Focusable | ui.FocusAnimation)
+	if !l.DividersOffTab {
+		c.NextFlags(ui.Focusable | ui.FocusAnimation)
+	}
 	c.NextRole(ui.RoleSplitter)
 	c.NextSemName(base.CurrentStrings().Divider)
 	c.NextSemRange(0, 1, float64(d.Share), 0.01)

@@ -260,6 +260,9 @@ type frameRig struct {
 	sem  ui.SemTree
 	l    Layout
 	ev   Events
+	keys Keys
+	// cover builds a clickable box over each pane, as an app's content does
+	cover bool
 }
 
 func newFrameRig(t *testing.T) *frameRig {
@@ -269,6 +272,7 @@ func newFrameRig(t *testing.T) *frameRig {
 	g.list.Quads = make([]gpu.Quad, 0, 1024)
 	g.sem.Reserve(1024, 1<<14)
 	g.l.Key = ui.HashString(0, "test/workspace")
+	g.keys = Keys{Dir: ui.ModSuper | ui.ModAlt, Cycle: true}
 	g.l.Reset(1)
 	g.l.Split(1, 2, Right, 0.5)
 	g.l.Split(2, 3, Down, 0.5)
@@ -282,7 +286,7 @@ var paneNames = [...]string{1: "Shell", 2: "Git", 3: "Server"}
 func (g *frameRig) frame() {
 	c := g.c
 	c.Begin(&g.in, 410, 210, 1, 1.0/60)
-	g.ev = g.l.Update(c, Keys{Dir: ui.ModSuper | ui.ModAlt, Cycle: true})
+	g.ev = g.l.Update(c, g.keys)
 	g.l.Arrange([4]float32{0, 0, 410, 210}, testMetrics)
 	for i := 0; i < g.l.Len(); i++ {
 		id := g.l.Pane(i)
@@ -290,6 +294,10 @@ func (g *frameRig) frame() {
 		g.l.NextPane(c, id, paneNames[id])
 		theme.At(c, r[0], r[1], r[2]-r[0], r[3]-r[1])
 		c.BoxKeyed(ui.Clickable|theme.Floating, g.l.PaneKey(id), nil)
+		if g.cover {
+			theme.At(c, r[0], r[1], r[2]-r[0], r[3]-r[1])
+			c.BoxKeyed(ui.Clickable|theme.Floating, ui.KeyN(g.l.PaneKey(id), 99), nil)
+		}
 	}
 	for i := 0; i < g.l.NumDividers(); i++ {
 		d := g.l.Divider(i)
@@ -499,5 +507,67 @@ func TestSoloPane(t *testing.T) {
 	l.Arrange([4]float32{0, 0, 1400, 600}, zapMetrics)
 	if !l.Shown(zList) || !l.Shown(zChat) || !l.Shown(zSide) || l.Fixed(zList) != 300 {
 		t.Error("the panes did not come back as they were")
+	}
+}
+
+func (g *frameRig) press(x, y float32) {
+	g.in.MouseX, g.in.MouseY = x, y
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frame()
+}
+
+// With the app's content over the panes, a press on it focuses the pane only
+// with PressAnywhere (Zap's buttons inside a pane).
+func TestPressAnywhere(t *testing.T) {
+	g := newFrameRig(t)
+	g.cover = true
+	g.frames(2)
+	g.press(300, 150)
+	if g.l.Focus() == 3 {
+		t.Fatal("a press on content over pane 3 focused it without PressAnywhere")
+	}
+	g.keys.PressAnywhere = true
+	g.press(300, 150)
+	if g.l.Focus() != 3 {
+		t.Fatalf("a press on content over pane 3 focused %d with PressAnywhere", g.l.Focus())
+	}
+	if n := testing.AllocsPerRun(50, g.frame); n != 0 {
+		t.Errorf("a frame allocates %v times", n)
+	}
+}
+
+// DividersOffTab leaves the dividers out of the Tab order but keeps their
+// role.
+func TestDividersOffTab(t *testing.T) {
+	g := newFrameRig(t)
+	g.l.DividersOffTab = true
+	g.frames(2)
+	if _, ok := g.node(ui.RoleSplitter, "Divider"); !ok {
+		t.Error("the divider lost its role")
+	}
+	g.key(ui.KeyTab, 0)
+	for i := 0; i < g.l.NumDividers(); i++ {
+		if g.c.FocusKey() == g.l.Divider(i).Key {
+			t.Error("Tab reached a divider with DividersOffTab")
+		}
+	}
+}
+
+// SoloKeepsFocus: the side pane covers the chat in a narrow window and the
+// chat stays in use; Unfix returns a fixed pane to a share.
+func TestSoloKeepsFocusAndUnfix(t *testing.T) {
+	l := zapLayout()
+	l.SoloKeepsFocus = true
+	l.SetFocus(zChat)
+	l.SetSolo(zSide)
+	if l.Focus() != zChat {
+		t.Errorf("SetSolo moved the focus to %d with SoloKeepsFocus", l.Focus())
+	}
+	l.Unfix(zList)
+	if l.Fixed(zList) != 0 {
+		t.Errorf("Unfix left the list at %v pt", l.Fixed(zList))
 	}
 }

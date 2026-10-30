@@ -122,6 +122,15 @@ type Layout struct {
 	// Key is the base of the keys of the panes' and the dividers' boxes
 	// (PaneKey, DividerKey): set it once, to a key of the app's.
 	Key ui.Key
+	// SoloKeepsFocus makes SetSolo leave the focus where it is, for an app
+	// whose solo pane covers the pane in use without taking its place (Zap's
+	// side pane over the chat in a narrow window, which stays translucent
+	// because the chat is still in use).
+	SoloKeepsFocus bool
+	// DividersOffTab keeps the dividers out of the Tab order (NextDivider),
+	// for an app with a Tab order of its own; they still drag and still
+	// have their accessibility role and value.
+	DividersOffTab bool
 
 	nodes  [maxNodes]node
 	slots  [MaxPanes]slot
@@ -337,7 +346,8 @@ func (l *Layout) Shown(id PaneID) bool {
 // Solo is the one pane shown, 0 when all are (SetSolo).
 func (l *Layout) Solo() PaneID { return l.solo }
 
-// SetSolo shows pane id alone, over the whole work area, and focuses it; 0
+// SetSolo shows pane id alone, over the whole work area, and focuses it
+// (unless SoloKeepsFocus); 0
 // shows the layout again. It is how a narrow window shows one pane at a time
 // (Zap below 720 pt: the list, the chat, or a side pane covering the window):
 // the others keep their places for when the window widens, and the focus
@@ -347,7 +357,7 @@ func (l *Layout) SetSolo(id PaneID) {
 		return
 	}
 	l.solo = id
-	if id != 0 {
+	if id != 0 && !l.SoloKeepsFocus {
 		l.SetFocus(id)
 	}
 }
@@ -371,8 +381,9 @@ func (l *Layout) SetZoom(id PaneID) {
 
 // SetFixed makes the split that holds pane id keep id's size along its axis
 // at pt points when the room changes, instead of a share of the room; the
-// user's drags change that size (Fixed). pt 0 returns to a share. It does
-// nothing for the last pane.
+// user's drags change that size (Fixed). pt 0 or less returns to a share,
+// as Unfix does, so clamp a stored size before passing it. It does nothing
+// for the last pane.
 func (l *Layout) SetFixed(id PaneID, pt float32) {
 	leaf := l.leafOf(int8(l.Slot(id)))
 	if leaf < 0 || l.nodes[leaf].parent < 0 {
@@ -388,6 +399,9 @@ func (l *Layout) SetFixed(id PaneID, pt float32) {
 		p.fixed, p.fixPt = fixedSecond, pt
 	}
 }
+
+// Unfix returns the split that holds pane id to a share of the room.
+func (l *Layout) Unfix(id PaneID) { l.SetFixed(id, 0) }
 
 // Fixed is the size in points pane id keeps (SetFixed, as dragged since),
 // 0 when it has a share of the room instead.
