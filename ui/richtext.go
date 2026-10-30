@@ -577,7 +577,7 @@ func (c *Context) keepRich() {
 			c.richView(b, r)
 		}
 		b.rp = richPrev{
-			ref: b.para, gen: c.lay.ParaGeneration(), w: max(b.size[0]-b.padSum(0), 0),
+			ref: b.para, gen: c.lay.ParaGeneration(), w: max(b.rect[2]-b.rect[0]-b.padSum(0), 0),
 			ox: b.pad[0], oy: b.pad[1], align: b.align, ok: b.para != 0,
 		}
 	}
