@@ -150,6 +150,11 @@ func pilotSimMust(t testing.TB, err error) {
 
 func newPilotSim(t testing.TB, seed uint64, n int, render ...bool) (*app.Sim, *simPilot) {
 	t.Helper()
+	// ReadMemStats is process-wide. Workers already run serially at the
+	// barrier; one P also isolates exact frame gates from per-P runtime timer
+	// heap/sudog growth, as the filesystem allocation tests do.
+	procs := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(procs) })
 	// Native icon preferences and sidebar discovery are external inputs. Pin
 	// the former; explicit Places above avoids the latter. Icon decoding and
 	// prefetch still use their real, barrier-gated worker pools.
@@ -549,7 +554,9 @@ func TestPilotSimLifecycle(t *testing.T) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			var hashes [2]uint64
 			for replay := range hashes {
-				t.Run(fmt.Sprint(replay), func(t *testing.T) { hashes[replay] = runPilotSim(t, seed, hours) })
+				if !t.Run(fmt.Sprint(replay), func(t *testing.T) { hashes[replay] = runPilotSim(t, seed, hours) }) {
+					return // an interrupted run has no replay hash to compare
+				}
 			}
 			if hashes[0] != hashes[1] {
 				t.Fatalf("seed=%d replay diverged: %016x != %016x", seed, hashes[0], hashes[1])
