@@ -436,6 +436,21 @@ func TestSimAllocationGateDetectsOneAllocation(t *testing.T) {
 	}
 }
 
+func TestSimRestoresProcessors(t *testing.T) {
+	previous := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(previous)
+	s, err := NewSim(Config{}, 100, 100, 1, new(simFlat), SimOptions{})
+	simMust(t, err)
+	defer s.Close()
+	if runtime.GOMAXPROCS(0) != 1 {
+		t.Fatal("simulation is not isolated")
+	}
+	s.Close()
+	if runtime.GOMAXPROCS(0) != 2 {
+		t.Fatal("close did not restore processors")
+	}
+}
+
 type simSettlingLayout struct {
 	frames, bad int
 	follow      bool

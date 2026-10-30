@@ -42,7 +42,11 @@ and worker order; it does not invent input or random worker schedules.
 for owned workers, delivers their coalesced wakes and draws only when the
 pacer says to draw. An idle hour without a deadline is one clock jump.
 
-The clock is **process-wide and test-only**. Run simulations serially, on the
+The clock is **process-wide and test-only**. The simulator also runs with
+`GOMAXPROCS=1` from construction through close, restoring the previous value.
+This keeps runtime timer heaps on the warmed P instead of letting scheduler
+initialization on another P contaminate exact frame allocation counts.
+Run simulations serially, on the
 creating goroutine; no `t.Parallel`, native event pump, live service from a
 previous run, or unrelated goroutine may share one. Construct services in
 the builder's `Init` after the clock is installed. The fs listing/control
