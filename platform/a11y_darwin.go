@@ -134,7 +134,7 @@ func (w *Window) AXActive() bool {
 func (b *axDarwin) expire(now int64) {
 	if b.core.active && now-b.lastQuery >= 30e9 {
 		b.core.active = false
-		SetAXSourceActive(b.src, false) // the app stops recording semantics
+		SetAXSourceActive(b.src, false)
 	}
 }
 

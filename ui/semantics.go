@@ -145,8 +145,10 @@ type semTracking struct {
 
 type semOrdinal struct{ index, children int32 }
 
-// SetSemanticsActive enables semantic records for subsequent builds. Standalone
-// contexts default to active; live windows enable them when an AX client asks.
+// SetSemanticsActive enables semantic records for subsequent builds. Contexts
+// default to active; an app that never reads Semantics and wants the records'
+// cost back switches them off, and an AX client's first query switches them
+// on again.
 func (c *Context) SetSemanticsActive(active bool) {
 	if c.semTrack.disabled == !active {
 		return

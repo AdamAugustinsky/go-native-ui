@@ -38,16 +38,21 @@ func (b *axBridge) AXExport(dst *platform.AXTree) bool {
 	return true
 }
 
-// AXSetActive is the optional platform activation hook. A new listener needs
-// one complete build before a semantic tree can be published.
+// AXSetActive is the optional platform activation hook. Activation turns
+// recording on for an app that switched it off (ui.Context.SetSemanticsActive),
+// which then needs one complete build before a tree can be published; expiry
+// leaves recording alone, because scripts, the agent bridge and the shot
+// tools read the same records (Context.Semantics).
 func (b *axBridge) AXSetActive(active bool) {
 	if b.a == nil || b.a.UI == nil {
 		return
 	}
-	changed := b.a.UI.SemanticsActive() != active
-	b.a.UI.SetSemanticsActive(active)
 	b.generation = 0
-	if changed && active && b.a.Win != nil {
+	if !active || b.a.UI.SemanticsActive() {
+		return
+	}
+	b.a.UI.SetSemanticsActive(true)
+	if b.a.Win != nil {
 		b.a.Win.Wake()
 	}
 }
@@ -112,7 +117,6 @@ func (b *axBridge) AXHelp(key uint64, dst []byte) []byte {
 func (a *App) initAX() {
 	a.ax.a = a
 	if a.Win != nil {
-		a.UI.SetSemanticsActive(false)
 		_ = a.Win.SetAXSource(&a.ax) // platform.ErrAXUnsupported off macOS
 	}
 }
