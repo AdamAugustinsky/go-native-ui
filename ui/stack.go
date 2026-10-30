@@ -15,16 +15,17 @@ type stack[T any] struct {
 	n       int
 	next    T
 	hasNext bool
-	cur     *T     // the top's mirror in Context.cur
-	pending *bool  // Context.hasNextStyle
+	cur     *T      // the top's mirror in Context.cur
+	pending *uint32 // Context.nextStyles
+	bit     uint32
 	sets    uint32 // the values set has been given, counting: the mark of the next value
 	taken   uint32 // sets when a box last took the next value (takeInto)
 }
 
 func (s *stack[T]) init(def T) { s.v[0], s.n, s.hasNext = def, 0, false }
 
-func (s *stack[T]) bind(cur *T, pending *bool) {
-	s.cur, s.pending = cur, pending
+func (s *stack[T]) bind(cur *T, pending *uint32, bit uint32) {
+	s.cur, s.pending, s.bit = cur, pending, bit
 	*cur = s.v[s.n]
 }
 
@@ -57,20 +58,19 @@ func (s *stack[T]) peek() T {
 	return s.v[s.n]
 }
 
-func (s *stack[T]) set(x T) { s.next, s.hasNext = x, true; s.sets++; *s.pending = true }
+func (s *stack[T]) set(x T) { s.next, s.hasNext = x, true; s.sets++; *s.pending |= s.bit }
 
-// takeInto stores the next value in *dst, if one was set, and consumes it.
+// takeInto consumes a next value whose bit is set in Context.nextStyles.
 func (s *stack[T]) takeInto(dst *T) {
-	if s.hasNext {
-		*dst, s.hasNext = s.next, false
-		s.taken = s.sets
-	}
+	*dst, s.hasNext = s.next, false
+	s.taken = s.sets
 }
 
 // drop withdraws the next value if it is still the one set at mark.
 func (s *stack[T]) drop(mark uint32) {
 	if s.hasNext && s.sets == mark {
 		s.hasNext = false
+		*s.pending &^= s.bit
 	}
 }
 

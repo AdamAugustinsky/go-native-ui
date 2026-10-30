@@ -37,6 +37,9 @@ func (c *Context) KeepValue(key Key, initial, v float32) (prev float32) {
 	prev = initial
 	if i, ok := c.avTable.Get(uint64(key)); ok {
 		prev = c.av[i].cur
+		if c.av[i].lastFrame != c.frame {
+			c.avOrder = append(c.avOrder, i)
+		}
 		c.av[i].cur, c.av[i].tgt, c.av[i].lastFrame = v, v, c.frame
 		return prev
 	}
@@ -46,10 +49,13 @@ func (c *Context) KeepValue(key Key, initial, v float32) (prev float32) {
 
 func (c *Context) animate(key Key, initial, target, k float32) float32 {
 	var e *animEnt
+	var idx uint32
 	if v, ok := c.avTable.Get(uint64(key)); ok {
+		idx = v
 		e = &c.av[v]
 	} else {
 		i := c.avPool.Alloc().Index()
+		idx = i
 		if int(i) >= len(c.av) {
 			c.av = append(c.av, animEnt{})
 		}
@@ -59,6 +65,7 @@ func (c *Context) animate(key Key, initial, target, k float32) float32 {
 	}
 	e.tgt = target
 	if e.lastFrame != c.frame { // step once per frame however often it is asked
+		c.avOrder = append(c.avOrder, idx)
 		e.lastFrame = c.frame
 		if math.Abs(float64(target-e.cur)) < animEps {
 			e.cur = target
@@ -146,8 +153,8 @@ func (c *Context) animateBoxes() {
 			}
 		}
 	}
-	for i := 1; i < len(c.av); i++ {
-		if c.avPool.Live(uint32(i)) && c.av[i].lastFrame != c.frame {
+	for _, i := range c.avPrev {
+		if c.av[i].lastFrame != c.frame {
 			c.avTable.Delete(uint64(c.av[i].key))
 			c.avPool.FreeIndex(uint32(i))
 		}
@@ -165,6 +172,9 @@ func (c *Context) prune() {
 				c.animating = true
 			}
 			c.table.Delete(uint64(b.key))
+			if b.cut != 0 {
+				c.cutPool.FreeIndex(b.cut - 1)
+			}
 			c.pool.FreeIndex(uint32(id))
 		}
 	}

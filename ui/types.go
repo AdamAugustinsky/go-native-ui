@@ -31,8 +31,10 @@
 //
 // Steady-state frames allocate nothing: the box cache, key table, frame
 // strings, animation values and the draw list reuse their storage, and bulk
-// data is pointer-free (indices into pools and arenas). Everything grows
-// during warm-up only; Reserve pre-sizes the box cache.
+// data is pointer-free (indices into pools and arenas). Storage grows as new
+// peaks need it. After sixty low-use frames, the box cache and frame scratch
+// release excess capacity; that maintenance may allocate. Reserve pre-sizes
+// the box cache and keeps that minimum capacity through trimming.
 //
 // # Threading
 //

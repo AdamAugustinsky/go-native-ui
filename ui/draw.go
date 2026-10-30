@@ -582,39 +582,51 @@ var ellipsisText = []byte("…")
 // tail and ended with an ellipsis (EllipsisOverflowX). It reports false,
 // drawing nothing, for text it cannot cut so (right-to-left, no clusters).
 func (c *Context) emitTruncated(l *gpu.DrawList, b *box, x0, x1, baseline float32, clip [4]float32, col uint32) bool {
-	er := c.sh.Shape(b.font, ellipsisText)
-	if c.sh.RunGeneration() != b.runGen { // shaping the ellipsis evicted b's run
-		b.run = c.sh.Shape(b.font, c.fr.Cur().Bytes(b.txt))
-		b.runGen = c.sh.RunGeneration()
-		er = c.sh.Shape(b.font, ellipsisText)
-	}
-	ev := c.sh.Run(er)
-	eAdv := ev.Advance
-	v := c.sh.Run(b.run)
-	if len(v.Clusters) != len(v.Glyphs) || len(ev.Glyphs) == 0 {
-		return false
-	}
-	for _, cl := range v.Clusters {
-		if cl&text.ClusterRTL != 0 {
+	cut := c.truncationCache(b)
+	var v, ev text.RunView
+	if cut.ready && cut.run == b.run && cut.gen == b.runGen && cut.gen == c.sh.RunGeneration() && cut.w == x1-x0 {
+		if !cut.ok {
 			return false
 		}
-	}
-	// the glyphs [0, n) that leave room for the ellipsis, without a cluster
-	// cut in two (a glyph of the same cluster as the next stays with it)
-	n := 0
-	for n < len(v.Glyphs) && glyphEnd(v, n)+eAdv <= x1-x0+0.01 {
-		n++
-	}
-	for n > 0 && n < len(v.Glyphs) && v.Clusters[n] == v.Clusters[n-1] {
-		n--
-	}
-	for n > 0 {
-		off := int(v.Clusters[n-1])
-		if off >= len(v.Text) || (v.Text[off] != ' ' && v.Text[off] != '\t') {
-			break
+		v, ev = c.sh.Run(b.run), c.sh.Run(cut.ellipsis)
+	} else {
+		er := c.sh.Shape(b.font, ellipsisText)
+		if c.sh.RunGeneration() != b.runGen { // shaping the ellipsis evicted b's run
+			b.run = c.sh.Shape(b.font, c.fr.Cur().Bytes(b.txt))
+			b.runGen = c.sh.RunGeneration()
+			er = c.sh.Shape(b.font, ellipsisText)
 		}
-		n--
+		ev = c.sh.Run(er)
+		eAdv := ev.Advance
+		v = c.sh.Run(b.run)
+		*cut = truncCache{run: b.run, ellipsis: er, gen: c.sh.RunGeneration(), w: x1 - x0, ready: true}
+		if len(v.Clusters) != len(v.Glyphs) || len(ev.Glyphs) == 0 {
+			return false
+		}
+		for _, cl := range v.Clusters {
+			if cl&text.ClusterRTL != 0 {
+				return false
+			}
+		}
+		// the glyphs [0, n) that leave room for the ellipsis, without a cluster
+		// cut in two (a glyph of the same cluster as the next stays with it)
+		n := 0
+		for n < len(v.Glyphs) && glyphEnd(v, n)+eAdv <= x1-x0+0.01 {
+			n++
+		}
+		for n > 0 && n < len(v.Glyphs) && v.Clusters[n] == v.Clusters[n-1] {
+			n--
+		}
+		for n > 0 {
+			off := int(v.Clusters[n-1])
+			if off >= len(v.Text) || (v.Text[off] != ' ' && v.Text[off] != '\t') {
+				break
+			}
+			n--
+		}
+		cut.n, cut.ok = int32(n), true
 	}
+	n := int(cut.n)
 	tclip := intersect(clip, [4]float32{x0, clip[1], x1, clip[3]})
 	if empty(tclip) {
 		return true
@@ -630,7 +642,6 @@ func (c *Context) emitTruncated(l *gpu.DrawList, b *box, x0, x1, baseline float3
 	if n > 0 {
 		end = x0 + glyphEnd(v, n-1)
 	}
-	ev = c.sh.Run(er)
 	for i, gid := range ev.Glyphs {
 		c.emitGlyphFade(l, ev.Faces[i], gid, end+ev.X[i], baseline, tclip, [2]float32{}, col, smooth)
 	}

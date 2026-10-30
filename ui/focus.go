@@ -1,5 +1,7 @@
 package ui
 
+import "gonativeui/text"
+
 // Focus traversal (phase 5, D28). Tab and Shift+Tab move the keyboard focus
 // through the focusable boxes of the frame in build order, wrapping around;
 // disabled boxes are skipped, and with a popup or modal overlay open the
@@ -35,6 +37,7 @@ type richFocus struct {
 	id    ID
 	span  int
 	shown bool
+	ready bool
 }
 
 func (c *Context) richLinkShown(id ID) bool {
@@ -53,9 +56,14 @@ func (c *Context) focusBox(k Key) ID {
 	if v, ok := c.table.Get(uint64(k)); ok {
 		return ID(v)
 	}
-	for _, f := range c.richFocus {
-		if f.key == k && f.shown {
-			return f.id
+	for i := range c.richFocus {
+		f := &c.richFocus[i]
+		if f.key == k {
+			c.prepareRichTarget(f)
+			if f.shown {
+				return f.id
+			}
+			break
 		}
 	}
 	return 0
@@ -77,28 +85,54 @@ func (c *Context) rememberRichFocus() {
 
 func (c *Context) prepareRichFocus() {
 	for i := range c.richFocus {
-		f := &c.richFocus[i]
-		b := &c.boxes[f.id]
-		r := c.recOf(b)
-		pv := c.richView(b, r)
-		sp := &pv.Spans[f.span]
-		w := max(b.size[0]-b.padSum(0), 0)
-		c.rects = pv.RangeRects(int(sp.Off), int(sp.Off+sp.Len), w, c.rects[:0])
-		for j := range c.rects {
-			rc := &c.rects[j]
-			dx := b.rect[0] + b.pad[0] + alignDX(&pv, pv.LineAt(rc[1]+0.5), w, b.align)
-			rc[0], rc[2] = rc[0]+dx, rc[2]+dx
-			rc[1], rc[3] = rc[1]+b.rect[1]+b.pad[1], rc[3]+b.rect[1]+b.pad[1]
-		}
-		f.shown = !b.hid && b.flags&Disabled == 0 && c.richLinkShown(f.id)
+		c.prepareRichTarget(&c.richFocus[i])
 	}
+}
+
+func (c *Context) prepareRichTarget(f *richFocus) {
+	if f.ready {
+		return
+	}
+	f.ready = true
+	b := &c.boxes[f.id]
+	r := c.recOf(b)
+	var pv text.ParaView
+	var ok bool
+	if r != nil {
+		pv, ok = c.richView(b, r), true
+	} else {
+		pv, ok = c.prevRich(b)
+	}
+	if !ok || f.span >= len(pv.Spans) {
+		f.shown = false
+		return
+	}
+	sp := &pv.Spans[f.span]
+	w := max(b.size[0]-b.padSum(0), 0)
+	c.rects = pv.RangeRects(int(sp.Off), int(sp.Off+sp.Len), w, c.rects[:0])
+	for j := range c.rects {
+		rc := &c.rects[j]
+		dx := b.rect[0] + b.pad[0] + alignDX(&pv, pv.LineAt(rc[1]+0.5), w, b.align)
+		rc[0], rc[2] = rc[0]+dx, rc[2]+dx
+		rc[1], rc[3] = rc[1]+b.rect[1]+b.pad[1], rc[3]+b.rect[1]+b.pad[1]
+	}
+	f.shown = !b.hid && b.flags&Disabled == 0 && c.richLinkShown(f.id)
 }
 
 // traverseFocus handles Tab and Shift+Tab after the frame was built, and drops
 // the focus from a box that became disabled.
 func (c *Context) traverseFocus() {
 	c.rememberRichFocus()
-	c.prepareRichFocus()
+	fwd := c.TakeKey(KeyTab, 0)
+	back := !fwd && c.TakeKey(KeyTab, ModShift)
+	need := fwd || back
+	for i := 0; i < c.nOvs && !need; i++ {
+		ov := &c.ovs[i]
+		need = ov.opened && ov.kind != OverlayTooltip && !ov.opts.NoFocus
+	}
+	if need {
+		c.prepareRichFocus()
+	}
 	c.overlayFocus()
 	c.cancelBeneathModal()
 	if c.focusKey != 0 {
@@ -114,8 +148,6 @@ func (c *Context) traverseFocus() {
 			c.dropFieldOutputs()
 		}
 	}
-	fwd := c.TakeKey(KeyTab, 0)
-	back := !fwd && c.TakeKey(KeyTab, ModShift)
 	if !fwd && !back {
 		return
 	}

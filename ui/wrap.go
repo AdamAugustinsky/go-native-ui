@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"bytes"
+
 	"gonativeui/gpu"
 	"gonativeui/text"
 )
@@ -14,14 +16,17 @@ import (
 // between characters. Every line is one line height of the box's font high,
 // as for a label, and aligned by the box's Align.
 //
-// Layouts are cached by the layouter, keyed by the text, font and width, so a
-// static paragraph costs a hash of its text per frame and nothing is
-// allocated after warm-up.
+// Layouts are cached by the layouter, keyed by the text, font and width. An
+// unchanged box reuses its layout within its certified width interval after
+// comparing the bytes. Nothing is allocated after warm-up.
 
 // wrapCache is what a wrapped box's paragraph was last laid out as.
 type wrapCache struct {
-	ref text.ParaRef
-	gen uint32
+	ref  text.ParaRef
+	gen  uint32
+	w    float32
+	font text.FontKey
+	lh   float32
 }
 
 // layoutWrap lays the WrapText box b out at width w.
@@ -51,33 +56,46 @@ func (c *Context) wrapView(b *box) text.ParaView {
 // wrapNatural is the width of the widest line of the WrapText box b (its
 // lines end at newlines only), for a SizeText width.
 func (c *Context) wrapNatural(b *box) float32 {
-	c.layoutWrap(b, 0)
+	c.fitWrap(b, 0)
 	return c.lay.Paragraph(b.para).Width
 }
 
-// wrapLines lays out the paragraph of every WrapText and RichText box built
-// this frame, after the widths are final (layout, between the X and Y size
-// passes).
-func (c *Context) wrapLines() {
-	for _, id := range c.order {
-		b := &c.boxes[id]
-		if b.txt.Len == 0 {
-			continue
-		}
-		avail := b.size[0] - b.padSum(0)
-		if r := c.recOf(b); r != nil {
-			c.fitRich(b, r, avail)
-			continue
-		}
-		if b.flags&WrapText == 0 {
-			continue
-		}
-		c.layoutWrap(b, avail)
-		if w := &b.wrap; w.ref != b.para || w.gen != b.paraGen {
-			c.wrapRuns++
-			*w = wrapCache{ref: b.para, gen: b.paraGen}
+// fitWrap reuses the last layout only for identical input and a certified
+// width. The cached paragraph owns the bytes used for the comparison.
+func (c *Context) fitWrap(b *box, w float32) {
+	if w < 1 {
+		w = 0
+	}
+	lh := c.fontInfo(b.font).lh
+	cached := b.wrap
+	if cached.ref != 0 && cached.gen == c.lay.ParaGeneration() && cached.font == b.font && cached.lh == lh {
+		pv := c.lay.Paragraph(cached.ref)
+		if (w == cached.w || w >= pv.FitFrom && w <= pv.FitTo) && bytes.Equal(pv.Text, c.fr.Cur().Bytes(b.txt)) {
+			b.para, b.paraGen, b.paraW, b.lnN = cached.ref, cached.gen, cached.w, int32(len(pv.Lines))
+			return
 		}
 	}
+	c.layoutWrap(b, w)
+	if cached.ref != b.para || cached.gen != b.paraGen {
+		c.wrapRuns++
+	}
+	b.wrap = wrapCache{ref: b.para, gen: b.paraGen, w: w, font: b.font, lh: lh}
+}
+
+// fitText runs as the X violation pass reaches a box's final width.
+func (c *Context) fitText(b *box) {
+	if b.txt.Len == 0 {
+		return
+	}
+	avail := b.size[0] - b.padSum(0)
+	if r := c.recOf(b); r != nil {
+		c.fitRich(b, r, avail)
+		return
+	}
+	if b.flags&WrapText == 0 {
+		return
+	}
+	c.fitWrap(b, avail)
 }
 
 // emitWrapped draws the lines of a WrapText box, top aligned in the padded

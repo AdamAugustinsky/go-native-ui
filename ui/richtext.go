@@ -198,6 +198,13 @@ type richRec struct {
 	focusColor       uint32
 }
 
+type richViewCache struct {
+	view text.ParaView
+	ref  text.ParaRef
+	gen  uint32
+	ok   bool
+}
+
 // richPrev is what a RichText box keeps of its last layout, for the hit
 // testing of the next build: the paragraph, the width it was drawn in and the
 // content's offset in the box.
@@ -318,7 +325,19 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 		return sig
 	}
 	bs := &sig.Box
-	if pv, ok := c.prevRich(b); ok && (bs.Hovering || bs.Pressed || bs.Released) {
+	focused := false
+	for j := range spans {
+		if spans[j].Flags&spanHit != 0 && c.focusKey == RichLinkKey(b.key, j) {
+			focused = true
+			break
+		}
+	}
+	var prev text.ParaView
+	var prevOK bool
+	if focused || bs.Hovering || bs.Pressed || bs.Released {
+		prev, prevOK = c.prevRich(b)
+	}
+	if pv, ok := prev, prevOK; ok && (bs.Hovering || bs.Pressed || bs.Released) {
 		span := c.richSpanAt(&pv, b.rp, bs.Mouse[0], bs.Mouse[1])
 		if span >= 0 && pv.Spans[span].Flags&spanHit == 0 {
 			span = -1
@@ -345,7 +364,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	if b.flags&Disabled != 0 || c.blocked(b) || c.wasHidden(b) {
 		return sig
 	}
-	if pv, ok := c.prevRich(b); ok {
+	if pv, ok := prev, prevOK; focused && ok {
 		for j := range spans {
 			if spans[j].Flags&spanHit == 0 || c.focusKey != RichLinkKey(b.key, j) || j >= len(pv.Spans) || spans[j].Off != pv.Spans[j].Off || spans[j].Len != pv.Spans[j].Len {
 				continue
@@ -499,7 +518,15 @@ func (c *Context) richView(b *box, r *richRec) text.ParaView {
 	} else if b.paraGen != c.lay.ParaGeneration() {
 		c.layoutRich(b, r, b.paraW)
 	}
-	return c.lay.Paragraph(b.para)
+	i := int(b.rich - 1)
+	for len(c.richViews) <= i {
+		c.richViews = append(c.richViews, richViewCache{})
+	}
+	v := &c.richViews[i]
+	if !v.ok || v.ref != b.para || v.gen != b.paraGen {
+		*v = richViewCache{view: c.lay.Paragraph(b.para), ref: b.para, gen: b.paraGen, ok: true}
+	}
+	return v.view
 }
 
 // richNatural is the width of the widest line of the RichText box b laid out
@@ -510,7 +537,7 @@ func (c *Context) richNatural(b *box, r *richRec) float32 {
 		w = max(r.maxW-b.padSum(0), 1)
 	}
 	c.layoutRich(b, r, w)
-	pv := c.lay.Paragraph(b.para)
+	pv := c.richView(b, r)
 	nat := float32(math.Ceil(float64(pv.Width)))
 	if w > 0 {
 		nat = min(nat, w)
@@ -533,7 +560,7 @@ func (c *Context) fitRich(b *box, r *richRec, avail float32) {
 		if avail == b.paraW {
 			return
 		}
-		if pv := c.lay.Paragraph(b.para); avail >= pv.FitFrom && avail <= pv.FitTo {
+		if pv := c.richView(b, r); avail >= pv.FitFrom && avail <= pv.FitTo {
 			return
 		}
 	}
@@ -546,7 +573,9 @@ func (c *Context) keepRich() {
 	for i := range c.rich {
 		r := &c.rich[i]
 		b := &c.boxes[r.id]
-		c.richView(b, r)
+		if b.paraW < 0 || b.paraGen != c.lay.ParaGeneration() {
+			c.richView(b, r)
+		}
 		b.rp = richPrev{
 			ref: b.para, gen: c.lay.ParaGeneration(), w: max(b.size[0]-b.padSum(0), 0),
 			ox: b.pad[0], oy: b.pad[1], align: b.align, ok: b.para != 0,

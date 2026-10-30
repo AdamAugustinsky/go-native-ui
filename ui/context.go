@@ -10,12 +10,21 @@ import (
 
 const maxDepth = 64
 
+type truncCache struct {
+	run, ellipsis text.RunRef
+	gen           uint32
+	w             float32
+	n             int32
+	ready, ok     bool
+}
+
 // persist is the part of a box record that survives from frame to frame while
 // the box keeps being built, including the previous layout's results (which
 // hit testing, ListRange and scroll clamping read during the next build).
 type persist struct {
 	key       Key
 	lastFrame uint32
+	cut       uint32 // 1 + the sparse truncation-cache slot, 0 without one
 	hotT      float32
 	activeT   float32
 	focusT    float32
@@ -54,6 +63,12 @@ type box struct {
 
 // boxFrame is the part of a box record rebuilt every frame.
 type boxFrame struct {
+	boxLinks
+	style
+	boxAttrs
+}
+
+type boxLinks struct {
 	flags                           Flags
 	parent, first, last, next, prev ID
 	field                           bool  // a text field (TextField): it takes the keys of keys.go when focused
@@ -64,8 +79,12 @@ type boxFrame struct {
 	mat                             uint8 // 1 + the box's record in shell.mats when Material marked it (material.go)
 	bdrop                           uint8 // 1 + the box's recipe in Context.bd.recs when it is a backdrop (NextBackdrop)
 	tooltip                         bool  // declared as a drawn-tooltip owner this frame
+}
 
-	style
+// boxAttrs excludes the style, which newBox overwrites rather than clears.
+type boxAttrs struct {
+	dupLast   ID // last box in this key's derivation chain this frame
+	dupN      uint32
 	alignNext bool       // the alignment came from NextAlign (Audit)
 	auditOff  AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
 	fadeEnd   float32    // its children fade out over its last fadeEnd pixels (NextFadeEnd)
@@ -150,28 +169,36 @@ type Context struct {
 	ap  appearance  // system appearance in, the shown mode out (appearance.go)
 	win windowState // the window's decorations and buttons in, requests out (window.go)
 
-	sh Shaper
+	sh        Shaper
+	shapeInfo interface {
+		ShapeInfo(text.FontKey, []byte) (text.RunRef, float32, uint32)
+	}
 
-	boxes     []box
-	pool      *core.Pool
-	table     *core.Table
-	order     []ID // boxes built this frame, parents before children
-	prevOrder []ID
-	root      ID
-	frame     uint32
-	w, h      int
-	scale, dt float32
-	in        Input
-	fr        core.Frame
-	fmtA      core.Arena
-	fmt       Fmt
+	boxes                []box
+	pool                 *core.Pool
+	table                *core.Table
+	order                []ID // boxes built this frame, parents before children
+	prevOrder            []ID
+	scrollBoxes          []ID // scroll boxes of the last completed build
+	reserved, trimFrames int
+	frLow, fmtLow        int
+	cuts                 []truncCache
+	cutPool              *core.Pool
+	root                 ID
+	frame                uint32
+	w, h                 int
+	scale, dt            float32
+	in                   Input
+	fr                   core.Frame
+	fmtA                 core.Arena
+	fmt                  Fmt
 
 	parents  [maxDepth]ID
 	nparents int
 
-	cur          style    // the tops of the style stacks
-	hasNextStyle bool     // at least one style stack has a next value
-	styleOwner   *Context // the address the stack mirrors are bound to
+	cur        style    // the tops of the style stacks
+	nextStyles uint32   // bit per style stack with a next value
+	styleOwner *Context // the address the stack mirrors are bound to
 
 	sBG      stack[[4]uint32]
 	sText    stack[uint32]
@@ -219,6 +246,7 @@ type Context struct {
 	layFonts   [MaxRichStyles]text.FontKey // LayoutText's fonts
 	rects      [][4]float32
 	rich       []richRec
+	richViews  []richViewCache // views stay outside the pointer-free rich records
 	richSpans  []Span
 	richStyles []RichStyle
 	richFocus  []richFocus // span targets; retained through Begin's AX requests
@@ -261,6 +289,7 @@ type Context struct {
 	av                    []animEnt
 	avPool                *core.Pool
 	avTable               *core.Table
+	avOrder, avPrev       []uint32
 
 	// text fields (textfield.go): the earliest time a field wants a frame
 	// again (ns from the frame start, 0 = none), and the input-method
@@ -381,6 +410,7 @@ func New(sh Shaper) *Context {
 		table:     core.NewTable(256),
 		avPool:    core.NewPool(16),
 		avTable:   core.NewTable(16),
+		cutPool:   core.NewPool(16),
 		boxes:     make([]box, 1, 256),
 		order:     make([]ID, 0, 256),
 		prevOrder: make([]ID, 0, 256),
@@ -391,6 +421,9 @@ func New(sh Shaper) *Context {
 	} else {
 		c.lay = text.NewBasicLayouter(sh)
 	}
+	c.shapeInfo, _ = sh.(interface {
+		ShapeInfo(text.FontKey, []byte) (text.RunRef, float32, uint32)
+	})
 	c.pool.Alloc() // slot 0 is the nil ID
 	c.avPool.Alloc()
 	c.av = make([]animEnt, 1, 16)
@@ -419,8 +452,9 @@ func New(sh Shaper) *Context {
 }
 
 // Reserve pre-sizes the box cache for n simultaneously live boxes so that
-// building up to n boxes never grows it.
+// building up to n boxes never grows it. Automatic trimming keeps this floor.
 func (c *Context) Reserve(n int) {
+	c.reserved = max(c.reserved, n)
 	c.table.Reserve(n)
 	c.pool.Reserve(n + 1)
 	if cap(c.boxes) < n+1 {
@@ -483,9 +517,12 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	}
 	old := c.scale
 	c.w, c.h, c.scale, c.dt = widthPx, heightPx, scale, dt
-	c.fr.Swap()
+	trimScratch(c.fr.Cur(), &c.frLow)
+	trimScratch(&c.fmtA, &c.fmtLow)
+	c.fr.Reset()
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
+	c.avPrev, c.avOrder = c.avOrder, c.avPrev[:0]
 	changed := old > 0 && scale != old // the window's scale changed (a new display, an app zoom)
 	if changed {
 		c.rescaleScroll(float64(scale) / float64(old))
@@ -494,6 +531,8 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.animating, c.scrollSet = c.nHeld > 0, false // (held input needs the next frame)
 	c.wakeNs, c.imeOK, c.imeCancel, c.secureOn = 0, false, false, false
 	c.takeCommit()
+	clear(c.richViews)
+	c.richViews = c.richViews[:0]
 	c.rich, c.richSpans, c.richStyles = c.rich[:0], c.richSpans[:0], c.richStyles[:0]
 	c.ovPrev, c.nOvPrev = c.ovs, c.nOvs
 	c.nOvs, c.nOvOpen, c.parentless = 0, 0, false
@@ -523,6 +562,8 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.rememberRichFocus()
 	c.richFocus = c.richFocus[:0]
 	c.stepScroll()
+	c.trimRetained()
+	c.scrollBoxes = c.scrollBoxes[:0]
 
 	c.nparents = 0
 	if c.styleOwner != c {
@@ -568,6 +609,95 @@ func (c *Context) rescaleScroll(r float64) {
 			rb.x0[a] *= r
 			rb.v0[a] *= r
 		}
+	}
+}
+
+// trimScratch gives a peak buffer back after sixty frames below a quarter
+// of its capacity, with room for twice the recent demand.
+func trimScratch(a *core.Arena, low *int) {
+	n := max(1024, 2*a.Len())
+	if n >= a.Cap()/4 {
+		*low = 0
+		return
+	}
+	*low++
+	if *low == 60 {
+		a.Trim(n)
+		*low = 0
+	}
+}
+
+// trimRetained runs between frames, after input has read the last layout.
+// IDs belong to one build, so the live cache can be packed here; keys and
+// persistent state survive, including the last layout used by the build.
+func (c *Context) trimRetained() {
+	n := max(256, c.reserved+1, 2*len(c.prevOrder)+1)
+	if n >= cap(c.boxes)/4 && n >= cap(c.order)/4 && n >= c.table.Cap()/4 {
+		c.trimFrames = 0
+		return
+	}
+	c.trimFrames++
+	if c.trimFrames != 60 {
+		return
+	}
+	c.trimFrames = 0
+	remap := make([]ID, len(c.boxes))
+	boxes := make([]box, len(c.prevOrder)+1, n)
+	pool := core.NewPool(n)
+	pool.Alloc() // nil ID
+	for i, old := range c.prevOrder {
+		id := ID(pool.Alloc().Index())
+		remap[old] = id
+		boxes[id] = c.boxes[old]
+		c.prevOrder[i] = id
+	}
+	c.table.Clear()
+	c.table.Trim(n)
+	for i := 1; i < len(boxes); i++ {
+		b := &boxes[i]
+		b.parent, b.first, b.last = remap[b.parent], remap[b.first], remap[b.last]
+		b.next, b.prev = remap[b.next], remap[b.prev]
+		c.table.Put(uint64(b.key), uint32(i))
+	}
+	if len(c.cuts) > 0 {
+		cuts := make([]truncCache, 0, n)
+		c.cutPool = core.NewPool(n)
+		for i := 1; i < len(boxes); i++ {
+			b := &boxes[i]
+			if b.cut != 0 {
+				cuts = append(cuts, c.cuts[b.cut-1])
+				b.cut = c.cutPool.Alloc().Index() + 1
+			}
+		}
+		c.cuts = cuts
+	}
+	c.boxes, c.pool = boxes, pool
+	c.root, c.hotID, c.tooltipID = remap[c.root], remap[c.hotID], remap[c.tooltipID]
+	c.sp.hit, c.sp.aimHit = remap[c.sp.hit], remap[c.sp.aimHit]
+	for i := 0; i < c.nOvPrev; i++ {
+		c.ovPrev[i].id = remap[c.ovPrev[i].id]
+	}
+	for i := range c.drop.recs {
+		c.drop.recs[i].id = remap[c.drop.recs[i].id]
+	}
+	for i := range c.nt.recs {
+		c.nt.recs[i].id = remap[c.nt.recs[i].id]
+	}
+	for i := 0; i < c.shell.nMats; i++ {
+		c.shell.mats[i].id = remap[c.shell.mats[i].id]
+	}
+	for i := 0; i < c.shell.nHosts; i++ {
+		c.shell.hosts[i].id = remap[c.shell.hosts[i].id]
+	}
+	// Both order buffers must retain the headroom used by the next frame.
+	c.order = make([]ID, 0, n)
+	c.prevOrder = append(make([]ID, 0, n), c.prevOrder...)
+	c.scrollBoxes = make([]ID, 0, max(16, 2*len(c.scrollBoxes)))
+	if cap(c.richViews) > n {
+		c.richViews = make([]richViewCache, 0, n)
+	}
+	if cap(c.st.reads) > n {
+		c.st.reads = make([]layoutRead, 0, n/4)
 	}
 }
 
@@ -636,25 +766,25 @@ func (c *Context) takeCommit() {
 
 // bindStyles repairs the internal pointers when a Context is initialized by value.
 func (c *Context) bindStyles() {
-	c.sBG.bind(&c.cur.bg, &c.hasNextStyle)
-	c.sText.bind(&c.cur.textColor, &c.hasNextStyle)
-	c.sBorder.bind(&c.cur.bd, &c.hasNextStyle)
-	c.sSides.bind(&c.cur.sides, &c.hasNextStyle)
-	c.sCursor.bind(&c.cur.cursor, &c.hasNextStyle)
-	c.sImage.bind(&c.cur.img, &c.hasNextStyle)
-	c.sRadii.bind(&c.cur.radii, &c.hasNextStyle)
-	c.sShadow.bind(&c.cur.shadow, &c.hasNextStyle)
-	c.sFont.bind(&c.cur.font, &c.hasNextStyle)
-	c.sAlign.bind(&c.cur.align, &c.hasNextStyle)
-	c.sPad.bind(&c.cur.pad, &c.hasNextStyle)
-	c.sGap.bind(&c.cur.gap, &c.hasNextStyle)
-	c.sAxis.bind(&c.cur.axis, &c.hasNextStyle)
-	c.sCross.bind(&c.cur.cross, &c.hasNextStyle)
-	c.sJustify.bind(&c.cur.justify, &c.hasNextStyle)
-	c.sW.bind(&c.cur.pref[0], &c.hasNextStyle)
-	c.sH.bind(&c.cur.pref[1], &c.hasNextStyle)
-	c.sOpacity.bind(&c.cur.opacity, &c.hasNextStyle)
-	c.sTint.bind(&c.cur.tint, &c.hasNextStyle)
+	c.sBG.bind(&c.cur.bg, &c.nextStyles, 1<<0)
+	c.sText.bind(&c.cur.textColor, &c.nextStyles, 1<<1)
+	c.sBorder.bind(&c.cur.bd, &c.nextStyles, 1<<2)
+	c.sSides.bind(&c.cur.sides, &c.nextStyles, 1<<3)
+	c.sCursor.bind(&c.cur.cursor, &c.nextStyles, 1<<4)
+	c.sImage.bind(&c.cur.img, &c.nextStyles, 1<<5)
+	c.sRadii.bind(&c.cur.radii, &c.nextStyles, 1<<6)
+	c.sShadow.bind(&c.cur.shadow, &c.nextStyles, 1<<7)
+	c.sFont.bind(&c.cur.font, &c.nextStyles, 1<<8)
+	c.sAlign.bind(&c.cur.align, &c.nextStyles, 1<<9)
+	c.sPad.bind(&c.cur.pad, &c.nextStyles, 1<<10)
+	c.sGap.bind(&c.cur.gap, &c.nextStyles, 1<<11)
+	c.sAxis.bind(&c.cur.axis, &c.nextStyles, 1<<12)
+	c.sCross.bind(&c.cur.cross, &c.nextStyles, 1<<13)
+	c.sJustify.bind(&c.cur.justify, &c.nextStyles, 1<<14)
+	c.sW.bind(&c.cur.pref[0], &c.nextStyles, 1<<15)
+	c.sH.bind(&c.cur.pref[1], &c.nextStyles, 1<<16)
+	c.sOpacity.bind(&c.cur.opacity, &c.nextStyles, 1<<17)
+	c.sTint.bind(&c.cur.tint, &c.nextStyles, 1<<18)
 	c.styleOwner = c
 }
 
@@ -678,7 +808,7 @@ func (c *Context) resetStyles() {
 	c.sH.reset()
 	c.sOpacity.reset()
 	c.sTint.reset()
-	c.hasNextStyle = false
+	c.nextStyles = 0
 	c.hasNextPos = false
 	c.nextAnchor, c.nextInset, c.nextNudge = AnchorNone, [2]float32{}, [2]float32{}
 	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
@@ -762,6 +892,8 @@ func (c *Context) Label(label string) ID { return c.Box(DrawText, label) }
 // Spacer builds an invisible box of the given size.
 func (c *Context) Spacer(w, h Size) ID {
 	c.NextSize(w, h)
+	// The parent's empty-key chain is its stable anonymous ordinal. newBox
+	// resumes that chain, including any other empty labels, in constant time.
 	return c.Box(0, "")
 }
 
@@ -773,7 +905,24 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	}
 	var id ID
 	found := false
-	for n := uint64(0); ; n++ {
+	base := key
+	var baseID ID
+	n := uint32(0)
+	if v, ok := c.table.Get(uint64(base)); ok {
+		baseID = ID(v)
+		b := &c.boxes[v]
+		if b.lastFrame == c.frame {
+			if c.dbg != nil {
+				c.debugDup(base)
+			}
+			if b.dupLast != 0 {
+				key, n = KeyN(c.boxes[b.dupLast].key, uint64(b.dupN)), b.dupN+1
+			}
+		} else {
+			id, found = ID(v), true
+		}
+	}
+	for !found {
 		v, ok := c.table.Get(uint64(key))
 		if !ok {
 			break
@@ -782,10 +931,8 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 			id, found = ID(v), true
 			break
 		}
-		if n == 0 && c.dbg != nil {
-			c.debugDup(key)
-		}
-		key = KeyN(key, n) // duplicate key among this frame's boxes: derive a distinct one
+		key = KeyN(key, uint64(n)) // preserve the original derivation chain
+		n++
 	}
 	if !found {
 		id = ID(c.pool.Alloc().Index())
@@ -795,9 +942,14 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		c.table.Put(uint64(key), uint32(id))
 		c.boxes[id].persist = persist{key: key}
 	}
+	if baseID != 0 && baseID != id {
+		cb := &c.boxes[baseID]
+		cb.dupLast, cb.dupN = id, n
+	}
 	b := &c.boxes[id]
 	b.prevTooltip = b.tooltip && found && b.lastFrame == c.frame-1
-	b.boxFrame = boxFrame{}
+	b.boxLinks = boxLinks{}
+	b.boxAttrs = boxAttrs{}
 	b.prevHid, b.hid = b.hid, false
 	b.lastFrame = c.frame
 	b.flags = flags
@@ -818,12 +970,15 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		pb.last = id
 	}
 	c.order = append(c.order, id)
+	if flags&scrollMask != 0 {
+		c.scrollBoxes = append(c.scrollBoxes, id)
+	}
 	if parent != 0 {
 		b.ovl = c.boxes[parent].ovl
 	}
 
 	b.style = c.cur
-	if c.hasNextStyle {
+	if c.nextStyles != 0 {
 		c.takeNext(b)
 	}
 	if b.cursor != CursorArrow {
@@ -855,29 +1010,81 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	return id
 }
 
+func (c *Context) truncationCache(b *box) *truncCache {
+	if b.cut == 0 {
+		i := c.cutPool.Alloc().Index()
+		if int(i) == len(c.cuts) {
+			c.cuts = append(c.cuts, truncCache{})
+		} else {
+			c.cuts[i] = truncCache{}
+		}
+		b.cut = i + 1
+	}
+	return &c.cuts[b.cut-1]
+}
+
 // takeNext applies and consumes the styles set for the next box only.
 func (c *Context) takeNext(b *box) {
-	c.hasNextStyle = false
-	b.alignNext = c.sAlign.hasNext
-	c.sBG.takeInto(&b.bg)
-	c.sText.takeInto(&b.textColor)
-	c.sBorder.takeInto(&b.bd)
-	c.sSides.takeInto(&b.sides)
-	c.sCursor.takeInto(&b.cursor)
-	c.sImage.takeInto(&b.img)
-	c.sRadii.takeInto(&b.radii)
-	c.sShadow.takeInto(&b.shadow)
-	c.sFont.takeInto(&b.font)
-	c.sAlign.takeInto(&b.align)
-	c.sPad.takeInto(&b.pad)
-	c.sGap.takeInto(&b.gap)
-	c.sAxis.takeInto(&b.axis)
-	c.sCross.takeInto(&b.cross)
-	c.sJustify.takeInto(&b.justify)
-	c.sW.takeInto(&b.pref[0])
-	c.sH.takeInto(&b.pref[1])
-	c.sOpacity.takeInto(&b.opacity)
-	c.sTint.takeInto(&b.tint)
+	pending := c.nextStyles
+	c.nextStyles = 0
+	b.alignNext = pending&(1<<9) != 0
+	if pending&(1<<0) != 0 {
+		c.sBG.takeInto(&b.bg)
+	}
+	if pending&(1<<1) != 0 {
+		c.sText.takeInto(&b.textColor)
+	}
+	if pending&(1<<2) != 0 {
+		c.sBorder.takeInto(&b.bd)
+	}
+	if pending&(1<<3) != 0 {
+		c.sSides.takeInto(&b.sides)
+	}
+	if pending&(1<<4) != 0 {
+		c.sCursor.takeInto(&b.cursor)
+	}
+	if pending&(1<<5) != 0 {
+		c.sImage.takeInto(&b.img)
+	}
+	if pending&(1<<6) != 0 {
+		c.sRadii.takeInto(&b.radii)
+	}
+	if pending&(1<<7) != 0 {
+		c.sShadow.takeInto(&b.shadow)
+	}
+	if pending&(1<<8) != 0 {
+		c.sFont.takeInto(&b.font)
+	}
+	if pending&(1<<9) != 0 {
+		c.sAlign.takeInto(&b.align)
+	}
+	if pending&(1<<10) != 0 {
+		c.sPad.takeInto(&b.pad)
+	}
+	if pending&(1<<11) != 0 {
+		c.sGap.takeInto(&b.gap)
+	}
+	if pending&(1<<12) != 0 {
+		c.sAxis.takeInto(&b.axis)
+	}
+	if pending&(1<<13) != 0 {
+		c.sCross.takeInto(&b.cross)
+	}
+	if pending&(1<<14) != 0 {
+		c.sJustify.takeInto(&b.justify)
+	}
+	if pending&(1<<15) != 0 {
+		c.sW.takeInto(&b.pref[0])
+	}
+	if pending&(1<<16) != 0 {
+		c.sH.takeInto(&b.pref[1])
+	}
+	if pending&(1<<17) != 0 {
+		c.sOpacity.takeInto(&b.opacity)
+	}
+	if pending&(1<<18) != 0 {
+		c.sTint.takeInto(&b.tint)
+	}
 }
 
 // setText stores the display span and shapes it (a WrapText box is laid out
@@ -887,6 +1094,10 @@ func (c *Context) setText(id ID, sp core.Span) {
 	b.txt = sp
 	b.paraW = -1
 	if b.flags&WrapText != 0 {
+		return
+	}
+	if c.shapeInfo != nil {
+		b.run, b.textW, b.runGen = c.shapeInfo.ShapeInfo(b.font, c.fr.Cur().Bytes(sp))
 		return
 	}
 	ref := c.sh.Shape(b.font, c.fr.Cur().Bytes(sp))
