@@ -6,13 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gonativeui/core"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"gonativeui/core"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )

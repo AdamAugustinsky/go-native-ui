@@ -138,7 +138,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"gonativeui/core"
 	"io"
 	"os"
 	"strings"
@@ -147,6 +146,7 @@ import (
 	"time"
 
 	"gonativeui/app/paths"
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 

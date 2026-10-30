@@ -2,15 +2,14 @@ package notify
 
 import (
 	"cmp"
-	"gonativeui/core"
 	"math"
 	"math/bits"
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unicode/utf8"
 
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 

@@ -19,6 +19,7 @@ import (
 // SimCause is a set of reasons a simulated frame was owed.
 type SimCause uint32
 
+// Frame causes are combinable; continuation means animation/input settling.
 const (
 	SimInitial SimCause = 1 << iota
 	SimInput
@@ -52,6 +53,7 @@ func simEventCause(k platform.EventKind) SimCause {
 // SimKind distinguishes trace events from frames and external injections.
 type SimKind uint8
 
+// Trace record kinds.
 const (
 	SimOpen SimKind = iota
 	SimEvent
@@ -68,6 +70,7 @@ const (
 // DrawHash covers every quad and backdrop; SemanticHash covers the exported
 // tree, including names, states, bounds, selection and announcements.
 type SimRecord struct {
+	// Kind through Count describe one ordered replay record.
 	Kind                   SimKind
 	Step                   uint64
 	Time                   int64
@@ -185,6 +188,7 @@ func (s *Sim) AddCheck(f SimCheck) { s.opts.Checks = append(s.opts.Checks, f) }
 // SimIdleReport counts actual frames during a measured idle span, by the full
 // cause set. FramesPerHour is a rate, not a claim of an hour actually measured.
 type SimIdleReport struct {
+	// Duration is virtual elapsed time; ByCause groups complete cause sets.
 	Duration      time.Duration
 	Frames        int
 	ByCause       map[SimCause]int
@@ -219,6 +223,7 @@ func (s *Sim) Idle(d time.Duration, allowed SimCause) (r SimIdleReport, err erro
 // SimMemory records GC live bytes and the capacities trimmed in D86. Native
 // GPU bytes are represented by instance capacity, not Go's heap counter.
 type SimMemory struct {
+	// HeapLive and Goroutines are process-wide; other fields are app capacities.
 	HeapLive                             uint64
 	Goroutines                           int
 	Boxes, RunGlyphs, RunText, Instances int
@@ -287,4 +292,21 @@ func (s *Sim) CheckMemory(maximum SimMemory) (SimMemory, error) {
 		}
 	}
 	return m, nil
+}
+
+// CheckGoroutines waits a bounded REAL time for returning workers to leave
+// the runtime after Close. It rejects growth over the caller's pre-run count;
+// unrelated goroutines in the same process can invalidate that comparison.
+func (s *Sim) CheckGoroutines(baseline int) error {
+	end := time.Now().Add(s.opts.WorkerTimeout)
+	for {
+		n := runtime.NumGoroutine()
+		if n <= baseline {
+			return nil
+		}
+		if time.Now().After(end) {
+			return s.failure(fmt.Errorf("goroutines %d exceed baseline %d", n, baseline))
+		}
+		time.Sleep(time.Millisecond)
+	}
 }

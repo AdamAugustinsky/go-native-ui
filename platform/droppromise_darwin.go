@@ -3,7 +3,6 @@
 package platform
 
 import (
-	"gonativeui/core"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"gonativeui/core"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )

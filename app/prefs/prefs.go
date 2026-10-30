@@ -24,11 +24,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"gonativeui/core"
 	"os"
 	"reflect"
 	"sync"
 	"time"
+
+	"gonativeui/core"
 )
 
 // ErrCorrupt wraps the error Open returns for a file that is not valid JSON for

@@ -264,6 +264,7 @@ func (p *Prefetcher) take() int {
 }
 
 func (p *Prefetcher) worker(index int, started chan<- error) {
+	defer p.park[index].RecoverSimWorker()
 	defer p.wg.Done()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

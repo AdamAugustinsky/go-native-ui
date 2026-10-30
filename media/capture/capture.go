@@ -83,13 +83,13 @@ package capture
 import (
 	"errors"
 	"fmt"
-	"gonativeui/core"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 

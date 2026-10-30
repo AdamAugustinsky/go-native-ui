@@ -26,7 +26,12 @@ func WallNow() time.Time {
 }
 
 // Since measures elapsed behaviour time. Real I/O watchdogs must use time.Since.
-func Since(t time.Time) time.Duration { return WallNow().Sub(t) }
+func Since(t time.Time) time.Duration {
+	if c := simulation.Load(); c != nil {
+		return time.Unix(0, c.now.Load()).Sub(t)
+	}
+	return time.Since(t)
+}
 
 // Timer is an AfterFunc timer. Reset and Stop have time.Timer's semantics.
 // Reset adopts the current clock, including when a shared pool survives a test.
@@ -48,6 +53,8 @@ func AfterFunc(d time.Duration, f func()) *Timer {
 	return t
 }
 
+// Stop cancels a pending callback and reports whether it was still scheduled.
+// It does not wait for a real callback that is already running.
 func (t *Timer) Stop() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -65,6 +72,8 @@ func (t *Timer) Stop() bool {
 	return was
 }
 
+// Reset schedules the callback after d and reports whether it was pending.
+// A stopped/expired shared timer adopts the clock of its new owner.
 func (t *Timer) Reset(d time.Duration) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()

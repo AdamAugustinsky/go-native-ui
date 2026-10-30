@@ -76,6 +76,7 @@ type highlighter struct {
 	closed  bool
 	frame   uint32
 	ack     bool
+	sim     bool
 }
 
 func (p *highlightPool) start() {
@@ -159,6 +160,7 @@ func (p *highlightPool) cancel(j *hlJob) {
 func (p *highlightPool) worker() {
 	if p.sim != nil {
 		defer close(p.stopped)
+		defer p.sim.RecoverSimWorker()
 		if !p.sim.StartSimWorker() {
 			return
 		}
@@ -236,6 +238,7 @@ func (h *highlighter) init() {
 		h.pool = &codeWorkers
 		if core.SimulationForTesting() != nil {
 			h.pool = new(highlightPool)
+			h.sim = true
 		}
 	}
 	h.byHash = make(map[uint64]*hlEntry)
@@ -313,10 +316,10 @@ func (h *highlighter) tokens(c *ui.Context, key ui.Key, lang highlight.Lang, src
 	if !exists && len(h.byBlock) >= maxEntries {
 		h.forget(frame)
 		if len(h.byBlock) >= maxEntries {
-			var oldest ui.Key
+			oldest := ^ui.Key(0)
 			age := uint32(0)
 			for k, b := range h.byBlock {
-				if d := frame - b.seen; d >= age {
+				if d := frame - b.seen; d > age || d == age && k < oldest {
 					oldest, age = k, d
 				}
 			}
@@ -324,6 +327,13 @@ func (h *highlighter) tokens(c *ui.Context, key ui.Key, lang highlight.Lang, src
 		}
 	}
 	hash := maphash.Bytes(h.seed, src) ^ uint64(lang)*0x9E3779B97F4A7C15
+	if h.sim {
+		hash = 14695981039346656037
+		for _, b := range src {
+			hash = (hash ^ uint64(b)) * 1099511628211
+		}
+		hash ^= uint64(lang) * 0x9E3779B97F4A7C15
+	}
 	e := h.byHash[hash]
 	if a.want != e || e == nil {
 		if old := a.want; old != nil {
@@ -343,10 +353,10 @@ func (h *highlighter) tokens(c *ui.Context, key ui.Key, lang highlight.Lang, src
 			if len(h.byHash) >= maxEntries {
 				h.forget(frame)
 				if len(h.byHash) >= maxEntries {
-					var oldest uint64
+					oldest := ^uint64(0)
 					age := uint32(0)
 					for hk, entry := range h.byHash {
-						if d := frame - entry.seen; d >= age {
+						if d := frame - entry.seen; d > age || d == age && hk < oldest {
 							oldest, age = hk, d
 						}
 					}

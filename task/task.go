@@ -572,6 +572,7 @@ func (p *Pool[In, Out]) Close(wait time.Duration) bool {
 }
 
 func (p *Pool[In, Out]) worker(w int) {
+	defer p.parks[w].RecoverSimWorker()
 	defer func() {
 		if p.running.Add(-1) == 0 {
 			close(p.exited)

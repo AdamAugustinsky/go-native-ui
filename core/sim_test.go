@@ -14,6 +14,7 @@ func TestSimClockTimers(t *testing.T) {
 	}
 	defer c.Restore()
 	start := Now()
+	wall := WallNow()
 	var got []int
 	a := AfterFunc(time.Second, func() { got = append(got, 1); AfterFunc(0, func() { got = append(got, 4) }) })
 	AfterFunc(time.Second, func() { got = append(got, 2) })
@@ -27,6 +28,9 @@ func TestSimClockTimers(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, []int{1, 2, 4, 3}) {
 		t.Fatal(got)
+	}
+	if Since(wall) != time.Hour {
+		t.Fatal("wall timestamps did not follow the virtual monotonic clock")
 	}
 	if a.Reset(time.Second) {
 		t.Fatal("expired Reset reported active")
@@ -142,4 +146,27 @@ func TestSimTimerSurvivesClockRestoration(t *testing.T) {
 	if calls != 1 {
 		t.Fatal(calls)
 	}
+}
+
+func TestSimWorkerPanicBecomesBarrierFailure(t *testing.T) {
+	c, err := InstallSimClockForTesting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Restore()
+	p := NewParker()
+	p.BindSimWorkerForTesting()
+	defer p.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer p.RecoverSimWorker()
+		if p.StartSimWorker() {
+			panic("planted worker panic")
+		}
+	}()
+	if err := c.Quiesce(time.Second); err == nil {
+		t.Fatal("worker panic was lost")
+	}
+	<-done
 }

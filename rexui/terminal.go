@@ -1,13 +1,13 @@
 package rexui
 
 import (
-	"gonativeui/core"
 	"math"
 	"runtime"
 	"time"
 	"unicode/utf8"
 	"unsafe"
 
+	"gonativeui/core"
 	"gonativeui/icon"
 	"gonativeui/term"
 	"gonativeui/text"

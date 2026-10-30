@@ -1,10 +1,10 @@
 package base
 
 import (
-	"gonativeui/core"
 	"math/bits"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/ui"
 )
 

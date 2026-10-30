@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"gonativeui/core"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
+
+	"gonativeui/core"
 )
 
 // Posting. Every Post of an ID is a new generation, the ID's latest post

@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,9 +169,10 @@ func runSimSmoke(t *testing.T, seed uint64, hours time.Duration) uint64 {
 	b := new(simScene)
 	s, err := NewSim(Config{}, 900, 700, 1, b, SimOptions{Seed: seed, Render: true})
 	if err != nil {
-		skipOrFail(t, "simulation", err)
+		t.Fatal(err)
 	}
 	defer s.Close()
+	finish := core.Now() + int64(hours)
 	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
 	simMust(t, s.Advance(time.Second))
 	if b.imports != 1 || b.view.Pending() != 0 || b.imageState != img.Ready {
@@ -227,7 +229,7 @@ func runSimSmoke(t *testing.T, seed uint64, hours time.Duration) uint64 {
 		simMust(t, s.Event(0, platform.Event{Kind: platform.EvFocus}))
 		simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible}))
 		simMust(t, s.Advance(2*time.Second))
-		quiet, err := s.Idle(hours/6, 0)
+		quiet, err := s.Idle(max(hours-time.Hour-5*time.Minute, 0)/6, 0)
 		simMust(t, err)
 		if quiet.Frames != 0 {
 			t.Fatal(quiet)
@@ -275,7 +277,7 @@ func runSimSmoke(t *testing.T, seed uint64, hours time.Duration) uint64 {
 	})
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible}))
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvFocus}))
-	_, err = s.Idle(time.Hour, 0)
+	_, err = s.Idle(time.Duration(max(finish-core.Now()-int64(time.Second), 0)), 0)
 	simMust(t, err)
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}))
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvFocus, Flags: platform.FlagDown}))
@@ -283,9 +285,7 @@ func runSimSmoke(t *testing.T, seed uint64, hours time.Duration) uint64 {
 	hash := s.TraceHash()
 	t.Logf("seed=%d trace=%016x frames=%d simulated=%s", seed, hash, s.windows[0].frames, time.Duration(core.Now()-int64(time.Second)))
 	s.Close()
-	if n := runtime.NumGoroutine(); n > baseline {
-		t.Fatalf("goroutines after Close=%d, baseline=%d", n, baseline)
-	}
+	simMust(t, s.CheckGoroutines(baseline))
 	return hash
 }
 
@@ -358,4 +358,136 @@ func TestSimCodeScaleChange(t *testing.T) {
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvResize, W: 600, H: 400, Scale: 1.25}))
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}))
 	simMust(t, s.Advance(time.Second))
+}
+
+type simFlat struct {
+	due           int64
+	ticks, closed int
+	allocate      bool
+	held          [][]byte
+}
+
+func (b *simFlat) Build(c *ui.Context) {
+	c.NextSize(ui.Pct(1), ui.Pct(1))
+	c.NextBG(0x202020ff)
+	c.Box(ui.DrawBackground, "flat")
+	if b.allocate {
+		b.held = append(b.held, make([]byte, 64))
+	}
+	if b.due != 0 {
+		if c.Input().Time >= b.due {
+			b.ticks++
+			b.due = 0
+		} else {
+			c.WakeIn(b.due - c.Input().Time)
+		}
+	}
+}
+func (b *simFlat) SimClose() { b.closed++ }
+
+func TestSimIndependentWindowsAndPanel(t *testing.T) {
+	b := new(simFlat)
+	s, err := NewSim(Config{}, 200, 100, 1, b, SimOptions{})
+	simMust(t, err)
+	defer s.Close()
+	other := &simFlat{due: core.Now() + int64(time.Hour)}
+	id, err := s.OpenWindow(Config{}, 300, 200, 2, other)
+	simMust(t, err)
+	panel := new(simFlat)
+	pid, err := s.OpenWindow(Config{Panel: &platform.Panel{}}, 100, 100, 1, panel)
+	simMust(t, err)
+	simMust(t, s.Advance(time.Second))
+	if s.windows[pid].frames != 0 {
+		t.Fatal("shelved panel built")
+	}
+	initial := s.windows[0].frames
+	idle, err := s.Idle(time.Hour, SimDeadline)
+	simMust(t, err)
+	if idle.Frames != 1 || other.ticks != 1 || s.windows[0].frames != initial {
+		t.Fatalf("windows shared pacing: %+v ticks=%d", idle, other.ticks)
+	}
+	simMust(t, s.Event(pid, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}))
+	simMust(t, s.Advance(time.Second))
+	if s.windows[pid].frames == 0 {
+		t.Fatal("shown panel did not draw")
+	}
+	simMust(t, s.Event(id, platform.Event{Kind: platform.EvClose}))
+	if other.closed != 1 || s.shared.done {
+		t.Fatal("closing secondary ended app or leaked builder")
+	}
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvClose}))
+	simMust(t, s.Event(pid, platform.Event{Kind: platform.EvClose}))
+	if !s.shared.done || b.closed != 1 || panel.closed != 1 {
+		t.Fatal("last window did not close")
+	}
+}
+
+func TestSimAllocationGateDetectsOneAllocation(t *testing.T) {
+	b := new(simFlat)
+	s, err := NewSim(Config{}, 100, 100, 1, b, SimOptions{})
+	simMust(t, err)
+	defer s.Close()
+	simMust(t, s.Advance(time.Second))
+	s.CheckAllocations(true)
+	b.allocate = true
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvWake}))
+	if err = s.Advance(time.Second); err == nil {
+		t.Fatal("allocation gate missed planted allocation")
+	}
+}
+
+type simPanic struct{}
+
+func (simPanic) Build(*ui.Context) { panic("planted simulation panic") }
+func TestSimPanicContainsReplayContext(t *testing.T) {
+	s, err := NewSim(Config{}, 100, 100, 1, simPanic{}, SimOptions{Seed: 99})
+	simMust(t, err)
+	defer s.Close()
+	if err = s.Advance(0); err == nil || !strings.Contains(err.Error(), "seed=99 step=1") || !strings.Contains(err.Error(), "planted simulation panic") {
+		t.Fatalf("missing replay context: %v", err)
+	}
+}
+
+func TestSimClipboardAndAXActivation(t *testing.T) {
+	b := new(simScene)
+	s, err := NewSim(Config{}, 900, 700, 1, b, SimOptions{})
+	simMust(t, err)
+	defer s.Close()
+	b.a.UI.SetSemanticsActive(false)
+	simMust(t, s.Advance(time.Second))
+	b.k.Focus(b.fieldKey)
+	b.field.SelectAll()
+	s.Clipboard([]byte("isolated paste"))
+	mod := platform.ModCtrl
+	if runtime.GOOS == "darwin" {
+		mod = platform.ModSuper
+	}
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvPointerMove, X: 25, Y: 25}))
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvKey, Key: platform.KeyA + ('V' - 'A'), Mods: mod, Flags: platform.FlagDown}))
+	simMust(t, s.Advance(time.Second))
+	if b.field.String() != "isolated paste" {
+		t.Fatalf("paste response not delivered: %q", b.field.String())
+	}
+	tree, err := s.AXQuery(0)
+	simMust(t, err)
+	if len(tree.Nodes) != 0 {
+		t.Fatal("AX published before the activating build")
+	}
+	simMust(t, s.Advance(time.Second))
+	tree, err = s.AXQuery(0)
+	simMust(t, err)
+	if len(tree.Nodes) < 2 {
+		t.Fatal("AX activation did not publish controls")
+	}
+	b.k.Focus(0)
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvWake}))
+	simMust(t, s.Advance(time.Minute))
+	if s.windows[0].ax.Active() {
+		t.Fatal("AX client did not expire")
+	}
+	tree, err = s.AXQuery(0)
+	simMust(t, err)
+	if len(tree.Nodes) < 2 || !s.windows[0].ax.Active() {
+		t.Fatal("AX reactivation lost its tree")
+	}
 }

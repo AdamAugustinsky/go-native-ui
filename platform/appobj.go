@@ -2,7 +2,6 @@ package platform
 
 import (
 	"errors"
-	"gonativeui/core"
 	"math/bits"
 	"os"
 	"os/signal"
@@ -11,6 +10,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"gonativeui/core"
 )
 
 // The application object's events and their delivery (DECISIONS D37). The

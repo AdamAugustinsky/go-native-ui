@@ -47,7 +47,9 @@ func (c *SimClock) Restore() {
 }
 
 // Wake coalesces a simulated platform wake. TakeWake consumes it.
-func (c *SimClock) Wake()          { c.wake.Store(true) }
+func (c *SimClock) Wake() { c.wake.Store(true) }
+
+// TakeWake consumes the coalesced wake from simulated workers and callbacks.
 func (c *SimClock) TakeWake() bool { return c.wake.Swap(false) }
 
 // Next returns the next timer's absolute deadline, or zero.
@@ -109,6 +111,9 @@ func (c *SimClock) Quiesce(limit time.Duration) error {
 		}
 		progress := false
 		for i, p := range c.workers {
+			if f := p.failure.Load(); f != nil {
+				return fmt.Errorf("worker %d: %w", i, f.err)
+			}
 			if p.closed.Load() {
 				continue
 			}
@@ -140,7 +145,10 @@ type simParker struct {
 	pending atomic.Bool
 	closed  atomic.Bool
 	parked  bool // simulation driver only
+	failure atomic.Pointer[simFailure]
 }
+
+type simFailure struct{ err error }
 
 func (p *simParker) wait(end time.Time) error {
 	t := time.NewTimer(time.Until(end))
@@ -148,6 +156,9 @@ func (p *simParker) wait(end time.Time) error {
 	select {
 	case <-p.idle:
 		p.parked = true
+		if f := p.failure.Load(); f != nil {
+			return f.err
+		}
 		return nil
 	case <-p.stop:
 		return nil
@@ -188,5 +199,20 @@ func (p *Parker) StartSimWorker() bool { return p.sim == nil || p.sim.park() }
 func (p *Parker) StopSimWorker() {
 	if p.sim != nil && p.sim.closed.CompareAndSwap(false, true) {
 		close(p.sim.stop)
+	}
+}
+
+// RecoverSimWorker reports a worker panic to the simulation driver. Defer it
+// at worker entry. With no test clock it preserves normal panic behaviour.
+func (p *Parker) RecoverSimWorker() {
+	if v := recover(); v != nil {
+		if p.sim == nil {
+			panic(v)
+		}
+		p.sim.failure.Store(&simFailure{fmt.Errorf("panic: %v", v)})
+		select {
+		case p.sim.idle <- struct{}{}:
+		default:
+		}
 	}
 }

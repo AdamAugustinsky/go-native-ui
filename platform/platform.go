@@ -104,12 +104,12 @@
 package platform
 
 import (
-	"gonativeui/core"
 	"runtime"
 	"sync/atomic"
 	"unicode/utf8"
 	_ "unsafe" // go:linkname
 
+	"gonativeui/core"
 	"gonativeui/internal/uitypes"
 )
 

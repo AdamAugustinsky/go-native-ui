@@ -453,6 +453,9 @@ func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
 	uiDefaults(a.UI)
 	a.UI.ClipboardSet = platform.SetClipboardText
+	if a.sim != nil {
+		a.UI.ClipboardSet = a.sim.s.setClipboard
+	}
 	if a.appObject != nil && a.atlas != nil {
 		a.UI.ShareAtlas(a.atlas) // the app's glyph pages, uploaded once for every window (D30)
 		a.ownTex = &winUploader{r: a.R}

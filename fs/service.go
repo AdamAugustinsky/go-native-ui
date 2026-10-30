@@ -50,7 +50,8 @@ type Service struct {
 	wg    sync.WaitGroup
 
 	// Control-goroutine scratch.
-	changes []Change
+	changes  []Change
+	simDirty []uint32 // stable debounce order in a simulation only
 
 	// mu is a core.Mutex: a contended sync.Mutex parks its waiter on a runtime
 	// sudog, which is heap-allocated when the P's cache and the central list
@@ -613,6 +614,7 @@ func (s *Service) syncListingLocked(id uint32, st *idState, slot int32) {
 func (s *Service) worker(i int) {
 	defer s.wg.Done()
 	park := s.parks[i]
+	defer park.RecoverSimWorker()
 	if !park.StartSimWorker() {
 		return
 	}
@@ -718,6 +720,7 @@ func (s *Service) worker(i int) {
 // control applies watches and synchronizes their file sets off the UI thread;
 // opening handles and registering watches may block on the file system.
 func (s *Service) control() {
+	defer s.ctlPark.RecoverSimWorker()
 	defer s.wg.Done()
 	for {
 		if !s.ctlPark.Park() {
@@ -944,6 +947,21 @@ func (s *Service) processChanges() {
 	}
 	s.changes = s.changes[:0]
 	var next time.Duration
+	// Map iteration must not choose which simultaneous relist gets the first
+	// result slot in a replay. Production retains its unsorted fast path.
+	if core.SimulationForTesting() != nil {
+		s.simDirty = s.simDirty[:0]
+		for id := range s.dirtyIDs {
+			s.simDirty = append(s.simDirty, id)
+		}
+		slices.Sort(s.simDirty)
+		for _, id := range s.simDirty {
+			st := s.dirtyIDs[id]
+			if !st.dirtyDue.After(now) {
+				s.takeDirtyLocked(id, st)
+			}
+		}
+	}
 	for id, st := range s.dirtyIDs {
 		if wait := st.dirtyDue.Sub(now); wait > 0 {
 			if next == 0 || wait < next {
@@ -951,12 +969,7 @@ func (s *Service) processChanges() {
 			}
 			continue
 		}
-		delete(s.dirtyIDs, id)
-		st.dirty = false
-		if st.path == "" {
-			st.path = st.watchPath
-		}
-		s.enqueueLocked(id, st, st.path, st.key, st.desc, !st.user)
+		s.takeDirtyLocked(id, st)
 	}
 	if !s.poolDue.IsZero() {
 		if wait := s.poolDue.Sub(now); wait <= 0 {
@@ -974,6 +987,15 @@ func (s *Service) processChanges() {
 	if notify {
 		s.signal()
 	}
+}
+
+func (s *Service) takeDirtyLocked(id uint32, st *idState) {
+	delete(s.dirtyIDs, id)
+	st.dirty = false
+	if st.path == "" {
+		st.path = st.watchPath
+	}
+	s.enqueueLocked(id, st, st.path, st.key, st.desc, !st.user)
 }
 
 // Poll appends finished results to dst. Call it on the UI thread after a

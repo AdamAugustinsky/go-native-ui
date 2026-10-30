@@ -19,6 +19,7 @@ import (
 // may run alongside it; the virtual clock is process-wide. Services created
 // by Init join the worker barrier automatically (fs, text, img and mdview).
 type SimOptions struct {
+	// Seed labels failures and trace identity. Scenarios seed their own inputs.
 	Seed          uint64
 	Tick          time.Duration // zero: 60 Hz
 	WorkerTimeout time.Duration // REAL time, zero: five seconds per barrier

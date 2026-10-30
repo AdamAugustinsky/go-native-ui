@@ -4,7 +4,6 @@ package webview
 
 import (
 	"fmt"
-	"gonativeui/core"
 	"hash/fnv"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/ebitengine/purego"
 
+	"gonativeui/core"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 	"gonativeui/platform"

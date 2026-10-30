@@ -3,13 +3,13 @@ package capture
 import (
 	"errors"
 	"fmt"
-	"gonativeui/core"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 
