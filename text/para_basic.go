@@ -430,8 +430,8 @@ func (l *BasicLayouter) note(x float32, fits bool) {
 }
 
 // noteUnbounded does the noting of a layout that was not wrapped to a width:
-// one line per newline, so a width keeps it when every line fits (the
-// segments of a line are narrower than the line). Text left out by MaxLines
+// one line per newline. Every break candidate must fit: with bidi carets,
+// a prefix can measure wider than the whole line. Text left out by MaxLines
 // would come out differently at a width that wraps.
 func (l *BasicLayouter) noteUnbounded(txt []byte) {
 	if l.b.truncated {
@@ -439,10 +439,12 @@ func (l *BasicLayouter) noteUnbounded(txt []byte) {
 		return
 	}
 	start := 0
-	for _, e := range l.ends {
-		end := int(e)
+	for _, br := range l.brk {
+		end := int(br &^ BreakMandatory)
 		l.note(l.measure(start, trimEnd(txt, start, end)), true)
-		start = end
+		if br&BreakMandatory != 0 {
+			start = end
+		}
 	}
 }
 
