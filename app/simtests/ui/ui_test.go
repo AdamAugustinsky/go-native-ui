@@ -230,6 +230,32 @@ func equalTrees(t *testing.T, got, want ui.SemTree) {
 	}
 }
 
+func freshReturn(t *testing.T, s *app.Sim, b *scene) {
+	t.Helper()
+	anchor, offset := b.list.Anchor()
+	fresh := &scene{ids: slices.Clone(b.ids), source: b.source, value: b.value}
+	fresh.field.SetString(b.field.String())
+	lo, hi := b.field.Selection()
+	fresh.field.SetSelection(lo, hi)
+	w, h := b.a.UI.Size()
+	id, err := s.OpenWindow(app.Config{}, w, h, b.a.UI.Scale(), fresh)
+	must(t, err)
+	fresh.k.SetAccent(b.k.Theme().Colors[theme.Accent])
+	system, _ := b.a.UI.SystemValues()
+	fresh.a.UI.SetSystemValues(1, system)
+	must(t, s.Advance(time.Second))
+	fresh.list.SetAnchor(anchor, offset)
+	fresh.k.Focus(fresh.fieldKey)
+	must(t, s.Event(id, platform.Event{Kind: platform.EvWake}))
+	must(t, s.Advance(12*time.Second))
+	equalTrees(t, tree(b.a.UI), tree(fresh.a.UI))
+	must(t, s.Event(id, platform.Event{Kind: platform.EvClose}))
+	// Closed window IDs remain in the simulator's history; the reference
+	// fixture no longer needs its million-row model or index.
+	fresh.ids = nil
+	fresh.list = base.VListState{}
+}
+
 func run(t *testing.T, seed uint64, hours time.Duration) uint64 {
 	t.Helper()
 	baseline := runtime.NumGoroutine()
@@ -298,11 +324,12 @@ func run(t *testing.T, seed uint64, hours time.Duration) uint64 {
 		event(t, s, platform.Event{Kind: platform.EvPreedit})
 		quiet(t, s, time.Duration(1+rng.IntN(60))*time.Second)
 		for chunk := 0; chunk < 3; chunk++ {
-			b.source = fmt.Sprintf("Reply **%d** arrived while away. %s\n\n```go\nvar answer = %d\n```\n", cycle, strings.Repeat("More streamed text. ", cycle*3+chunk+1), rng.IntN(9999))
+			code := fmt.Sprintf("var answer = %d // chunk %d", rng.IntN(9999), cycle*3+chunk)
+			b.source = fmt.Sprintf("Reply **%d** arrived while away. %s\n\n```go\n%s\n```\n", cycle, strings.Repeat("More streamed text. ", cycle*3+chunk+1), code)
 			b.parse()
 			// Queue actual highlights while the source grows. Completion may
 			// wake the loop, but cannot draw through the visibility gate.
-			b.view.Tokens(b.a.UI, ui.Key(0xace), highlight.Go, []byte(b.source))
+			b.view.Tokens(b.a.UI, ui.Key(0xace), highlight.Go, []byte(code))
 			event(t, s, platform.Event{Kind: platform.EvWake})
 			quiet(t, s, time.Duration(1+rng.IntN(10))*time.Second)
 		}
@@ -340,28 +367,11 @@ func run(t *testing.T, seed uint64, hours time.Duration) uint64 {
 		if !slices.Equal(ax.Nodes, current.Nodes) || !slices.Equal(ax.Bytes, current.Bytes) {
 			t.Fatal("expired AX client returned a stale tree")
 		}
-		if b.a.UI.ActiveKey() != 0 {
-			t.Fatal("stuck press after return")
+		if b.a.UI.ActiveKey() != 0 || b.a.UI.HotKey() != 0 {
+			t.Fatal("stuck press/hover after return")
 		}
+		freshReturn(t, s, b)
 	}
-	// Compare the returned tree with a clean build of the same application
-	// state, including the selection and virtual-list anchor.
-	anchor, offset := b.list.Anchor()
-	fresh := &scene{ids: slices.Clone(b.ids), source: b.source, value: b.value}
-	fresh.field.SetString(b.field.String())
-	lo, hi := b.field.Selection()
-	fresh.field.SetSelection(lo, hi)
-	id, err := s.OpenWindow(app.Config{}, 1800, 1400, 2, fresh)
-	must(t, err)
-	fresh.k.SetAccent(0xb76040ff)
-	fresh.a.UI.SetSystemValues(8, &ui.SystemValues{Known: true})
-	must(t, s.Advance(time.Second))
-	fresh.list.SetAnchor(anchor, offset)
-	fresh.k.Focus(fresh.fieldKey)
-	must(t, s.Event(id, platform.Event{Kind: platform.EvWake}))
-	must(t, s.Advance(12*time.Second))
-	equalTrees(t, tree(b.a.UI), tree(fresh.a.UI))
-	must(t, s.Event(id, platform.Event{Kind: platform.EvClose}))
 	b.k.Focus(0)
 	wake(t, s, time.Second)
 	draw, _ := s.FrameHash(0)
