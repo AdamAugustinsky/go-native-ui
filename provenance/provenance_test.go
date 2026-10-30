@@ -137,6 +137,9 @@ func TestCompiledWithLdflags(t *testing.T) {
 		t.Skip("builds a program")
 	}
 	bin := filepath.Join(t.TempDir(), "compiled")
+	if runtime.GOOS == "windows" {
+		bin += ".exe" // Windows runs only a file with its extension
+	}
 	for _, c := range []struct {
 		x     string
 		rev   string
