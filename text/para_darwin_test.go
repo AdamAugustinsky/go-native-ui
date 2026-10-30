@@ -678,3 +678,19 @@ func TestParagraphLayoutAllocationsCoreText(t *testing.T) {
 		t.Fatalf("%v allocations per cache hit", a)
 	}
 }
+
+func TestLargeParagraphReleasesNativeText(t *testing.T) {
+	s := newSys(t)
+	f := uiFont(s)
+	p := Para{Fonts: []FontKey{f}, Text: []byte(strings.Repeat("word ", 4000)), Width: 600, MaxLines: 1}
+	if len(s.Paragraph(s.Layout(&p)).Glyphs) == 0 {
+		t.Fatal("large paragraph lost its glyphs")
+	}
+	if s.pl.mas != 0 {
+		t.Fatal("large paragraph retained its native UTF-16 text")
+	}
+	p.Text = []byte("small")
+	if len(s.Paragraph(s.Layout(&p)).Glyphs) == 0 || s.pl.mas == 0 {
+		t.Fatal("small paragraph did not recreate reusable native text")
+	}
+}

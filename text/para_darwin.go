@@ -6,6 +6,8 @@ import (
 	"math"
 	"unicode/utf8"
 	"unsafe"
+
+	"gonativeui/internal/cf"
 )
 
 // Paragraph layout on macOS: CoreText's typesetter, the engine under AppKit's
@@ -161,6 +163,11 @@ func (s *System) layoutCT(p *Para) {
 		}
 	}
 	mas := pl.mas
+	// Release exceptional UTF-16 text and attribute runs after the typesetter
+	// and its lines are gone. Small paragraphs keep the reusable native object.
+	if n16 > 8<<10 {
+		defer func() { s.release(pl.mas); pl.mas = 0 }()
+	}
 	s.fr.Call1(sy.cfAttrBeginEditing, mas)
 	cur := s.fr.Call1(sy.cfAttrGetLength, mas)
 	s.fr.Reset().Arg(mas).Arg(0).Arg(cur).Arg(str).Call(sy.cfAttrReplaceString)
@@ -260,9 +267,9 @@ func (s *System) ctLine(p *Para, ts uintptr, u0, cnt int, scale float32, rtl boo
 		ArgPtr(unsafe.Pointer(&pl.three[2])).Call(sy.ctLineGetTypographicBounds).F64(0)
 	tw := s.fr.Reset().Arg(line).Call(sy.ctLineGetTrailingWhitespaceWidth).F64(0)
 	runs := s.fr.Call1(sy.ctLineGetGlyphRuns, line)
-	n := int(s.fr.Call1(sy.cfArrayGetCount, runs))
+	n := cf.ArrayLen(s.fr, runs)
 	for i := 0; i < n; i++ {
-		s.appendParaRun(p, s.fr.Call2(sy.cfArrayGetValueAtIndex, runs, uintptr(i)), scale)
+		s.appendParaRun(p, cf.ArrayAt(s.fr, runs, i), scale)
 	}
 	s.release(line)
 	ln.G1 = uint32(len(pl.b.glyphs))
