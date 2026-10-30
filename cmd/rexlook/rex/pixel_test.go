@@ -387,7 +387,7 @@ func TestRenderInteractionStates(t *testing.T) {
 	click(bx, by)
 
 	// Mid-drag: the vertical divider dragged 150 px to the right.
-	gut := x.cur().nodes[x.cur().root].gut
+	gut := x.cur().ws.Divider(0).Gutter // the root's
 	cx, cy := (gut[0]+gut[2])/2, (gut[1]+gut[3])/2
 	g.Move(cx, cy)
 	g.Frames(x, 2)
@@ -441,7 +441,7 @@ func TestRenderSizes(t *testing.T) {
 					continue
 				}
 				r := x.disp[slot]
-				if p := s.at((r[0]+r[2])/2, r[3]-3*x.K*2); p[0] > 250 && p[1] > 250 && p[2] > 250 && x.cur().focus != x.cur().panes[slot].uid {
+				if p := s.at((r[0]+r[2])/2, r[3]-3*x.K*2); p[0] > 250 && p[1] > 250 && p[2] > 250 && x.cur().focus() != x.cur().panes[slot].uid {
 					t.Errorf("unfocused pane %v is pure white", r)
 				}
 			}
