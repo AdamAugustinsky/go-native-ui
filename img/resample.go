@@ -1,6 +1,7 @@
 package img
 
 import (
+	"encoding/binary"
 	"image"
 	"image/color"
 )
@@ -13,6 +14,10 @@ import (
 // source pixel is read straight from the decoder's image (YCbCr, RGBA, NRGBA,
 // paletted and grey without a conversion pass).
 func resample(dst []byte, stride, tw, th int, src image.Image, orient int) {
+	if rgba, ok := src.(*image.RGBA); ok {
+		resampleRGBA(dst, stride, tw, th, rgba, orient)
+		return
+	}
 	b := src.Bounds()
 	sw, sh := b.Dx(), b.Dy()
 	fetch := fetcher(src)
@@ -46,6 +51,101 @@ func resample(dst []byte, stride, tw, th int, src image.Image, orient int) {
 			}
 			d := dst[dy*stride+dx*4:]
 			d[0], d[1], d[2], d[3] = byte((r+total/2)/total), byte((g+total/2)/total), byte((bl+total/2)/total), byte((a+total/2)/total)
+		}
+	}
+}
+
+// resampleRGBA hoists orientation into a starting offset and pixel steps.
+func resampleRGBA(dst []byte, stride, tw, th int, src *image.RGBA, orient int) {
+	sw, sh := src.Rect.Dx(), src.Rect.Dy()
+	ow, oh := sw, sh
+	base, xs, ys := 0, 4, src.Stride
+	switch orient {
+	case 2:
+		base, xs = (sw-1)*4, -4
+	case 3:
+		base, xs, ys = (sh-1)*src.Stride+(sw-1)*4, -4, -src.Stride
+	case 4:
+		base, ys = (sh-1)*src.Stride, -src.Stride
+	case 5:
+		xs, ys = src.Stride, 4
+	case 6:
+		base, xs, ys = (sh-1)*src.Stride, -src.Stride, 4
+	case 7:
+		base, xs, ys = (sh-1)*src.Stride+(sw-1)*4, -src.Stride, -4
+	case 8:
+		base, xs, ys = (sw-1)*4, src.Stride, -4
+	}
+	if orient >= 5 {
+		ow, oh = sh, sw
+	}
+	if ow%tw == 0 && oh%th == 0 {
+		rx, ry := ow/tw, oh/th
+		if rx == 2 && ry == 2 {
+			for y := 0; y < th; y++ {
+				d := dst[y*stride:][:tw*4]
+				p := base + 2*y*ys
+				for x := 0; x < tw; x++ {
+					a := binary.LittleEndian.Uint32(src.Pix[p:])
+					b := binary.LittleEndian.Uint32(src.Pix[p+xs:])
+					c := binary.LittleEndian.Uint32(src.Pix[p+ys:])
+					e := binary.LittleEndian.Uint32(src.Pix[p+ys+xs:])
+					// Two 16-bit lanes hold four 8-bit sums without carry.
+					const mask, round = uint32(0x00ff00ff), uint32(0x00020002)
+					rb := (((a & mask) + (b & mask) + (c & mask) + (e & mask) + round) >> 2) & mask
+					ga := ((((a >> 8) & mask) + ((b >> 8) & mask) + ((c >> 8) & mask) + ((e >> 8) & mask) + round) >> 2) & mask
+					binary.LittleEndian.PutUint32(d[x*4:], rb|ga<<8)
+					p += 2 * xs
+				}
+			}
+			return
+		}
+		total := uint64(rx) * uint64(ry)
+		for dy := 0; dy < th; dy++ {
+			row := dst[dy*stride:][:tw*4]
+			for dx := 0; dx < tw; dx++ {
+				var r, g, b, a uint64
+				start := base + dy*ry*ys + dx*rx*xs
+				for y := 0; y < ry; y++ {
+					p := start + y*ys
+					for x := 0; x < rx; x++ {
+						s := src.Pix[p:][:4]
+						r += uint64(s[0])
+						g += uint64(s[1])
+						b += uint64(s[2])
+						a += uint64(s[3])
+						p += xs
+					}
+				}
+				d := row[dx*4:][:4]
+				d[0], d[1], d[2], d[3] = byte((r+total/2)/total), byte((g+total/2)/total), byte((b+total/2)/total), byte((a+total/2)/total)
+			}
+		}
+		return
+	}
+	total := uint64(ow) * uint64(oh)
+	for dy := 0; dy < th; dy++ {
+		ya, yb := dy*oh, (dy+1)*oh
+		y0, y1 := ya/th, (yb+th-1)/th
+		for dx := 0; dx < tw; dx++ {
+			xa, xb := dx*ow, (dx+1)*ow
+			x0, x1 := xa/tw, (xb+tw-1)/tw
+			var r, g, b, a uint64
+			for y := y0; y < y1; y++ {
+				wy := uint64(min((y+1)*th, yb) - max(y*th, ya))
+				p := base + y*ys + x0*xs
+				for x := x0; x < x1; x++ {
+					wt := wy * uint64(min((x+1)*tw, xb)-max(x*tw, xa))
+					s := src.Pix[p:][:4]
+					r += uint64(s[0]) * wt
+					g += uint64(s[1]) * wt
+					b += uint64(s[2]) * wt
+					a += uint64(s[3]) * wt
+					p += xs
+				}
+			}
+			d := dst[dy*stride+dx*4:][:4]
+			d[0], d[1], d[2], d[3] = byte((r+total/2)/total), byte((g+total/2)/total), byte((b+total/2)/total), byte((a+total/2)/total)
 		}
 	}
 }

@@ -224,3 +224,26 @@ func TestResampleLargeSum(t *testing.T) {
 	resample(dst, 4, 1, 1, m, 1)
 	near(t, "24 MP of white in one pixel", [4]int{int(dst[0]), int(dst[1]), int(dst[2]), int(dst[3])}, [4]int{255, 255, 255, 255}, 0)
 }
+
+// rgbaReference forces the generic sampler to serve as an independent reference.
+type rgbaReference struct{ image.Image }
+
+func TestResampleRGBAOrientations(t *testing.T) {
+	// A subimage exercises non-zero bounds and a stride wider than its rows.
+	base := image.NewRGBA(image.Rect(0, 0, 21, 17))
+	for i := range base.Pix {
+		base.Pix[i] = byte(i * 37)
+	}
+	m := base.SubImage(image.Rect(3, 2, 19, 14)).(*image.RGBA)
+	for o := 1; o <= 8; o++ {
+		for _, size := range [][2]int{{8, 6}, {6, 8}, {5, 7}, {1, 1}, {19, 23}} {
+			stride := size[0]*4 + 8
+			want, got := make([]byte, stride*size[1]), make([]byte, stride*size[1])
+			resample(want, stride, size[0], size[1], rgbaReference{m}, o)
+			resample(got, stride, size[0], size[1], m, o)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("orientation %d, size %v differs", o, size)
+			}
+		}
+	}
+}

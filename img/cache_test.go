@@ -108,7 +108,7 @@ func TestCacheHitsAndGenerations(t *testing.T) {
 	}
 
 	// Two frames without use, then the image's GPU memory is wanted: it goes
-	// (CPUBytes 1 keeps no pixels, so the entry goes with it).
+	// (an uploaded still keeps no pixels, so the entry goes with it).
 	c.Poll()
 	c.Poll()
 	c.evictGPU(h0.index())
@@ -303,19 +303,29 @@ func TestRequestPollUseZeroAlloc(t *testing.T) {
 // twice its pixels when a larger free buffer is reused.
 func TestCPUBytesChargeTheBuffersCapacity(t *testing.T) {
 	c, _ := newTestCache(t, Options{CPUBytes: 64 << 20})
-	big, bigData := thumbs(t, 1, 64, 64)
-	small, smallData := thumbs(t, 1, 56, 56) // more than half of 64×64: the freed buffer fits it
-	settle(t, c, func() { c.Request(big[0], Bytes(bigData[0])) })
-	i := c.find(big[0])
-	held := c.bufs.size(c.ents[i].buf)
-	c.remove(i) // its buffer goes back to the pool, free
-	settle(t, c, func() { c.Request(small[0], Bytes(smallData[0])) })
-	j := c.find(small[0])
-	if got := c.bufs.size(c.ents[j].buf); got != held {
-		t.Fatalf("the smaller image took a %d-byte buffer, not the freed %d", got, held)
+	big := c.bufs.get(66*66*4, c.fr)
+	held := c.bufs.size(big)
+	c.bufs.put(big, c.fr)
+	small, data := thumbs(t, 1, 56, 56)
+	h, _ := c.Request(small[0], Bytes(data[0]))
+	deadline := time.Now().Add(5 * time.Second)
+	for c.State(h) == Pending && c.ents[h.index()].stage == stDecoding && time.Now().Before(deadline) {
+		c.results = c.pool.Poll(c.results[:0])
+		for k := range c.results {
+			c.finish(&c.results[k])
+		}
+		runtime.Gosched()
 	}
-	if s := c.Stats(); s.CPUBytes != held {
-		t.Fatalf("CPUBytes %d for a buffer of %d bytes (its pixels are %d)", s.CPUBytes, held, c.ents[j].cpuBytes())
+	e := &c.ents[h.index()]
+	if e.stage != stCPU || e.buf < 0 {
+		t.Fatalf("decode did not finish: stage %d", e.stage)
+	}
+	if got := c.bufs.size(e.buf); got != held || c.Stats().CPUBytes != held {
+		t.Fatalf("buffer %d and CPUBytes %d, want reused capacity %d", got, c.Stats().CPUBytes, held)
+	}
+	c.Poll()
+	if c.State(h) != Ready || e.buf != -1 || c.Stats().CPUBytes != 0 {
+		t.Fatalf("uploaded still retained pixels: stage %d, buffer %d, CPUBytes %d", e.stage, e.buf, c.Stats().CPUBytes)
 	}
 }
 
@@ -347,8 +357,7 @@ type epochGPU struct {
 func (g *epochGPU) Epoch() uint32 { return g.epoch }
 
 // TestGPULostUploadsAgain: after the renderer was rebuilt (its Epoch moved)
-// the images whose pixels are in memory go back to the GPU a few a frame; an
-// image whose pixels were dropped no longer resolves and is requested again.
+// still-image handles no longer resolve and Request decodes them again.
 func TestGPULostUploadsAgain(t *testing.T) {
 	g := &epochGPU{fakeGPU: newFakeGPU()}
 	c, _ := newTestCache(t, Options{Renderer: g, CPUBytes: 1 << 20})
@@ -365,29 +374,31 @@ func TestGPULostUploadsAgain(t *testing.T) {
 			t.Fatalf("image %d is %v before the loss", i, c.State(h))
 		}
 	}
-	// Image 2 is a pixel-less one: only its GPU copy remains.
-	c.dropPixels(hs[2].index())
-	uploads := g.uploads
-
-	g.epoch++ // the renderer was rebuilt: every texture is blank
-	c.Poll()  // the images in view go back at once, within the frame's upload budget
-	if g.uploads == uploads {
-		t.Error("nothing went back to the GPU in the Poll that saw the new epoch")
+	old := hs
+	uploads, decodes := g.uploads, c.Stats().Decodes
+	for _, h := range hs {
+		if c.ents[h.index()].buf >= 0 {
+			t.Fatal("uploaded still retained its pixels")
+		}
 	}
-	if c.State(hs[2]) != Pending {
-		t.Errorf("an image with no pixels left is %v, want Pending (requested again)", c.State(hs[2]))
+	g.epoch++
+	c.Poll()
+	if g.uploads != uploads {
+		t.Error("a still was re-uploaded without decoding")
+	}
+	for _, h := range old {
+		if c.State(h) != Pending {
+			t.Error("a lost still's handle still resolves")
+		}
 	}
 	settle(t, c, view)
-	for i := range hs[:2] {
-		if c.State(hs[i]) != Ready {
-			t.Errorf("image %d is %v after the loss, want Ready", i, c.State(hs[i]))
-		}
-		if tex, _, st := c.Use(hs[i]); st != Ready || tex == 0 {
-			t.Errorf("image %d: Use gives texture %d, state %v", i, tex, st)
+	for i, h := range hs {
+		if h == old[i] || c.State(h) != Ready {
+			t.Errorf("image %d: handle %#x (old %#x), state %v", i, h, old[i], c.State(h))
 		}
 	}
-	if got := g.uploads - uploads; got < 2 {
-		t.Errorf("%d uploads after the loss, want the 2 images that kept their pixels uploaded again", got)
+	if c.Stats().Decodes != decodes+3 || g.uploads != uploads+3 {
+		t.Errorf("recovery decoded %d and uploaded %d, want 3 each", c.Stats().Decodes-decodes, g.uploads-uploads)
 	}
 	if n, _ := g.live(); n == 0 {
 		t.Error("no texture live after the images were uploaded again")
@@ -397,5 +408,83 @@ func TestGPULostUploadsAgain(t *testing.T) {
 	c.Poll()
 	if g.frees != frees {
 		t.Error("a Poll without a new epoch took images off the GPU")
+	}
+}
+
+// addResident builds a cache entry without involving file decoding.
+func addResident(t testing.TB, c *Cache, w, h int32) Handle {
+	t.Helper()
+	i := c.alloc()
+	if i < 0 {
+		t.Fatal("no entry")
+	}
+	e := &c.ents[i]
+	e.key = Key{Hash: uint64(i) + 1, W: w, H: h}
+	e.w, e.h, e.pad = w, h, atlasPad(w, h)
+	e.buf = c.bufs.get(int(e.cpuBytes()), c.fr)
+	if e.buf < 0 {
+		t.Fatal("no pixel buffer")
+	}
+	c.cpuUsed += c.bufs.size(e.buf)
+	e.stage = stCPU
+	c.insert(i)
+	c.pushFront(i)
+	if !c.upload(i) {
+		t.Fatal("no upload space")
+	}
+	return makeHandle(i, e.gen)
+}
+
+func TestAtlasEvictionChoosesACompatiblePage(t *testing.T) {
+	c, _ := newTestCache(t, Options{})
+	c.frame = 10
+	var short [8]Handle
+	for i := range short {
+		short[i] = addResident(t, c, 254, 126)
+	}
+	for i := 0; i < 16; i++ {
+		addResident(t, c, 254, 254)
+	}
+	if len(c.pages) != 2 {
+		t.Fatalf("pages %d, want 2", len(c.pages))
+	}
+	// Protect one image in each 128-pixel shelf. This page cannot supply
+	// a 256-pixel-high region, even after every cold image is removed.
+	for i := 1; i < len(short); i += 2 {
+		c.touch(short[i].index())
+	}
+	c.gpuBudget = c.gpuUsed
+	before := c.Stats().EvictedGPU
+	addResident(t, c, 254, 254)
+	for _, h := range short {
+		if c.State(h) != Ready {
+			t.Fatal("evicted an image from an incompatible page")
+		}
+	}
+	if n := c.Stats().EvictedGPU - before; n != 1 {
+		t.Fatalf("evicted %d images, want one compatible region", n)
+	}
+	// A byte-budget eviction cannot free the partly protected page either.
+	c.makeRoom(-1, 360000)
+	for _, h := range short {
+		if c.State(h) != Ready {
+			t.Fatal("evicted a cold image from a protected page for no GPU bytes")
+		}
+	}
+}
+
+func TestCacheScratchMatchesWorkerPools(t *testing.T) {
+	old := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(old)
+	for _, workers := range []int{0, 3, 64} {
+		c, _ := newTestCache(t, Options{Workers: workers, Entries: 1})
+		want := workers
+		if want == 0 {
+			want = 2
+		}
+		if got := cap(c.workers); got != want+animWorkers {
+			t.Fatalf("Workers %d: scratches %d, want %d", workers, got, want+animWorkers)
+		}
+		c.Close(time.Second)
 	}
 }

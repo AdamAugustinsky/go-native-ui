@@ -1,8 +1,11 @@
 package img
 
 import (
+	"bytes"
+	"compress/lzw"
 	"image"
 	"image/color"
+	"image/gif"
 	"runtime"
 	"testing"
 	"time"
@@ -250,4 +253,164 @@ func sheetColour(i, n int) [3]byte {
 	m := animgen.Sheet(1, 1, n, 1)[i].Image
 	c := m.NRGBAAt(0, 0)
 	return [3]byte{c.R, c.G, c.B}
+}
+
+// Repack GIF data into tiny sub-blocks, optionally in interlace row order.
+func repackGIF(t testing.TB, data []byte, interlaced bool, edit func([]byte) []byte) []byte {
+	t.Helper()
+	g, err := openGIF(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := gif.DecodeAll(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := append([]byte(nil), g.head...)
+	for i, f := range g.frames {
+		if f.hasGCE {
+			out = append(out, f.gce[:]...)
+		}
+		b := g.data[f.start:f.end]
+		n := 10
+		if b[9]&0x80 != 0 {
+			n += 3 << (b[9]&7 + 1)
+		}
+		desc := append([]byte(nil), b[:n]...)
+		if interlaced {
+			desc[9] |= 0x40
+		}
+		out = append(out, desc...)
+		m := decoded.Image[i]
+		indices := append([]byte(nil), m.Pix...)
+		if interlaced {
+			indices = indices[:0]
+			for pass, start := range []int{0, 4, 2, 1} {
+				step := [4]int{8, 8, 4, 2}[pass]
+				for y := start; y < m.Rect.Dy(); y += step {
+					indices = append(indices, m.Pix[y*m.Stride:y*m.Stride+m.Rect.Dx()]...)
+				}
+			}
+		}
+		if edit != nil {
+			indices = edit(indices)
+		}
+		var compressed bytes.Buffer
+		w := lzw.NewWriter(&compressed, lzw.LSB, int(b[n]))
+		if _, err := w.Write(indices); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, b[n])
+		for body := compressed.Bytes(); len(body) > 0; {
+			n := min(len(body), 3)
+			out = append(out, byte(n))
+			out = append(out, body[:n]...)
+			body = body[n:]
+		}
+		out = append(out, 0)
+	}
+	return append(out, 0x3b)
+}
+
+func TestGIFSubBlocksPalettesAndInterlace(t *testing.T) {
+	for _, h := range []int{1, 2, 3, 5, 11} {
+		g := &gif.GIF{Delay: []int{3, 7}, Disposal: []byte{gif.DisposalBackground, gif.DisposalPrevious}}
+		for frame := 0; frame < 2; frame++ {
+			pal := color.Palette{color.NRGBA{}, color.NRGBA{255, 0, 0, 255}, color.NRGBA{0, 255, 0, 255}, color.NRGBA{0, 0, 255, 255}}
+			if frame == 1 {
+				pal[1], pal[3] = pal[3], pal[1]
+			}
+			m := image.NewPaletted(image.Rect(0, 0, 13, h), pal)
+			for i := range m.Pix {
+				m.Pix[i] = byte((i + frame) % 4)
+			}
+			g.Image = append(g.Image, m)
+		}
+		g.Config = image.Config{ColorModel: g.Image[0].Palette, Width: 13, Height: h}
+		var encoded bytes.Buffer
+		if err := gif.EncodeAll(&encoded, g); err != nil {
+			t.Fatal(err)
+		}
+		for _, interlaced := range []bool{false, true} {
+			data := repackGIF(t, encoded.Bytes(), interlaced, nil)
+			want, err := gif.DecodeAll(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := openGIF(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := newCompositor(13, h)
+			for cycle := 0; cycle < 2; cycle++ {
+				ref.reset()
+				for i, m := range want.Image {
+					ref.draw(m, m.Rect.Min, got.frames[i].disposal, true)
+					actual, err := got.frame(i)
+					if err != nil || !bytes.Equal(actual.Pix, ref.canvas.Pix) {
+						t.Fatalf("height %d interlace %v frame %d: %v or pixels differ", h, interlaced, i, err)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestGIFBadPixelData(t *testing.T) {
+	base := twoFrameGIF(t, 8, 8)
+	for _, edit := range []func([]byte) []byte{
+		func(b []byte) []byte { return b[:len(b)-1] },
+		func(b []byte) []byte { return append(b, 1) },
+	} {
+		g, err := openGIF(repackGIF(t, base, false, edit))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.frame(0); err == nil {
+			t.Fatal("incorrect pixel count decoded")
+		}
+	}
+}
+
+func TestGIFFrameZeroAlloc(t *testing.T) {
+	g, err := openGIF(twoFrameGIF(t, 128, 96))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pix := make([]byte, 66*50*4)
+	frame := func() {
+		for i := 0; i < 2; i++ {
+			m, err := g.frame(i)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scaleCanvas(pix, 66, 1, 64, 48, m)
+		}
+	}
+	frame()
+	if n := testing.AllocsPerRun(100, frame); n != 0 {
+		t.Fatalf("warmed GIF decode, composite and scale: %v allocations", n)
+	}
+}
+
+func TestAnimatedFrameRestoresWithoutDecode(t *testing.T) {
+	g := &epochGPU{fakeGPU: newFakeGPU()}
+	c, _ := newTestCache(t, Options{Renderer: g})
+	data := twoFrameGIF(t, 32, 32)
+	key := Key{Hash: HashBytes(data), W: 16, H: 16, Flags: Animate}
+	var h Handle
+	settle(t, c, func() { h, _ = c.Request(key, Bytes(data)) })
+	buf := c.ents[h.index()].buf
+	if buf < 0 || !c.Animated(h) {
+		t.Fatal("animated frame was not retained")
+	}
+	decodes, uploads := c.Stats().Decodes, g.uploads
+	g.epoch++
+	c.Poll()
+	if c.State(h) != Ready || c.ents[h.index()].buf != buf || c.Stats().Decodes != decodes || g.uploads != uploads+1 {
+		t.Fatal("animation did not restore its retained shown frame")
+	}
 }

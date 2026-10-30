@@ -1,6 +1,7 @@
 package img
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,10 +34,11 @@ type entry struct {
 
 	buf int32 // decoded pixels in memory, -1 if none
 
-	tex    gpu.TextureID // its texture: an atlas page's or its own
-	page   int32         // atlas page index, -1 for its own texture
-	shelf  int32
-	ax, ay int32 // origin of the (padded) region in the page
+	tex                gpu.TextureID // its texture: an atlas page's or its own
+	page               int32         // atlas page index, -1 for its own texture
+	shelf              int32
+	pagePrev, pageNext int32 // page residents
+	ax, ay             int32 // origin of the (padded) region in the page
 
 	lastUse    uint64 // frame of the last Request or Use
 	prev, next int32  // LRU list, most recent first
@@ -77,6 +79,7 @@ type Cache struct {
 	upq                            []int32
 	upHead, upN                    int
 	pages                          []*page
+	evictSeq                       uint64
 	frame                          uint64
 	ep                             interface{ Epoch() uint32 } // the renderer's, if it counts rebuilds
 	epoch                          uint32                      // ep's when the GPU's contents were last made
@@ -114,6 +117,9 @@ func NewCache(o Options) *Cache {
 		o.AnimRing = defaultAnimRing
 	}
 	o.AnimRing = max(2, min(o.AnimRing, maxRing))
+	if o.Workers <= 0 {
+		o.Workers = min(runtime.GOMAXPROCS(0), 4)
+	}
 	n := o.Entries
 	queue := 64
 	c := &Cache{
@@ -151,11 +157,7 @@ func NewCache(o Options) *Cache {
 	}
 	c.animList = make([]int32, 0, n)
 	c.aresults = make([]task.Result[result], 0, queue)
-	workers := o.Workers
-	if workers <= 0 {
-		workers = 4 // at least as many as task's default
-	}
-	c.workers = make([]*worker, 0, max(workers+animWorkers, 64)) // a worker's scratch for every goroutine of both pools
+	c.workers = make([]*worker, 0, o.Workers+animWorkers) // one scratch per goroutine of both pools
 	for i := 0; i < cap(c.workers); i++ {
 		c.workers = append(c.workers, new(worker))
 	}
@@ -379,8 +381,8 @@ func taskKey(i int32, gen uint32) uint64 { return uint64(gen)<<32 | uint64(uint3
 // When the renderer was rebuilt after a lost device (its Epoch changed), the
 // textures kept their ids and lost their pixels: Poll takes every image off
 // the GPU and uploads again, a few a frame like new decodes, those it still
-// holds the pixels of (Options.CPUBytes); the others, and the handles of
-// images whose pixels it dropped, no longer resolve and are requested again.
+// holds the pixels of (animations); still images and their handles no longer
+// resolve and are requested again from their source.
 // An image is Pending until then.
 func (c *Cache) Poll() (more bool) {
 	if c.closed {
@@ -487,7 +489,13 @@ func (c *Cache) upload(i int32) bool {
 		if !ok {
 			return false
 		}
-		e.page, e.shelf, e.ax, e.ay, e.tex = int32(p), int32(sh), x, y, c.pages[p].tex
+		pg := c.pages[p]
+		e.page, e.shelf, e.ax, e.ay, e.tex = int32(p), int32(sh), x, y, pg.tex
+		e.pagePrev, e.pageNext = -1, pg.head
+		if pg.head >= 0 {
+			c.ents[pg.head].pagePrev = i
+		}
+		pg.head = i
 		c.r.Stage(e.tex, int(x), int(y), int(bw), int(bh), pix, int(bw*4))
 	} else {
 		need := int64(bw) * int64(bh) * 4
@@ -498,6 +506,9 @@ func (c *Cache) upload(i int32) bool {
 		c.gpuUsed += need
 	}
 	e.stage = stGPU
+	if c.anims[i] == nil {
+		c.dropPixels(i) // Upload and Stage have copied the pixels
+	}
 	c.st.Uploads++
 	c.st.UploadedBytes += int64(bw) * int64(bh) * 4
 	return true
@@ -506,33 +517,72 @@ func (c *Cache) upload(i int32) bool {
 // atlasAlloc finds a bw×bh region in a page: an existing page first, then a
 // new page within the budget, evicting images not in use to make room.
 func (c *Cache) atlasAlloc(i, bw, bh int32) (p int, x, y int32, sh int, ok bool) {
-	var dim int32
-	for {
-		dim = 512
-		if bw > dim || bh > dim {
-			dim = pageSize
+	dim := int32(512)
+	if bw > dim || bh > dim {
+		dim = pageSize
+	}
+	for k, pg := range c.pages {
+		if pg == nil {
+			continue
 		}
-		for k, pg := range c.pages {
-			if pg == nil {
+		dim = pageSize
+		if x, y, sh, ok := pg.alloc(bw, bh); ok {
+			return k, x, y, sh, true
+		}
+	}
+	if c.gpuUsed+pageBytes > c.gpuBudget && bw <= 512 && heightClass(bh) <= 512 {
+		dim = 512
+	}
+	if c.gpuUsed+int64(dim)*int64(dim)*4 > c.gpuBudget {
+		// Inspect each page once, in LRU order. Simulate freeing its cold
+		// regions before disturbing any page's working set.
+		seq := c.nextEviction()
+		for j := c.tail; j >= 0; j = c.ents[j].prev {
+			e := &c.ents[j]
+			if c.inUse(e) {
+				break
+			}
+			if e.stage != stGPU || e.page < 0 || j == i {
 				continue
 			}
-			dim = pageSize // add full-size pages once the small first page fills
-			if x, y, sh, ok := pg.alloc(bw, bh); ok {
-				return k, x, y, sh, true
+			k := int(e.page)
+			pg := c.pages[k]
+			if pg.seen == seq {
+				continue
 			}
-		}
-		// Use the budget's tail rather than evicting a working set that
-		// would fit: a small first page leaves a non-page-sized remainder.
-		if c.gpuUsed+pageBytes > c.gpuBudget && bw <= 512 && heightClass(bh) <= 512 {
-			dim = 512
-		}
-		if c.gpuUsed+int64(dim)*int64(dim)*4 <= c.gpuBudget {
+			pg.seen = seq
+			trial := *pg
+			for v := pg.head; v >= 0; v = c.ents[v].pageNext {
+				e := &c.ents[v]
+				if v != i && !c.inUse(e) {
+					trial.free(e.ax, e.w+2*e.pad, int(e.shelf))
+				}
+			}
+			if _, _, _, fits := trial.alloc(bw, bh); !fits {
+				continue
+			}
+			// Only this page can supply the region. Leave other pages alone.
+			for v := c.tail; v >= 0; {
+				e := &c.ents[v]
+				next := e.prev
+				if c.inUse(e) {
+					break
+				}
+				if e.stage == stGPU && e.page == int32(k) && v != i {
+					c.evictGPU(v)
+					if c.pages[k] == nil {
+						dim = pg.dim
+						break
+					}
+					if x, y, sh, ok := pg.alloc(bw, bh); ok {
+						return k, x, y, sh, true
+					}
+				}
+				v = next
+			}
 			break
 		}
-		if !c.evictOne(i) {
-			c.st.OverBudget++ // everything resident is in use: a page over budget
-			break
-		}
+		c.makeRoom(i, int64(dim)*int64(dim)*4)
 	}
 	k := -1
 	for j, pg := range c.pages {
@@ -541,7 +591,7 @@ func (c *Cache) atlasAlloc(i, bw, bh int32) (p int, x, y int32, sh int, ok bool)
 			break
 		}
 	}
-	pg := &page{dim: dim}
+	pg := &page{dim: dim, head: -1}
 	pg.tex = c.r.NewTexture(gpu.TexRGBA8, int(dim), int(dim))
 	if k < 0 {
 		k = len(c.pages)
@@ -557,33 +607,55 @@ func (c *Cache) atlasAlloc(i, bw, bh int32) (p int, x, y int32, sh int, ok bool)
 // makeRoom evicts images not in use until need more bytes fit the GPU
 // budget, or nothing more can go.
 func (c *Cache) makeRoom(i int32, need int64) {
-	for c.gpuUsed+need > c.gpuBudget {
-		if !c.evictOne(i) {
-			c.st.OverBudget++
-			return
+	seq := c.nextEviction()
+	for j := c.tail; j >= 0 && c.gpuUsed+need > c.gpuBudget; {
+		e := &c.ents[j]
+		prev := e.prev // eviction may remove the entry from the LRU
+		if c.inUse(e) {
+			break
 		}
+		if e.stage == stGPU && j != i {
+			can := true
+			if e.page >= 0 {
+				pg := c.pages[e.page]
+				if pg.seen != seq {
+					pg.seen, pg.cold = seq, true
+					for v := pg.head; v >= 0; v = c.ents[v].pageNext {
+						if v == i || c.inUse(&c.ents[v]) {
+							pg.cold = false
+							break
+						}
+					}
+				}
+				can = pg.cold // a partly protected page cannot release GPU bytes
+			}
+			if can {
+				c.evictGPU(j)
+			}
+		}
+		j = prev
 	}
+	if c.gpuUsed+need > c.gpuBudget {
+		c.st.OverBudget++
+	}
+}
+
+func (c *Cache) nextEviction() uint64 {
+	c.evictSeq++
+	if c.evictSeq == 0 {
+		for _, pg := range c.pages {
+			if pg != nil {
+				pg.seen = 0
+			}
+		}
+		c.evictSeq++
+	}
+	return c.evictSeq
 }
 
 // inUse reports whether entry e was requested or drawn in this frame or the
 // last: it is in view.
 func (c *Cache) inUse(e *entry) bool { return e.lastUse+1 >= c.frame }
-
-// evictOne frees the GPU memory of the least recently used image that is on
-// the GPU and not in use (other than except); false if there is none.
-func (c *Cache) evictOne(except int32) bool {
-	for i := c.tail; i >= 0; i = c.ents[i].prev {
-		e := &c.ents[i]
-		if c.inUse(e) {
-			return false // the list is in order of use: the rest is newer
-		}
-		if e.stage == stGPU && i != except {
-			c.evictGPU(i)
-			return true
-		}
-	}
-	return false
-}
 
 // evictGPU takes entry i off the GPU. Its pixels stay if it has them in
 // memory; otherwise the entry goes.
@@ -591,6 +663,14 @@ func (c *Cache) evictGPU(i int32) {
 	e := &c.ents[i]
 	if e.page >= 0 {
 		pg := c.pages[e.page]
+		if e.pagePrev >= 0 {
+			c.ents[e.pagePrev].pageNext = e.pageNext
+		} else {
+			pg.head = e.pageNext
+		}
+		if e.pageNext >= 0 {
+			c.ents[e.pageNext].pagePrev = e.pagePrev
+		}
 		pg.free(e.ax, e.w+2*e.pad, int(e.shelf))
 		if pg.images == 0 {
 			c.r.FreeTexture(pg.tex)
@@ -618,8 +698,8 @@ func (c *Cache) trimCPU() {
 	for i := c.tail; i >= 0 && c.cpuUsed > c.cpuBudget; {
 		prev := c.ents[i].prev
 		e := &c.ents[i]
-		if a := c.anims[i]; a != nil && a.hidden && c.inUse(e) && !a.inflight && c.trimHidden(a) {
-			break // (built but not shown, clipped or scrolled out: its canvases go, and come back when it is shown)
+		if c.inUse(e) {
+			break // newer still images have no pixels to trim
 		}
 		switch {
 		case c.anims[i] != nil && !c.inUse(e) && !c.animBusy(i): // an animation that is not shown goes whole: its decoder, canvases and frames
@@ -630,14 +710,21 @@ func (c *Cache) trimCPU() {
 				c.remove(i)
 			}
 			c.st.EvictedCPU++
-		case e.stage == stGPU && e.buf >= 0 && c.anims[i] == nil: // an animation in view keeps the frame it shows
-			c.dropPixels(i)
-			c.st.EvictedCPU++
 		case e.stage == stCPU && !c.inUse(e) && !c.animBusy(i):
 			c.remove(i)
 			c.st.EvictedCPU++
 		}
 		i = prev
+	}
+	if c.cpuUsed > c.cpuBudget {
+		// Hidden animations can be requested in a non-virtualised list.
+		// Inspect only animations past the LRU's in-use boundary.
+		for _, i := range c.animList {
+			a := c.anims[i]
+			if a.hidden && c.inUse(&c.ents[i]) && !a.inflight && c.trimHidden(a) {
+				break
+			}
+		}
 	}
 	c.bufs.trim(c.cpuBudget-c.cpuUsed, c.fr)
 }

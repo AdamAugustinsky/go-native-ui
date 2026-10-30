@@ -75,8 +75,9 @@
 // and never one drawn or requested in this frame or the last, so an image in
 // view is never evicted. When everything resident is in view the budget is
 // exceeded rather than leaving an image blank (Stats.OverBudget counts it).
-// Decoded pixels stay in CPU memory within Options.CPUBytes, so an image
-// evicted from the GPU and needed again is uploaded without decoding again.
+// Still-image pixels return to the buffer pool as soon as the upload copies
+// them. GPU eviction or device loss invalidates those handles; Request decodes
+// them again. Animations keep the frame showing for staging and recovery.
 //
 // # Animated images
 //
@@ -128,9 +129,9 @@ type Options struct {
 	// GPUBytes is the budget of texture memory: atlas pages and own textures
 	// (default 128 MiB).
 	GPUBytes int64
-	// CPUBytes is the budget of decoded pixels kept in memory, waiting for
-	// their upload or kept to upload again after a GPU eviction (default 32
-	// MiB). Pixels waiting for their upload are never dropped. What an
+	// CPUBytes is the budget of pixels waiting for upload and the frames
+	// animations keep (default 32 MiB). Still-image pixels return to the pool
+	// after upload. Pixels waiting for upload are never dropped. What an
 	// animation keeps (its file and canvases) counts too: one not in view is
 	// dropped whole, to stay within the budget.
 	CPUBytes int64

@@ -22,6 +22,9 @@ const (
 // VideoOptions configures OpenVideo. The zero value plays once, with sound
 // at full volume.
 type VideoOptions struct {
+	// Wake requests a frame after loading or starting playback. Set it to
+	// the owning window's Wake; nil wakes every window (platform.Wake).
+	Wake func()
 	// Loop starts the video again from the start when it ends.
 	Loop bool
 	// Muted silences its sound.
