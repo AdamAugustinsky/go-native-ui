@@ -32,6 +32,24 @@ const (
 	rigCell = 8
 )
 
+func TestTextFieldCaretIsIntentionalCoverAtFractionalScale(t *testing.T) {
+	r := newRig(t, true)
+	r.buf.SetString("abcdef")
+	r.buf.SetCaret(2)
+	r.c.TextEdit.BlinkHalfNs = 0
+	for _, scale := range []float32{1, 2, 1.5} {
+		r.c.Begin(&r.in, 400, 100, scale, .016)
+		r.c.NextSize(Px(200), Px(30*scale))
+		r.c.NextPad(4)
+		r.c.NextTextColor(0x00ff00ff)
+		r.c.TextField("f", &r.buf)
+		r.c.End(&r.list)
+		if findings := r.c.Audit(nil); len(findings) != 0 {
+			t.Fatalf("scale=%g: %v", scale, findings)
+		}
+	}
+}
+
 func newRig(t *testing.T, mac bool) *fieldRig {
 	t.Helper()
 	old := macKeys
