@@ -413,6 +413,13 @@ Linux targets stay at the brief's values until we have machines.
   platform with a regression threshold.
 - Golden-image renderer tests are few and tolerant (per-channel
   threshold, only after phase 2).
+- Time: code that waits on time in pure Go is tested in `testing/synctest`
+  bubbles (`core.UseSynctestForTesting`), so waits cost no real time and
+  settling is `synctest.Wait()`; whole-app runs use D89's simulated clock.
+- Fuzzing: `func FuzzX` targets over parsers, payloads, editing, shaping and
+  encoders check properties (round-trips, offsets on boundaries, exact edit
+  references), not only the absence of panics. Their seeds run as tests; CI's
+  `fuzz` job fuzzes a bounded set (D-pending (synctest-fuzz)).
 
 ## 13. Risks
 

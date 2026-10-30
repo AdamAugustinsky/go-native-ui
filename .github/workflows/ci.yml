@@ -133,6 +133,53 @@ jobs:
           name: spike-binaries
           path: dist/
 
+  fuzz:
+    # The seed corpora (f.Add and testdata/fuzz) run in every test job as plain
+    # tests. This job fuzzes the targets over untrusted input and editing for a
+    # bounded time each, beside the other jobs, so it adds no wall time: it is
+    # done before the Windows test jobs (about 20 min). A failure uploads the
+    # input Go wrote to testdata/fuzz; commit it as a regression case.
+    name: fuzz (bounded, Linux amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      FUZZTIME: 20s
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: fuzz
+        run: |
+          fail=0
+          while read -r pkg target; do
+            echo "::group::$target ($pkg)"
+            if ! go test -run '^$' -fuzz "^$target\$" -fuzztime "$FUZZTIME" "$pkg"; then
+              echo "::error::$target ($pkg) failed: the input is in the fuzz-crashers artifact"; fail=1
+            fi
+            echo "::endgroup::"
+          done <<'TARGETS'
+          ./ui FuzzTextFieldEdits
+          ./ui FuzzIMECompositionHandoff
+          ./ui FuzzTextFieldPaste
+          ./text FuzzEngineShapeRuns
+          ./text FuzzFirstStrongRTL
+          ./text FuzzGraphemeDifferential
+          ./qr FuzzQREncode
+          ./highlight FuzzHighlighters
+          ./img FuzzImageParsers
+          ./fs FuzzFileNamePipeline
+          ./platform FuzzPasteDropPaths
+          ./app/prefs FuzzPrefsFile
+          TARGETS
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
+
   macos:
     name: macOS arm64 (Metal)
     if: inputs.only == '' || inputs.only == 'macos'
