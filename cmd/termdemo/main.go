@@ -68,7 +68,7 @@ type demo struct {
 
 	sess session.Service
 	att  session.Attachment
-	out  termSink // the program's output, for the UI thread
+	out  *rexui.TerminalInbox // the program's output: Write blocks while the view is behind
 	buf  []byte
 
 	daemon  bool   // the session runs in the daemon
@@ -244,10 +244,12 @@ func (d *demo) start() error {
 			}
 		}
 	}
+	var wake func()
 	if d.win != nil {
-		d.out.wake = d.win.Wake
+		wake = d.win.Wake
 	}
-	att, err := d.sess.Attach(id, &d.out, sz)
+	d.out = d.s.OpenInbox(rexui.TerminalInboxOpts{Wake: wake})
+	att, err := d.sess.Attach(id, d.out, sz)
 	if err != nil {
 		return err
 	}
@@ -261,6 +263,9 @@ func (d *demo) start() error {
 // close ends the window's hold on the session: a persistent one goes on in
 // the daemon, any other is hung up.
 func (d *demo) close() {
+	if d.out != nil {
+		d.out.Close() // first: a Write blocked on a full inbox returns, so the attachment can stop
+	}
 	if d.att != nil {
 		d.att.Close()
 	}
@@ -337,16 +342,15 @@ func boolTo1(b bool) float32 {
 	return 0
 }
 
-// take feeds what the program wrote since the last frame, and reports
-// whether it has exited (its last output is in by then).
+// take reports whether the program has exited (its last output is in the
+// inbox by then; the terminal parses it from there).
 func (d *demo) take() (exited bool) {
 	select {
 	case <-d.att.Done():
-		exited = true
+		return true
 	default:
+		return false
 	}
-	d.out.take(d.s.Feed)
-	return exited
 }
 
 // Script implements app.Scripter for -shot: frames are spaced in real time

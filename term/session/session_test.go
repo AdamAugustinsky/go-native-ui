@@ -327,7 +327,7 @@ func TestSlowView(t *testing.T) {
 				m = d.m
 			}
 			const lines = 200000
-			in, err := svc.Create(Options{Argv: []string{"/bin/sh", "-c", fmt.Sprintf("stty -echo; echo ready; read x; seq 1 %d; echo done", lines)}})
+			in, err := svc.Create(Options{Argv: []string{"/bin/sh", "-c", fmt.Sprintf("stty -echo; echo ready; read x; stty -onlcr; seq 1 %d; echo done", lines)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -354,10 +354,14 @@ func TestSlowView(t *testing.T) {
 			got := s.String()
 			body := got[strings.Index(got, "ready\r\n")+len("ready\r\n"):]
 			var want strings.Builder
+			// -onlcr: the macOS terminal driver repeats a newline's \r when a
+			// write blocks between the two bytes it makes of it (seen here
+			// under backpressure), so the bytes it sends are not the
+			// program's; without it they are.
 			for i := 1; i <= lines; i++ {
-				fmt.Fprintf(&want, "%d\r\n", i)
+				fmt.Fprintf(&want, "%d\n", i)
 			}
-			want.WriteString("done\r\n")
+			want.WriteString("done\n")
 			if body != want.String() {
 				t.Fatalf("the live stream lost or changed bytes: got %d bytes, want %d", len(body), want.Len())
 			}

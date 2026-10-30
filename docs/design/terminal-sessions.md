@@ -129,7 +129,13 @@ daemon's writes block, and the same bound applies (plus the kernel's socket
 buffers).
 
 The live stream never loses a byte. Only the ring wraps, and only the
-replay is affected. With no view attached, the reader never waits: a
+replay is affected. "Byte" means what the terminal driver sent: on macOS
+the driver itself repeats a newline's `\r` (`onlcr`) when the program's
+`write` blocks between the two bytes it makes of it, which backpressure
+makes happen (seen in about half the daemon runs of `TestSlowView` with
+`onlcr` on, never in ten runs with it off). A repeated carriage return
+draws the same screen; the test turns `onlcr` off to check the session's
+own path byte for byte. With no view attached, the reader never waits: a
 detached session keeps running and its output only goes to the ring. A view
 that never drains holds its session's program, and only that one, until it
 detaches, closes, is taken over, or its connection breaks. A sink that
@@ -162,10 +168,12 @@ termdemo runs its program in a local service by default, so its behaviour,
 `-shot` and `audit_test` are as before. `-daemon` runs it in the daemon,
 `-persist` makes it outlive the window and prints its ID, `-attach ID`
 reopens one, and `-sessions`, `-kill ID` and `-shutdown` manage the daemon.
-Output reaches the terminal through `termSink` (cmd/termdemo/sink.go), a
-small `io.Writer` that queues bytes and wakes the window. The UI thread
-feeds them to `TerminalState.Feed` in `take`. That is the seam where a
-bounded, blocking terminal writer replaces it.
+Output reaches the terminal through its `rexui.TerminalInbox`
+(docs/design/terminal-output-pacing.md): the session's sink is the inbox,
+whose `Write` blocks while the view is more than its high-water mark
+behind, so a slow window holds the session's program back through the
+same flow control. termdemo closes the inbox before the attachment, so a
+`Write` blocked on a full inbox returns and the attachment can stop.
 
 ## Tests (term/session, real pseudo-terminals)
 
