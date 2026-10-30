@@ -260,7 +260,7 @@ func (g *Gallery) Init(a *app.App) error {
 	g.k.Materials = a.Win != nil && a.Win.HasMaterials()
 	a.SetMenu(g.model) // the native menu bar on macOS
 	a.UI.Reserve(8192)
-	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
+	a.Text.ReserveRuns(text.WorkingSetRuns, text.WorkingSetGlyphs, text.WorkingSetTextBytes)
 	return nil
 }
 

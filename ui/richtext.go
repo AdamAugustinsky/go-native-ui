@@ -198,6 +198,13 @@ type richRec struct {
 	focusColor       uint32
 }
 
+type richViewCache struct {
+	view text.ParaView
+	ref  text.ParaRef
+	gen  uint32
+	ok   bool
+}
+
 // richPrev is what a RichText box keeps of its last layout, for the hit
 // testing of the next build: the paragraph, the width it was drawn in and the
 // content's offset in the box.
@@ -241,7 +248,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	}
 	if c.semNext.role == RoleNone {
 		c.semNext.role = RoleLabel
-		c.semNext.name = c.semA.AppendBytes(body)
+		c.NextSemNameBytes(body)
 	}
 	id := c.newBox(flags, key)
 	b := &c.boxes[id]
@@ -318,7 +325,19 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 		return sig
 	}
 	bs := &sig.Box
-	if pv, ok := c.prevRich(b); ok && (bs.Hovering || bs.Pressed || bs.Released) {
+	focused := false
+	for j := range spans {
+		if spans[j].Flags&spanHit != 0 && c.focusKey == RichLinkKey(b.key, j) {
+			focused = true
+			break
+		}
+	}
+	var prev text.ParaView
+	var prevOK bool
+	if focused || bs.Hovering || bs.Pressed || bs.Released {
+		prev, prevOK = c.prevRich(b)
+	}
+	if pv, ok := prev, prevOK; ok && (bs.Hovering || bs.Pressed || bs.Released) {
 		span := c.richSpanAt(&pv, b.rp, bs.Mouse[0], bs.Mouse[1])
 		if span >= 0 && pv.Spans[span].Flags&spanHit == 0 {
 			span = -1
@@ -345,12 +364,12 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	if b.flags&Disabled != 0 || c.blocked(b) || c.wasHidden(b) {
 		return sig
 	}
-	if pv, ok := c.prevRich(b); ok {
+	if pv, ok := prev, prevOK; focused && ok {
 		for j := range spans {
 			if spans[j].Flags&spanHit == 0 || c.focusKey != RichLinkKey(b.key, j) || j >= len(pv.Spans) || spans[j].Off != pv.Spans[j].Off || spans[j].Len != pv.Spans[j].Len {
 				continue
 			}
-			c.linkRects(b, &pv, j)
+			c.linkRects(b, &pv, j, b.rp)
 			if c.richLinkShown(id) && c.in.Focused && c.keyActivated(RichLinkKey(b.key, j)) {
 				sig.Clicked, sig.ClickedSpan = spans[j].Tag, j
 			}
@@ -499,7 +518,15 @@ func (c *Context) richView(b *box, r *richRec) text.ParaView {
 	} else if b.paraGen != c.lay.ParaGeneration() {
 		c.layoutRich(b, r, b.paraW)
 	}
-	return c.lay.Paragraph(b.para)
+	i := int(b.rich - 1)
+	for len(c.richViews) <= i {
+		c.richViews = append(c.richViews, richViewCache{})
+	}
+	v := &c.richViews[i]
+	if !v.ok || v.ref != b.para || v.gen != b.paraGen {
+		*v = richViewCache{view: c.lay.Paragraph(b.para), ref: b.para, gen: b.paraGen, ok: true}
+	}
+	return v.view
 }
 
 // richNatural is the width of the widest line of the RichText box b laid out
@@ -510,7 +537,7 @@ func (c *Context) richNatural(b *box, r *richRec) float32 {
 		w = max(r.maxW-b.padSum(0), 1)
 	}
 	c.layoutRich(b, r, w)
-	pv := c.lay.Paragraph(b.para)
+	pv := c.richView(b, r)
 	nat := float32(math.Ceil(float64(pv.Width)))
 	if w > 0 {
 		nat = min(nat, w)
@@ -533,7 +560,7 @@ func (c *Context) fitRich(b *box, r *richRec, avail float32) {
 		if avail == b.paraW {
 			return
 		}
-		if pv := c.lay.Paragraph(b.para); avail >= pv.FitFrom && avail <= pv.FitTo {
+		if pv := c.richView(b, r); avail >= pv.FitFrom && avail <= pv.FitTo {
 			return
 		}
 	}
@@ -546,9 +573,11 @@ func (c *Context) keepRich() {
 	for i := range c.rich {
 		r := &c.rich[i]
 		b := &c.boxes[r.id]
-		c.richView(b, r)
+		if b.paraW < 0 || b.paraGen != c.lay.ParaGeneration() {
+			c.richView(b, r)
+		}
 		b.rp = richPrev{
-			ref: b.para, gen: c.lay.ParaGeneration(), w: max(b.size[0]-b.padSum(0), 0),
+			ref: b.para, gen: c.lay.ParaGeneration(), w: max(b.rect[2]-b.rect[0]-b.padSum(0), 0),
 			ox: b.pad[0], oy: b.pad[1], align: b.align, ok: b.para != 0,
 		}
 	}
@@ -793,14 +822,14 @@ func (c *Context) RichRangeRects(id ID, from, to int, dst [][4]float32) [][4]flo
 }
 
 // linkRects sets c.rects to the window rectangles of span i of the RichText
-// box b (its last layout).
-func (c *Context) linkRects(b *box, pv *text.ParaView, i int) {
+// box b, using the geometry belonging to pv's frame.
+func (c *Context) linkRects(b *box, pv *text.ParaView, i int, rp richPrev) {
 	sp := &pv.Spans[i]
-	c.rects = pv.RangeRects(int(sp.Off), int(sp.Off+sp.Len), b.rp.w, c.rects[:0])
-	ox, oy := b.rect[0]+b.rp.ox, b.rect[1]+b.rp.oy
+	c.rects = pv.RangeRects(int(sp.Off), int(sp.Off+sp.Len), rp.w, c.rects[:0])
+	ox, oy := b.rect[0]+rp.ox, b.rect[1]+rp.oy
 	for k := range c.rects {
 		r := &c.rects[k]
-		dx := alignDX(pv, pv.LineAt(r[1]+0.5), b.rp.w, b.rp.align)
+		dx := alignDX(pv, pv.LineAt(r[1]+0.5), rp.w, rp.align)
 		r[0], r[2] = r[0]+ox+dx, r[2]+ox+dx
 		r[1], r[3] = r[1]+oy, r[3]+oy
 	}
@@ -813,15 +842,14 @@ func (c *Context) richCursors(dst []CursorRegion, b *box, clip [4]float32) []Cur
 	if r == nil || !r.links || b.flags&Disabled != 0 || empty(clip) {
 		return dst
 	}
-	pv, ok := c.prevRich(b)
-	if !ok {
-		return dst
-	}
+	// emit collects the regions of the frame it draws: its cached view
+	pv := c.richView(b, r)
+	rp := richPrev{w: max(b.rect[2]-b.rect[0]-b.padSum(0), 0), ox: b.pad[0], oy: b.pad[1], align: b.align}
 	for i := range pv.Spans {
 		if pv.Spans[i].Flags&spanHit == 0 {
 			continue
 		}
-		c.linkRects(b, &pv, i)
+		c.linkRects(b, &pv, i, rp)
 		for _, q := range c.rects {
 			if q = intersect(q, clip); !empty(q) {
 				dst = append(dst, CursorRegion{Rect: q, Cursor: CursorPointer})
@@ -849,7 +877,7 @@ func (c *Context) semLinks(dst *SemTree, b *box, rec *semRec) {
 		if sp.Flags&spanHit == 0 || len(dst.Nodes) >= MaxSemNodes {
 			continue
 		}
-		c.linkRects(b, &pv, i)
+		c.linkRects(b, &pv, i, b.rp)
 		var bounds [4]float32
 		for k, q := range c.rects {
 			if k == 0 {

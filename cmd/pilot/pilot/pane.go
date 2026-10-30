@@ -2,11 +2,15 @@ package pilot
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/fs"
 	"gonativeui/rexui"
 	"gonativeui/ui"
@@ -71,11 +75,12 @@ type pane struct {
 	relPending bool
 	goneInNav  bool
 
-	rc      reconcile
-	jobPos  int   // rows job: next index in l.Order
-	jobBusy bool  // rows are being (re)built
-	pendSel int32 // entry to select once its row is known, -1: none
-	pendRow int
+	rc        reconcile
+	jobPos    int  // rows job: next index in l.Order
+	jobBusy   bool // rows are being (re)built
+	rowFilter rowFilter
+	pendSel   int32 // entry to select once its row is known, -1: none
+	pendRow   int
 
 	// what Build maintains for the pane and takes back
 	topEntry  int32   // entry in the first visible row, -1 none
@@ -288,6 +293,11 @@ func (p *pane) onListing(r *fs.Result) {
 	if l.Err != nil {
 		err := l.Err // (before the listing goes back: a worker may reuse it at once)
 		p.release(l, lease)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || onWindows && errors.Is(err, winErrNotDirectory) {
+			// Focus-gain relisting also covers a missed deletion notification.
+			p.onResult(&fs.Result{Kind: fs.ResultGone, ID: p.id})
+			return
+		}
 		p.setMsg(errText(err), true)
 		return
 	}
@@ -353,6 +363,7 @@ func (p *pane) install(dir string, l *fs.Listing, lease uint32, sel string) {
 	p.pendSel = findName(l, sel)
 	p.scrollRow, p.scrollOff = 0, 0
 	p.topEntry, p.topRow, p.reveal = -1, 0, -1
+	p.trimBuffers()
 	p.startRows()
 }
 
@@ -390,9 +401,18 @@ const (
 	chunk     = 1024 // entries between two looks at the clock
 )
 
-type budget struct{ start time.Time }
+type budget struct {
+	start time.Time
+	units int
+}
 
-func (b *budget) over() bool { return time.Since(b.start) >= workSlice }
+func (b *budget) over() bool {
+	if core.SimulationForTesting() != nil {
+		b.units++
+		return b.units >= 32
+	}
+	return time.Since(b.start) >= workSlice
+}
 
 // startRows (re)builds the visible rows for the current query and hidden
 // setting. Without either the rows are just the listing's order. A job runs
@@ -408,28 +428,35 @@ func (p *pane) startRows() {
 	p.pendRow = -1
 	v.filtered = p.hideHidden || len(p.q) > 0
 	p.jobPos = 0
+	p.rowFilter.scan = 0
 	p.jobBusy = v.filtered || p.pendSel >= 0
 	if v.filtered && cap(v.rows) < len(v.l.Order) {
 		v.rows = make([]uint32, 0, withSlack(len(v.l.Order)))
 	}
 }
 
-// filterChunk appends to rows the visible entries among l.Order[pos:pos+n] and
-// returns the grown rows and the new position.
-func filterChunk(l *fs.Listing, q []byte, hide bool, rows []uint32, pos, n int) ([]uint32, int) {
+type rowFilter struct {
+	bits []uint64
+	scan int
+}
+
+// filterChunk scans names sequentially into match bits, then emits one chunk
+// of the sorted permutation. Both passes fit the pane's existing time budget.
+func filterChunk(l *fs.Listing, q []byte, hide bool, rows []uint32, pos, n int, f *rowFilter) ([]uint32, int) {
+	if len(q) > 0 && f.scan < len(l.Entries) {
+		end := min(f.scan+n, len(l.Entries))
+		f.bits = fs.FilterBits(l, q, f.bits, f.scan, end)
+		f.scan = end
+		return rows, pos
+	}
 	end := min(pos+n, len(l.Order))
-	sub := fs.Listing{Entries: l.Entries, Names: l.Names, Order: l.Order[pos:end]}
-	n0 := len(rows)
-	rows = fs.Filter(&sub, q, rows)
-	if hide {
-		w := n0
-		for _, e := range rows[n0:] {
-			if l.Entries[e].Flags&fs.FlagHidden == 0 {
-				rows[w] = e
-				w++
-			}
+	for _, e := range l.Order[pos:end] {
+		if hide && l.Entries[e].Flags&fs.FlagHidden != 0 {
+			continue
 		}
-		rows = rows[:w]
+		if len(q) == 0 || f.bits[e/64]&(uint64(1)<<(e%64)) != 0 {
+			rows = append(rows, e)
+		}
 	}
 	return rows, end
 }
@@ -456,7 +483,7 @@ func (p *pane) rowsStep(b *budget) {
 	for p.jobPos < n {
 		if v.filtered {
 			n0 := len(v.rows)
-			v.rows, p.jobPos = filterChunk(v.l, p.q, p.hideHidden, v.rows, p.jobPos, step)
+			v.rows, p.jobPos = filterChunk(v.l, p.q, p.hideHidden, v.rows, p.jobPos, step, &p.rowFilter)
 			p.scanTargets(v.rows[n0:], n0)
 		} else {
 			end := min(p.jobPos+4*step, n)
@@ -540,6 +567,7 @@ type reconcile struct {
 
 	rows    []uint32
 	rowsPos int
+	filter  rowFilter
 
 	topRow int
 }
@@ -555,6 +583,7 @@ func (p *pane) startReconcile(l *fs.Listing, lease uint32) {
 	rc.ver, rc.fver = sel.Version(), p.fver
 	rc.hTop, rc.newTop, rc.topRow, rc.found = 0, -1, -1, 0
 	rc.rowsPos = 0
+	rc.filter.scan = 0
 	rc.rows = rc.rows[:0]
 	rc.tab.reset(sel.Count() + 2)
 	if v.l != nil {
@@ -647,6 +676,7 @@ func (p *pane) reconcileStep(b *budget) {
 		if rc.fver != p.fver { // the query or the hidden setting changed: the rows built so far are for the old one
 			rc.fver = p.fver
 			rc.rows, rc.rowsPos = rc.rows[:0], 0
+			rc.filter.scan = 0
 		}
 		if p.hideHidden || len(p.q) > 0 {
 			if rc.rowsPos == 0 && cap(rc.rows) < len(rc.l.Order) {
@@ -657,7 +687,7 @@ func (p *pane) reconcileStep(b *budget) {
 				step /= 2
 			}
 			for rc.rowsPos < len(rc.l.Order) {
-				rc.rows, rc.rowsPos = filterChunk(rc.l, p.q, p.hideHidden, rc.rows, rc.rowsPos, step)
+				rc.rows, rc.rowsPos = filterChunk(rc.l, p.q, p.hideHidden, rc.rows, rc.rowsPos, step, &rc.filter)
 				if b.over() {
 					break
 				}
@@ -694,6 +724,7 @@ func (p *pane) reconcileStep(b *budget) {
 
 // swapIn replaces the shown listing by the reconciled one.
 func (p *pane) swapIn() {
+	p.fver++ // invalidate speculative work even when a pooled listing reuses its address
 	rc, v := &p.rc, &p.v
 	old, oldLease := v.l, v.lease
 	v.l, v.lease = rc.l, rc.lease
@@ -710,7 +741,34 @@ func (p *pane) swapIn() {
 		p.scrollRow, p.scrollOff = rc.topRow, rc.topFrac
 	}
 	p.release(old, oldLease)
+	p.trimBuffers()
 	p.msg = ""
+}
+
+// trimBuffers releases an exceptional directory's model scratch when the
+// working listing shrinks. Ordinary refreshes retain slack, so warmed frame
+// work does not allocate. No job may still be using these buffers.
+func (p *pane) trimBuffers() {
+	n := len(p.v.l.Entries)
+	limit := max(4*withSlack(n), 64<<10)
+	if cap(p.v.rows) > limit {
+		p.v.rows = append([]uint32(nil), p.v.rows...)
+	}
+	if cap(p.rc.rows) > limit {
+		p.rc.rows = nil
+	}
+	if cap(p.rc.m) > limit {
+		p.rc.m = nil
+	}
+	if cap(p.rowFilter.bits) > (limit+63)/64 {
+		p.rowFilter = rowFilter{}
+	}
+	if cap(p.rc.filter.bits) > (limit+63)/64 {
+		p.rc.filter = rowFilter{}
+	}
+	if cap(p.rc.tab.h) > max(4*withSlack(p.v.ts.Sel.Count()+2), 1024) {
+		p.rc.tab = nameMap{}
+	}
 }
 
 // work advances the pane's background-style work for one frame and reports
@@ -818,6 +876,14 @@ func (p *pane) sortBy(key fs.SortKey) {
 		p.nav.req = p.src.List(p.id, p.nav.path, p.sortKey, p.desc)
 		p.floor = p.nav.req
 	default:
+		if sorter, ok := p.src.(interface {
+			Resort(uint32, *fs.Listing, uint32, fs.SortKey, bool) uint64
+		}); ok && p.v.l != nil {
+			if req := sorter.Resort(p.id, p.v.l, p.v.lease, p.sortKey, p.desc); req != 0 {
+				p.floor, p.relPending = req, true
+				return
+			}
+		}
 		p.relist()
 	}
 }

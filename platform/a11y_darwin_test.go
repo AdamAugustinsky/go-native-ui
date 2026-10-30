@@ -230,6 +230,21 @@ func TestAXBridgeInProcess(t *testing.T) {
 		if n := testing.AllocsPerRun(100, w.SyncAX); n != 0 {
 			fail("active SyncAX of an unchanged tree: %v allocations", n)
 		}
+
+		// No queries for 30 seconds: frames stop exporting, but a client holding
+		// an element can reactivate it without changing its identity.
+		ax.lastQuery = Now() - 30e9
+		exported := src.exports
+		w.SyncAX()
+		if w.AXActive() || src.exports != exported {
+			fail("inactive bridge exported")
+		}
+		if got := axStrAttr(group, "accessibilityLabel"); got != "Composer" || !w.AXActive() || src.exports != exported+1 {
+			fail("element query did not reactivate: %q, active %v, exports %d", got, w.AXActive(), src.exports-exported)
+		}
+		if got := arrayObjs(objc.Send(w.view, selAXChildren)); len(got) != 2 || got[0] != group {
+			fail("reactivation changed element identities")
+		}
 		posted := ax.posted
 		b.t.Nodes[b.idx(40)].Range[2] = 4
 		w.SyncAX()

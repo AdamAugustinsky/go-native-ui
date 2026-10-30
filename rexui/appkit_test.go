@@ -178,7 +178,7 @@ func measureQuads(g *rig, root ui.ID, sp catalog.Spec) appkitMeasurement {
 	var ring *gpu.Quad
 	for i := range g.list.Quads {
 		q := &g.list.Quads[i]
-		if q.Mode != gpu.ModeShape || q.Soft > 0 {
+		if (q.Mode != gpu.ModeShape && q.Mode != gpu.ModeCapsule) || q.Soft > 0 {
 			continue
 		}
 		if q.Color[0]&0xFF == 0 && (q.Border == 0 || q.BorderColor&0xFF == 0) {
@@ -345,6 +345,12 @@ func visible(q *gpu.Quad, x, y float64) (uint32, bool) {
 	}
 	if q.Clip != ([4]float32{}) && (x < float64(q.Clip[0]) || x >= float64(q.Clip[2]) || y < float64(q.Clip[1]) || y >= float64(q.Clip[3])) {
 		return 0, false
+	}
+	if q.Mode == gpu.ModeCapsule {
+		ax, ay := x-x0-float64(q.UV[0]), y-y0-float64(q.UV[1])
+		dx, dy := float64(q.UV[2]-q.UV[0]), float64(q.UV[3]-q.UV[1])
+		along := min(max((ax*dx+ay*dy)/max(dx*dx+dy*dy, 1e-6), 0), 1)
+		return q.Color[0], math.Hypot(ax-dx*along, ay-dy*along) <= float64(q.Radii[0])
 	}
 	if !inRounded(x, y, x0, y0, x1, y1, q.Radii) {
 		return 0, false

@@ -3,10 +3,10 @@
 // and a bounded multi-producer single-consumer ring. Nothing here depends on
 // the operating system, cgo or the platform package.
 //
-// All containers allocate while they grow and never afterwards: the
-// steady-state frame path is allocation free (DECISIONS D11). Growth is
-// reported (Table.Put) or can be pre-empted (Reserve) so tests and start-up
-// code can size them once.
+// Containers reuse their storage: the steady-state frame path is allocation
+// free (DECISIONS D11). Growth is reported (Table.Put) or can be pre-empted
+// (Reserve) so tests and start-up code can size them once. Explicit trimming
+// may allocate to release excess capacity.
 package core
 
 import (
@@ -160,6 +160,22 @@ func PointerFree[T any]() bool { return pointerFree(typeOf[T]()) }
 type Frame struct {
 	a [2]Arena
 	i int
+}
+
+// Reset starts a frame without keeping its predecessor. Unlike Swap, it
+// needs only one arena; Prev must not be used with Reset.
+func (f *Frame) Reset() { f.Cur().Reset() }
+
+// Trim releases excess capacity while preserving the arena's bytes and spans.
+// Call it after sustained low demand, outside the warmed frame path.
+func (a *Arena) Trim(n int) {
+	n = max(n, len(a.buf), 1024)
+	if n >= cap(a.buf)/4 {
+		return
+	}
+	b := make([]byte, len(a.buf), n)
+	copy(b, a.buf)
+	a.buf = b
 }
 
 // Swap starts a new frame: the current arena becomes the previous one and a

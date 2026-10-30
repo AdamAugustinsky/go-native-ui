@@ -131,7 +131,11 @@ func (c *Context) syncAtlas() {
 	})
 	for p := 0; p < c.sh.Pages(); p++ {
 		t := c.pageTexture(p)
-		if x, y, w, h, pix, stride, ok := c.sh.Dirty(p); ok {
+		for {
+			x, y, w, h, pix, stride, ok := c.sh.Dirty(p)
+			if !ok {
+				break
+			}
 			uploaded := c.pageUploaded
 			if c.shared != nil {
 				uploaded = c.shared.uploaded
@@ -177,10 +181,12 @@ func (c *Context) End(list *gpu.DrawList) {
 		// are dropped (dropStaleGlyphs) instead of being submitted.
 		last := try >= emitTries-1
 		c.finalPass, c.passGen, c.glyphQuads = last, gen, c.glyphQuads[:0]
+		c.beginRegions()
 		c.emit(list, c.root, win)
 		for i := 0; i < c.nOvs; i++ { // the overlays above it, in build order
 			c.emit(list, c.ovs[i].id, win)
 		}
+		c.endRegions()
 		c.finalPass = false
 		// A full atlas resets mid-frame and invalidates the glyph entries
 		// used so far: draw the frame again against the fresh atlas.
@@ -205,6 +211,7 @@ func (c *Context) End(list *gpu.DrawList) {
 	}
 	c.keepRich()
 	c.syncAtlas()
+	c.mesh.reset()
 }
 
 // maxOverflowRepaints is how many frames in a row that dropped glyphs (atlas
@@ -298,8 +305,22 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 	}
 	r := b.rect
 	sized := r[2] > r[0] && r[3] > r[1]
+	visible := intersect(r, clip)
 
 	if b.flags&DrawShadow != 0 {
+		// Only the background's fully opaque interior hides the shadow.
+		// Integer band edges keep adjacent clips from blending twice.
+		opaque := sized && b.flags&DrawBackground != 0 && b.bdrop == 0 && c.emitFade == [2]float32{}
+		for _, bg := range b.bg {
+			opaque = opaque && b.col(bg)&255 == 255
+		}
+		var hole [4]float32
+		if opaque {
+			inset := max(b.radii[0], b.radii[1], b.radii[2], b.radii[3], 0) + max(b.bd.Width, 0) + 1
+			hole = [4]float32{float32(math.Ceil(float64(r[0] + inset))), float32(math.Ceil(float64(r[1] + inset))),
+				float32(math.Floor(float64(r[2] - inset))), float32(math.Floor(float64(r[3] - inset)))}
+			opaque = !empty(hole)
+		}
 		for i := range b.shadow {
 			s := &b.shadow[i]
 			if s.Color&255 == 0 {
@@ -311,12 +332,28 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 				continue
 			}
 			col := b.col(s.Color)
+			if opaque {
+				for _, band := range [4][4]float32{
+					{clip[0], clip[1], clip[2], min(clip[3], hole[1])},
+					{clip[0], max(clip[1], hole[3]), clip[2], clip[3]},
+					{clip[0], max(clip[1], hole[1]), min(clip[2], hole[0]), min(clip[3], hole[3])},
+					{max(clip[0], hole[2]), max(clip[1], hole[1]), clip[2], min(clip[3], hole[3])},
+				} {
+					if empty(band) {
+						continue
+					}
+					q := c.quad(l)
+					q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, band, [4]uint32{col, col, col, col}, b.radii, s.Sigma
+				}
+				continue
+			}
 			q := c.quad(l)
 			q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, clip, [4]uint32{col, col, col, col}, b.radii, s.Sigma
 		}
 	}
 
-	if sized && !empty(intersect(r, clip)) {
+	if !empty(visible) {
+		c.collectRegions(id, visible)
 		bdrop := int(b.bdrop) - 1
 		if bdrop >= 0 && bdrop < c.bd.n { // the blur, its background the fallback (NextBackdrop)
 			q := gpu.Quad{Rect: r, Clip: clip, Radii: b.radii, FadeX: c.emitFade}
@@ -381,6 +418,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 	if b.fadeEnd > 0 {
 		c.emitFade = fadeOf(fade, [2]float32{r[2] - b.fadeEnd, r[2]})
 	}
+	c.emitMesh(l, id, cclip)
 	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
 		if c.boxes[ch].flags&floatingMask == 0 {
 			c.emit(l, ch, cclip)
@@ -563,39 +601,51 @@ var ellipsisText = []byte("…")
 // tail and ended with an ellipsis (EllipsisOverflowX). It reports false,
 // drawing nothing, for text it cannot cut so (right-to-left, no clusters).
 func (c *Context) emitTruncated(l *gpu.DrawList, b *box, x0, x1, baseline float32, clip [4]float32, col uint32) bool {
-	er := c.sh.Shape(b.font, ellipsisText)
-	if c.sh.RunGeneration() != b.runGen { // shaping the ellipsis evicted b's run
-		b.run = c.sh.Shape(b.font, c.fr.Cur().Bytes(b.txt))
-		b.runGen = c.sh.RunGeneration()
-		er = c.sh.Shape(b.font, ellipsisText)
-	}
-	ev := c.sh.Run(er)
-	eAdv := ev.Advance
-	v := c.sh.Run(b.run)
-	if len(v.Clusters) != len(v.Glyphs) || len(ev.Glyphs) == 0 {
-		return false
-	}
-	for _, cl := range v.Clusters {
-		if cl&text.ClusterRTL != 0 {
+	cut := c.truncationCache(b)
+	var v, ev text.RunView
+	if cut.ready && cut.run == b.run && cut.gen == b.runGen && cut.gen == c.sh.RunGeneration() && cut.w == x1-x0 {
+		if !cut.ok {
 			return false
 		}
-	}
-	// the glyphs [0, n) that leave room for the ellipsis, without a cluster
-	// cut in two (a glyph of the same cluster as the next stays with it)
-	n := 0
-	for n < len(v.Glyphs) && glyphEnd(v, n)+eAdv <= x1-x0+0.01 {
-		n++
-	}
-	for n > 0 && n < len(v.Glyphs) && v.Clusters[n] == v.Clusters[n-1] {
-		n--
-	}
-	for n > 0 {
-		off := int(v.Clusters[n-1])
-		if off >= len(v.Text) || (v.Text[off] != ' ' && v.Text[off] != '\t') {
-			break
+		v, ev = c.sh.Run(b.run), c.sh.Run(cut.ellipsis)
+	} else {
+		er := c.sh.Shape(b.font, ellipsisText)
+		if c.sh.RunGeneration() != b.runGen { // shaping the ellipsis evicted b's run
+			b.run = c.sh.Shape(b.font, c.fr.Cur().Bytes(b.txt))
+			b.runGen = c.sh.RunGeneration()
+			er = c.sh.Shape(b.font, ellipsisText)
 		}
-		n--
+		ev = c.sh.Run(er)
+		eAdv := ev.Advance
+		v = c.sh.Run(b.run)
+		*cut = truncCache{run: b.run, ellipsis: er, gen: c.sh.RunGeneration(), w: x1 - x0, ready: true}
+		if len(v.Clusters) != len(v.Glyphs) || len(ev.Glyphs) == 0 {
+			return false
+		}
+		for _, cl := range v.Clusters {
+			if cl&text.ClusterRTL != 0 {
+				return false
+			}
+		}
+		// the glyphs [0, n) that leave room for the ellipsis, without a cluster
+		// cut in two (a glyph of the same cluster as the next stays with it)
+		n := 0
+		for n < len(v.Glyphs) && glyphEnd(v, n)+eAdv <= x1-x0+0.01 {
+			n++
+		}
+		for n > 0 && n < len(v.Glyphs) && v.Clusters[n] == v.Clusters[n-1] {
+			n--
+		}
+		for n > 0 {
+			off := int(v.Clusters[n-1])
+			if off >= len(v.Text) || (v.Text[off] != ' ' && v.Text[off] != '\t') {
+				break
+			}
+			n--
+		}
+		cut.n, cut.ok = int32(n), true
 	}
+	n := int(cut.n)
 	tclip := intersect(clip, [4]float32{x0, clip[1], x1, clip[3]})
 	if empty(tclip) {
 		return true
@@ -611,7 +661,6 @@ func (c *Context) emitTruncated(l *gpu.DrawList, b *box, x0, x1, baseline float3
 	if n > 0 {
 		end = x0 + glyphEnd(v, n-1)
 	}
-	ev = c.sh.Run(er)
 	for i, gid := range ev.Glyphs {
 		c.emitGlyphFade(l, ev.Faces[i], gid, end+ev.X[i], baseline, tclip, [2]float32{}, col, smooth)
 	}

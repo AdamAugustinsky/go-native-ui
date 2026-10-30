@@ -1,5 +1,7 @@
 package platform
 
+import "gonativeui/internal/uitypes"
+
 // System appearance (phase 5, D32): light or dark mode and the accent colour,
 // read when the app starts and followed while it runs.
 //
@@ -51,7 +53,7 @@ package platform
 
 // SystemColor indexes SystemValues.Colors. The order is that of theme's
 // System roles (theme.Role), which take these values one to one.
-type SystemColor uint8
+type SystemColor = uitypes.SystemColor
 
 // The system colours, each the NSColor of the same name in the comment.
 const (
@@ -123,22 +125,7 @@ var SystemColorNames = [NumSystemColors]string{
 }
 
 // SystemValues are the system's colours and settings (ReadSystemValues).
-type SystemValues struct {
-	// Known is false when nothing was read: not macOS, or the app does not
-	// follow the system appearance (yet). The other fields are then zero.
-	Known bool
-	// Colors are the system colours in the light (0) and the dark (1)
-	// appearance, sRGB 0xRRGGBBAA with the colour's own alpha. With
-	// IncreaseContrast they are the high-contrast appearances' colours. A
-	// colour the system does not have (an older macOS) is 0.
-	Colors [2][NumSystemColors]uint32
-	// ReduceMotion, ReduceTransparency and IncreaseContrast are the
-	// accessibility display settings of the same names.
-	ReduceMotion, ReduceTransparency, IncreaseContrast bool
-	// LegacyScrollers is true when the preferred scroller style is legacy
-	// (always-visible scroll bars that take space) rather than overlay.
-	LegacyScrollers bool
-}
+type SystemValues = uitypes.SystemValues
 
 // Appearance is the system's light or dark mode and its accent colour.
 type Appearance struct {

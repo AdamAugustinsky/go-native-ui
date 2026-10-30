@@ -17,9 +17,9 @@ import "sync/atomic"
 type Ring[T any] struct {
 	buf  []ringSlot[T]
 	mask uint64
-	_    [56]byte
+	_    [120]byte
 	head atomic.Uint64 // next position producers claim
-	_    [56]byte
+	_    [120]byte
 	tail uint64 // next position the consumer reads (consumer only)
 }
 

@@ -2,7 +2,7 @@ package widget
 
 import (
 	"gonativeui/icon"
-	"gonativeui/menu"
+	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -21,8 +21,6 @@ import (
 // delivers the command as an edit action of that field. (A MenuButton is a
 // button and takes the focus when clicked, like any button.)
 
-const maxMenuDepth = base.MaxMenuDepth
-
 var popBase = base.PopupKeyBase
 
 // contextMenu builds the open context menu, at the end of the frame.
@@ -30,25 +28,6 @@ func (k *Kit) contextMenu() {
 	if k.pop.Kind == base.PopupContext && k.Menu() != nil {
 		k.menuPanel(0, k.pop.Menu, k.pop.At, ui.PlaceBelow)
 	}
-}
-
-// itemTitle is the text of a menu item.
-func (k *Kit) itemTitle(it menu.Item) (title string, cmd menu.Command) {
-	m := k.Menu()
-	switch it.Kind {
-	case menu.ItemSubmenu:
-		title = it.Title
-		if title == "" {
-			title = m.Menus()[it.Submenu].Title
-		}
-	case menu.ItemCommand:
-		cmd, _ = m.Command(it.Command)
-		title = cmd.Title
-		if title == "" {
-			title = menu.RoleTitle(cmd.Role)
-		}
-	}
-	return title, cmd
 }
 
 // popupSurface sets the style of the next box to the raised surface of a
@@ -74,8 +53,6 @@ type optionRow struct {
 	w, lw, sw, iconW float32
 	role             ui.Role
 	pos, n           int
-	mn               int    // 1 + the byte offset of the underlined mnemonic in text, 0 for none
-	text             string // label as a string, for the mnemonic's underline
 }
 
 func (k *Kit) optionRow(o optionRow) ui.ID {
@@ -130,9 +107,6 @@ func (k *Kit) optionRow(o optionRow) ui.ID {
 		c.NextAlign(ui.AlignRight)
 		c.BoxKeyed(ui.DrawText, ui.KeyN(o.key, 3), o.shortcut)
 	}
-	if o.mn > 0 {
-		k.MnemonicUnderline(ui.KeyN(o.key, 5), k.r.Font.UI, o.text, o.mn-1, px.Pad+o.iconW, 0, h, fg)
-	}
 	if o.sub {
 		f, disp := k.icons.Prepare(c, icon.ChevronRight, fg)
 		_, ih := k.icons.Size(icon.ChevronRight)
@@ -143,211 +117,9 @@ func (k *Kit) optionRow(o optionRow) ui.ID {
 	return id
 }
 
-// menuPanel builds the popup of menu mi of the model at nesting level level,
-// placed against anchor, and the submenu open from it. It reports nothing: a
-// choice goes to the model, a dismissal updates the popup state.
+// menuPanel shares Rex's drawn-menu implementation.
 func (k *Kit) menuPanel(level, mi int, anchor [4]float32, place ui.Placement) {
-	c := k.c
-	m := k.Menu()
-	px := &k.r.Px
-	mn := &m.Menus()[mi]
-	if level >= maxMenuDepth {
-		return
-	}
-
-	// the widths: the widest title and the widest shortcut
-	iconW := theme.Snap(px.IconSize)
-	var lw, sw float32
-	hasSub := false
-	for _, it := range mn.Items {
-		t, cmd := k.itemTitle(it)
-		lw = max(lw, k.textW(k.r.Font.UI, t))
-		if it.Kind == menu.ItemCommand {
-			k.scratch = cmd.Shortcut.AppendLabel(k.scratch[:0])
-			sw = max(sw, k.textWB(k.r.Font.UI, k.scratch))
-		}
-		hasSub = hasSub || it.Kind == menu.ItemSubmenu
-	}
-	lw = ui.CeilText(lw) // a title's box is never narrower than its text
-	sw = theme.Snap(sw)
-	rowW := 2*px.Pad + iconW + lw
-	if sw > 0 {
-		rowW += sw + 2*px.Gap
-	}
-	if hasSub {
-		rowW += iconW
-	}
-	rowW = theme.Snap(rowW)
-	pad := theme.Snap(px.GapSmall)
-
-	okey := ui.KeyN(popBase, uint64(level*64+mi+1))
-	mns := k.menuMnemonics(level, mn)
-	if !k.off() && k.pop.Hi[level] < 0 { // the innermost open menu takes its letters
-		k.menuLetter(level, mn, mns, okey)
-	}
-	show := k.ShowMnemonics()
-	k.popupSurface()
-	c.NextPadding(pad, pad, pad, pad)
-	c.NextSize(ui.Px(rowW+2*pad), ui.Children(1))
-	c.NextRole(ui.RoleMenu)
-	c.NextSemName(mn.Title)
-	os := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
-	if os.Dismissed {
-		if level == 0 {
-			k.pop.Reset()
-		} else {
-			k.pop.Hi[level-1] = -1
-		}
-	}
-	n := len(mn.Items)
-	var nv base.PopupNav
-	for i, it := range mn.Items {
-		if it.Kind == menu.ItemSeparator {
-			c.NextSize(ui.Pct(1), ui.Px(2*pad))
-			sep := c.Box(0, "sep")
-			c.Push(sep)
-			theme.At(c, px.Pad, pad-px.BorderW/2, rowW-2*px.Pad, px.BorderW)
-			c.NextBG(k.r.Pal.Line)
-			c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(okey, uint64(1000+i)), nil)
-			c.Pop()
-			continue
-		}
-		title, cmd := k.itemTitle(it)
-		key := ui.KeyN(okey, uint64(i+1))
-		o := optionRow{key: key, label: strBytes(title), w: rowW, lw: lw, sw: sw, iconW: iconW,
-			role: ui.RoleMenuItem, pos: i, n: n}
-		if _, off := mns.At(i); show && off >= 0 {
-			o.mn, o.text = off+1, title
-		}
-		if it.Kind == menu.ItemCommand {
-			k.scratch = cmd.Shortcut.AppendLabel(k.scratch[:0])
-			o.shortcut = k.scratch
-			o.checked = m.Checked(cmd.ID)
-			o.disabled = !m.Enabled(cmd.ID)
-			if o.checked {
-				o.role = ui.RoleMenuItemCheckbox
-			}
-		} else {
-			o.sub = true
-		}
-		o.disabled = o.disabled || k.off()
-		row := k.optionRow(o)
-		if !o.disabled {
-			nv.Arrive(c, key)
-			s := c.Signal(row)
-			if s.Hovering && k.MouseMoved() {
-				c.SetFocus(key)
-				c.SetFocusVisible(false)
-				if it.Kind == menu.ItemSubmenu {
-					k.OpenSubmenu(level, i, key)
-				} else if k.pop.Hi[level] >= 0 {
-					k.pop.Hi[level] = -1
-				}
-			}
-			focused := c.Focused(row)
-			switch {
-			case s.Clicked || s.Activated:
-				if it.Kind == menu.ItemSubmenu {
-					k.OpenSubmenu(level, i, key)
-				} else {
-					k.ChooseCommand(cmd.ID)
-				}
-			case focused && it.Kind == menu.ItemSubmenu && c.TakeKey(ui.KeyRight, 0):
-				k.OpenSubmenu(level, i, key)
-			case focused && level > 0 && c.TakeKey(ui.KeyLeft, 0):
-				c.SetFocus(k.pop.Row[level-1])
-				c.SetFocusVisible(true)
-				k.pop.Hi[level-1] = -1
-			case focused && level == 0 && k.pop.Kind == base.PopupMenu && c.TakeKey(ui.KeyLeft, 0):
-				k.StepMenuBar(-1)
-			case focused && level == 0 && k.pop.Kind == base.PopupMenu && it.Kind != menu.ItemSubmenu && c.TakeKey(ui.KeyRight, 0):
-				k.StepMenuBar(1)
-			}
-			nv.At(c, key, focused)
-		}
-		if it.Kind == menu.ItemSubmenu && k.pop.Hi[level] == int32(i) {
-			c.Push(row)
-			k.menuPanel(level+1, it.Submenu, c.Rect(row), ui.PlaceRight)
-			c.Pop()
-		}
-	}
-	nv.End(c)
-	c.EndOverlay()
-}
-
-// menuMnemonics assigns the mnemonics of menu mn's items, one per item
-// (separators have none).
-func (k *Kit) menuMnemonics(level int, mn *menu.Menu) *base.Mnemonics {
-	m := &k.mns[level]
-	*m = base.Mnemonics{}
-	for _, it := range mn.Items {
-		title, cmd := k.itemTitle(it)
-		var want rune
-		switch it.Kind {
-		case menu.ItemCommand:
-			want = cmd.Mnemonic
-		case menu.ItemSubmenu:
-			want = k.Menu().Menus()[it.Submenu].Mnemonic
-		case menu.ItemSeparator:
-			title = ""
-		}
-		m.Add(title, want)
-	}
-	m.Resolve()
-	return m
-}
-
-// menuLetter chooses the item of the open menu mn (at level, overlay key
-// okey) whose mnemonic was typed this frame, with or without Alt: a command
-// is chosen, a submenu opens; when several items have the letter, the focus
-// moves to the next of them instead.
-func (k *Kit) menuLetter(level int, mn *menu.Menu, mns *base.Mnemonics, okey ui.Key) {
-	c := k.c
-	letter, at := base.TypedMnemonic(c, 0)
-	if at < 0 {
-		letter, at = base.TypedMnemonic(c, ui.ModAlt)
-	}
-	if at < 0 {
-		return
-	}
-	from := -1
-	for i := range mn.Items {
-		if c.FocusKey() == ui.KeyN(okey, uint64(i+1)) {
-			from = i
-		}
-	}
-	i, n := mns.Find(letter, from)
-	if i < 0 {
-		return
-	}
-	base.ClaimMnemonic(c, at)
-	it := mn.Items[i]
-	key := ui.KeyN(okey, uint64(i+1))
-	_, cmd := k.itemTitle(it)
-	if it.Kind == menu.ItemCommand && !k.Menu().Enabled(cmd.ID) {
-		return
-	}
-	c.SetFocus(key)
-	c.SetFocusVisible(true)
-	switch {
-	case n > 1:
-		c.RequestFrame()
-	case it.Kind == menu.ItemSubmenu:
-		k.OpenSubmenu(level, i, key)
-	default:
-		k.ChooseCommand(cmd.ID)
-	}
-}
-
-// openSub opens the submenu of item i at level.
-func (k *Kit) openSub(level, i int, row ui.Key) {
-	if k.pop.Hi[level] != int32(i) {
-		for l := level + 1; l < maxMenuDepth; l++ {
-			k.pop.Hi[l] = -1
-		}
-		k.pop.Hi[level], k.pop.Row[level] = int32(i), row
-		k.c.RequestFrame()
-	}
+	rexui.DrawMenu(k.Kit, mi, anchor, place)
 }
 
 // MenuBar builds the menu bar of the model's Bar menus: a row of titles that

@@ -169,11 +169,11 @@ func viewOrDelegateWindow(self objc.ID) *Window {
 }
 
 var (
-	selKeyWindow        = objc.Sel("keyWindow")
-	selMainWindow       = objc.Sel("mainWindow")
-	selSheetParent      = objc.Sel("sheetParent")
-	selSetAllowsTabbing = objc.Sel("setAllowsAutomaticWindowTabbing:")
-	selSetTabbingMode   = objc.Sel("setTabbingMode:")
+	selKeyWindow        = objc.SelZ("keyWindow\x00")
+	selMainWindow       = objc.SelZ("mainWindow\x00")
+	selSheetParent      = objc.SelZ("sheetParent\x00")
+	selSetAllowsTabbing = objc.SelZ("setAllowsAutomaticWindowTabbing:\x00")
+	selSetTabbingMode   = objc.SelZ("setTabbingMode:\x00")
 )
 
 // eventWindow is the window an NSEvent is for: the window it happened in, or
@@ -246,7 +246,7 @@ func fallbackWindow() *Window {
 	return reg.open[0]
 }
 
-var selCascade = objc.Sel("cascadeTopLeftFromPoint:")
+var selCascade = objc.SelZ("cascadeTopLeftFromPoint:\x00")
 
 // cascade moves a window opening while others are open off the centre every
 // window opens at, which would hide the one under it: below and right of the
@@ -421,8 +421,8 @@ func keyWindowOurs() *Window {
 func (w *Window) WindowNumber() int { return int(objc.Send(w.win, selWindowNumber)) }
 
 var (
-	selWindowNumber = objc.Sel("windowNumber")
-	selDealloc      = objc.Sel("dealloc")
+	selWindowNumber = objc.SelZ("windowNumber\x00")
+	selDealloc      = objc.SelZ("dealloc\x00")
 )
 
 // WindowObjects counts the objects of Open's windows alive in the process,

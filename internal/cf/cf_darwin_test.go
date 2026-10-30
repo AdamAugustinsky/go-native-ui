@@ -90,3 +90,35 @@ func TestObjCOffMainThread(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func BenchmarkObjCLookup(b *testing.B) {
+	if err := Init(); err != nil {
+		b.Fatal(err)
+	}
+	fr := Acquire()
+	defer Release(fr)
+	Cls(fr, "NSString")
+	Sel(fr, "length")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		Cls(fr, "NSString")
+		Sel(fr, "length")
+	}
+}
+
+func TestLookupRepeatAllocatesNothing(t *testing.T) {
+	if err := Init(); err != nil {
+		t.Fatal(err)
+	}
+	fr := Acquire()
+	defer Release(fr)
+	wantClass, wantSel := Cls(fr, "NSString"), Sel(fr, "length")
+	if n := testing.AllocsPerRun(100, func() {
+		if Cls(fr, "NSString") != wantClass || Sel(fr, "length") != wantSel {
+			t.Error("unstable lookup")
+		}
+	}); n != 0 {
+		t.Errorf("%v allocations", n)
+	}
+}

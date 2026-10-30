@@ -14,39 +14,55 @@ import (
 
 // axBridge implements platform.AXSource over the App's ui context.
 type axBridge struct {
-	a        *App
-	sem      ui.SemTree
-	building bool // between Begin and End: the context has no finished frame to read
+	a          *App
+	generation uint64
+	building   bool // between Begin and End: the context has no finished frame to read
 }
 
-// AXExport converts the semantic tree of the last finished frame.
+// AXExport publishes the last finished semantic tree when its generation changes.
 func (b *axBridge) AXExport(dst *platform.AXTree) bool {
 	a := b.a
 	if a == nil || a.UI == nil || b.building {
 		return false
 	}
-	a.UI.Semantics(&b.sem)
-	ExportAX(&b.sem, dst)
+	if !a.UI.SemanticsActive() {
+		b.AXSetActive(true)
+		return false // activation needs a complete frame with semantic records
+	}
+	tree, generation := a.UI.SemanticSnapshot()
+	if tree == nil || generation == b.generation {
+		return false
+	}
+	ExportAX(tree, dst)
+	b.generation = generation
 	return true
 }
 
-// ExportAX converts the semantic tree src into dst, reusing dst's storage (it
-// allocates nothing once dst has grown to the tree's size). The roles, state
-// bits and actions have the same values on both sides.
-func ExportAX(src *ui.SemTree, dst *platform.AXTree) {
-	dst.Bytes = append(dst.Bytes[:0], src.Bytes...)
-	dst.Announce, dst.AnnounceSeq, dst.AnnouncePolite = src.Announce, src.AnnounceSeq, src.AnnouncePolite
-	dst.Nodes = dst.Nodes[:0]
-	for i := range src.Nodes {
-		n := &src.Nodes[i]
-		dst.Nodes = append(dst.Nodes, platform.AXNode{
-			Key: uint64(n.Key), Role: platform.AXRole(n.Role), State: platform.AXState(n.State),
-			Actions: platform.AXAction(n.Actions), Bounds: n.Bounds,
-			Parent: n.Parent, FirstChild: n.FirstChild, NextSibling: n.NextSibling,
-			Name: n.Name, Value: n.Value, Range: n.Range, Pos: n.Pos, TextSel: n.TextSel,
-			Level: n.Level, Host: n.Host, Text: platform.AXTextKind(n.Text),
-		})
+// AXSetActive is the optional platform activation hook. Activation turns
+// recording on for an app that switched it off (ui.Context.SetSemanticsActive),
+// which then needs one complete build before a tree can be published; expiry
+// leaves recording alone, because scripts, the agent bridge and the shot
+// tools read the same records (Context.Semantics).
+func (b *axBridge) AXSetActive(active bool) {
+	if b.a == nil || b.a.UI == nil {
+		return
 	}
+	b.generation = 0
+	if !active || b.a.UI.SemanticsActive() {
+		return
+	}
+	b.a.UI.SetSemanticsActive(true)
+	if b.a.Win != nil {
+		b.a.Win.Wake()
+	}
+}
+
+// ExportAX borrows src's node and text slices until src is changed. A bridge
+// keeps two semantic buffers so its current and previous trees stay distinct.
+func ExportAX(src *ui.SemTree, dst *platform.AXTree) {
+	dst.Bytes = src.Bytes
+	dst.Nodes = src.Nodes
+	dst.Announce, dst.AnnounceSeq, dst.AnnouncePolite = src.Announce, src.AnnounceSeq, src.AnnouncePolite
 }
 
 // The text and help functions answer from the published frame only: while a

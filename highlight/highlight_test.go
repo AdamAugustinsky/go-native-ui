@@ -19,8 +19,11 @@ func TestLangOf(t *testing.T) {
 	for name, want := range map[string]highlight.Lang{
 		"go": highlight.Go, "TS": highlight.TypeScript, "python {linenos}": highlight.Python,
 		"main.rs": highlight.Rust, "src/App.tsx": highlight.TypeScript, ".zshrc": highlight.Shell, "Makefile": highlight.Plain,
-		"c#": highlight.CSharp, "brainfuck": highlight.Plain, "": highlight.Plain,
+		"c#": highlight.CSharp, "a-very-long-directory/some-file-with-a-long-name.TsX": highlight.TypeScript, "C#": highlight.CSharp, "brainfuck": highlight.Plain, "": highlight.Plain,
 	} {
+		if n := testing.AllocsPerRun(10, func() { highlight.LangOf(name) }); n != 0 {
+			t.Errorf("LangOf(%q) allocated %v times", name, n)
+		}
 		if got := highlight.LangOf(name); got != want {
 			t.Errorf("LangOf(%q) = %v, want %v", name, got, want)
 		}

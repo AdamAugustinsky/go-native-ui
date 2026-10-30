@@ -30,3 +30,35 @@ func TestEllipsisOverflow(t *testing.T) {
 		t.Errorf("%d glyph quads for a line that fits, want 10", n)
 	}
 }
+
+func TestEllipsisCutInvalidatesOnWidthTextAndGeneration(t *testing.T) {
+	sh := newEditShaper()
+	h := &harness{t: t, c: New(sh), sh: sh.fakeShaper, w: 400, h: 100}
+	w, body := float32(60), "hello world###stable"
+	var id ID
+	build := func(c *Context) {
+		c.NextSize(Px(w), Px(20))
+		id = c.Box(DrawText|EllipsisOverflowX, body)
+	}
+	h.frame(build)
+	cut := *h.c.truncationCache(&h.c.boxes[id])
+	h.frame(build)
+	if got := *h.c.truncationCache(&h.c.boxes[id]); got != cut || len(quadsOf(h)) != 6 {
+		t.Fatal("warm ellipsis cut changed")
+	}
+	w = 40
+	h.frame(build)
+	if len(quadsOf(h)) != 5 || h.c.truncationCache(&h.c.boxes[id]).w != w {
+		t.Fatal("resized cut was not recomputed")
+	}
+	body = "x y abcdefg###stable"
+	h.frame(build)
+	if len(quadsOf(h)) != 3 {
+		t.Fatalf("changed text has %d glyphs", len(quadsOf(h)))
+	}
+	sh.gen++
+	h.frame(build)
+	if h.c.truncationCache(&h.c.boxes[id]).gen != sh.gen {
+		t.Fatal("eviction did not invalidate ellipsis cut")
+	}
+}

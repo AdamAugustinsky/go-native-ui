@@ -2,12 +2,126 @@ package text
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
 	"unsafe"
 )
+
+func indexedPara(v ParaView) ParaView {
+	if len(v.SpanOf) != len(v.Glyphs) {
+		v.SpanOf = make([]uint16, len(v.Glyphs))
+	}
+	b := paraBuild{lines: v.Lines, glyphs: v.Glyphs, xs: v.X, faces: v.Faces, clus: v.Clusters,
+		spanOf: v.SpanOf, width: v.Width, height: v.Height}
+	var s paraSlabs
+	var scratch CaretIndex
+	e := s.add(&Para{Text: v.Text, Spans: v.Spans}, 0, &b, &scratch)
+	return s.view(&e)
+}
+
+// The raw view retains the original per-query implementation as a reference.
+// Compare every byte's caret, and random ranges including partial UTF-8 and
+// graphemes, against it before relying on the cached geometry.
+func checkParaGeometryIndex(t *testing.T, v ParaView, rng *rand.Rand) {
+	t.Helper()
+	raw := v
+	raw.carets, raw.groups, raw.stops = nil, nil, nil
+	for i := range v.Lines {
+		a, b := v.LineRun(i), raw.LineRun(i)
+		if !slices.Equal(a.Text, b.Text) {
+			t.Fatalf("line %d: indexed text %q, raw %q", i, a.Text, b.Text)
+		}
+		for off := -1; off <= len(v.Text)+1; off++ {
+			if x, want := a.CaretX(off), b.CaretX(off); x != want {
+				t.Fatalf("%q line %d: caret %d at %g, raw %g", v.Text, i, off, x, want)
+			}
+		}
+		for x := float32(-20); x < b.Advance+20; x += 7.25 {
+			if got, want := a.HitByte(x), b.HitByte(x); got != want {
+				t.Fatalf("%q line %d: hit %g at %d, raw %d", v.Text, i, x, got, want)
+			}
+		}
+	}
+	for n := 0; n < 50; n++ {
+		from, to := rng.Intn(len(v.Text)+4)-2, rng.Intn(len(v.Text)+4)-2
+		from, to = min(from, to), max(from, to)
+		if got, want := v.RangeRects(from, to, 300, nil), raw.RangeRects(from, to, 300, nil); !slices.Equal(got, want) {
+			t.Fatalf("%q [%d,%d): indexed range %v, raw %v", v.Text, from, to, got, want)
+		}
+	}
+}
+
+func TestParaGeometryIndexReference(t *testing.T) {
+	s, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	f := s.Font(FontDesc{Family: "Helvetica Neue", SizePt: 13, Scale: 2})
+	l := NewBasicLayouter(s)
+	rng := rand.New(rand.NewSource(42))
+	parts := []string{"office ffi ", "שלום ", "لا مرحبا ", "e\u0301 ", "🇬🇧🇧🇬 ", "👩\u200d👩", "क्ष ", "日本語 ", "\r\n", "\xff\x80", "  "}
+	for n := 0; n < 100; n++ {
+		p := Para{Fonts: []FontKey{f}, Width: float32(60 + rng.Intn(240)), Dir: Dir(n % 3)}
+		for j := 0; j < 5; j++ {
+			p.Text = append(p.Text, parts[rng.Intn(len(parts))]...)
+		}
+		if n%3 == 0 {
+			p.MaxLines, p.Ellipsis = 1+n%2, n%2 == 0
+		}
+		checkParaGeometryIndex(t, s.Paragraph(s.Layout(&p)), rng)
+		checkParaGeometryIndex(t, l.Paragraph(l.Layout(&p)), rng)
+	}
+	for _, p := range []ParaView{
+		oneLine("office fi", []float32{0, 10, 40, 50, 60, 70}, []uint32{0, 1, 4, 5, 6, 7}, 90, 90, 0),
+		oneLine("لا", []float32{0}, []uint32{ClusterRTL}, 20, 20, LineRTL),
+		oneLine("aבגb", []float32{-10, 0, 10, 20}, []uint32{0, 3 | ClusterRTL, 1 | ClusterRTL, 5}, 30, 40, LineRTL),
+	} {
+		checkParaGeometryIndex(t, indexedPara(p), rng)
+	}
+}
+
+func TestParaGeometryAtClusterBreak(t *testing.T) {
+	l := NewBasicLayouter(new(gridShaper))
+	rng := rand.New(rand.NewSource(45))
+	for _, txt := range []string{"a \u0301b", "a\u0600日b", "a \u200d👩b", "a🇬🇧🇧🇬b", "a क्ष\u094dक्षb"} {
+		for w := float32(1); w <= 80; w++ {
+			p := Para{Text: []byte(txt), Fonts: []FontKey{0}, Width: w}
+			checkParaGeometryIndex(t, l.Paragraph(l.Layout(&p)), rng)
+		}
+	}
+}
+
+func TestParaLineAtReference(t *testing.T) {
+	v := ParaView{}
+	if v.LineAt(0) != -1 {
+		t.Fatal("empty paragraph has a line")
+	}
+	for i := 0; i < 100; i++ {
+		v.Lines = append(v.Lines, Line{Top: float32(i * 20), Height: float32(10 + i%11)})
+	}
+	ys := []float32{-100, 1e6, float32(math.NaN()), float32(math.Inf(1)), float32(math.Inf(-1))}
+	for _, l := range v.Lines {
+		ys = append(ys, l.Top, l.Top+l.Height-0.001, l.Top+l.Height, l.Top+l.Height+0.001)
+	}
+	for _, y := range ys {
+		want := len(v.Lines) - 1
+		for i, l := range v.Lines[:len(v.Lines)-1] {
+			if y < l.Top+l.Height {
+				want = i
+				break
+			}
+		}
+		if got := v.LineAt(y); got != want {
+			t.Fatalf("line at %g = %d, raw %d", y, got, want)
+		}
+	}
+}
 
 // gridShaper is a deterministic BasicShaper without allocation: one glyph per
 // character (its rune), font 0 advancing 10 px, font 1 12 px; right-to-left
@@ -555,6 +669,7 @@ func TestParaCacheEvictionKeepsWhatIsInUse(t *testing.T) {
 	if got := fmt.Sprintf("%q", lines(l.Paragraph(r))); got != `["paragraph " "number 0 " "wraps"]` {
 		t.Fatalf("after compaction: %s", got)
 	}
+	checkParaGeometryIndex(t, l.Paragraph(r), rand.New(rand.NewSource(43)))
 }
 
 func TestParaLayoutAllocatesNothingWhenReserved(t *testing.T) {
@@ -594,6 +709,9 @@ func TestParaCacheStaysWithinItsBudget(t *testing.T) {
 			if sl > 200 {
 				t.Fatalf("%s: a slab grew to %d", what, sl)
 			}
+		}
+		if len(s.groups) > len(s.glyphs) || len(s.stops) > len(s.text)+len(s.lines) || len(s.carets) != len(s.lines) {
+			t.Fatalf("%s: geometry slabs exceeded the text/glyph/line budgets", what)
 		}
 	}
 	text := func(n int) []byte {
@@ -640,6 +758,7 @@ func TestParaCacheStaysWithinItsBudget(t *testing.T) {
 		if r != overRef || l.ParaGeneration() == gen || len(v.Lines) == 0 || string(v.Text) != string(p.Text) {
 			t.Fatalf("%s: ref %v, %d lines, generation %d -> %d", name, r, len(v.Lines), gen, l.ParaGeneration())
 		}
+		checkParaGeometryIndex(t, v, rand.New(rand.NewSource(44)))
 		m := l.ParaStats().Misses
 		if r2 := l.Layout(&p); r2 != r || l.ParaStats().Misses != m || l.ParaGeneration() == gen {
 			t.Fatalf("%s: laid out again", name)
@@ -703,7 +822,8 @@ func (c *paraCache) reservedBytes() int {
 	s := &c.slabs
 	return cap(c.ents)*int(unsafe.Sizeof(paraEnt{})) + cap(c.table)*4 + cap(s.text) + cap(s.spans)*int(unsafe.Sizeof(Span{})) +
 		cap(s.fonts)*int(unsafe.Sizeof(FontKey(0))) + cap(s.lines)*int(unsafe.Sizeof(Line{})) +
-		cap(s.glyphs)*2 + cap(s.xs)*4 + cap(s.faces)*int(unsafe.Sizeof(FaceID(0))) + cap(s.clus)*4 + cap(s.spanOf)*2
+		cap(s.glyphs)*2 + cap(s.xs)*4 + cap(s.faces)*int(unsafe.Sizeof(FaceID(0))) + cap(s.clus)*4 + cap(s.spanOf)*2 +
+		cap(s.carets)*int(unsafe.Sizeof(lineCarets{})) + cap(s.groups)*int(unsafe.Sizeof(caretGroup{})) + cap(s.stops)*int(unsafe.Sizeof(caretStop{}))
 }
 
 // Without a declared budget the cache keeps to the default one, small enough
@@ -715,7 +835,8 @@ func TestParaCacheDefaultBudget(t *testing.T) {
 		t.Fatalf("budget %+v, want the default %+v", got, want)
 	}
 	l.reserveDefault()
-	if n := l.cache.reservedBytes(); n > 3<<20 {
+	t.Logf("default cache reservation: %d bytes", l.cache.reservedBytes())
+	if n := l.cache.reservedBytes(); n > 4<<20 {
 		t.Errorf("the default reservation is %.1f MiB", float64(n)/(1<<20))
 	}
 	big := ParaBudget{Paras: 8192, Glyphs: 1 << 19, Text: 1 << 19}
@@ -735,6 +856,37 @@ func TestParaCacheDefaultBudget(t *testing.T) {
 	}
 	if m := l.cache.reservedBytes(); m != n || l.ParaStats().Paras > DefaultParaBudget().Paras {
 		t.Errorf("the cache grew from %d to %d bytes, %d layouts", n, m, l.ParaStats().Paras)
+	}
+}
+
+var benchmarkLineAtResult int
+
+func BenchmarkParaLineAt(b *testing.B) {
+	for _, n := range []int{256, 4096} {
+		v := ParaView{Lines: make([]Line, n)}
+		for i := range v.Lines {
+			v.Lines[i] = Line{Top: float32(i * 20), Height: 20}
+		}
+		for _, indexed := range []bool{false, true} {
+			b.Run(fmt.Sprintf("%d/indexed=%t", n, indexed), func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					y := float32((i%n)*20 + 10)
+					got := n - 1
+					if indexed {
+						got = v.LineAt(y)
+					} else {
+						for j := 0; j < n-1; j++ {
+							if y < v.Lines[j].Top+v.Lines[j].Height {
+								got = j
+								break
+							}
+						}
+					}
+					benchmarkLineAtResult = got
+				}
+			})
+		}
 	}
 }
 
@@ -823,5 +975,53 @@ func TestFirstStrongRTL(t *testing.T) {
 		if got := FirstStrongRTL([]byte(c.s)); got != c.rtl {
 			t.Errorf("FirstStrongRTL(%q) = %v", c.s, got)
 		}
+	}
+}
+
+func BenchmarkRangeRectsLigatures(b *testing.B) {
+	for _, groups := range []int{64, 256, 1024} {
+		b.Run(fmt.Sprint(groups), func(b *testing.B) {
+			txt := []byte(strings.Repeat("ffi ", groups))
+			gs := make([]uint16, groups*2)
+			xs := make([]float32, len(gs))
+			cs := make([]uint32, len(gs))
+			for i := 0; i < groups; i++ {
+				gs[2*i] = 1
+				gs[2*i+1] = 2
+				xs[2*i] = float32(i * 40)
+				xs[2*i+1] = float32(i*40 + 30)
+				cs[2*i] = uint32(i * 4)
+				cs[2*i+1] = uint32(i*4 + 3)
+			}
+			p := ParaView{Text: txt, Glyphs: gs, X: xs, Faces: make([]FaceID, len(gs)), Clusters: cs, Lines: []Line{{End: uint32(len(txt)), G1: uint32(len(gs)), Width: float32(groups * 40), Advance: float32(groups * 40), Height: 20}}}
+			p = indexedPara(p)
+			dst := make([][4]float32, 0, 1)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				dst = p.RangeRects(0, len(txt), float32(groups*40), dst[:0])
+			}
+		})
+	}
+}
+
+func BenchmarkNativeRangeRects(b *testing.B) {
+	for _, n := range []int{64, 256, 1024} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			s, err := New()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer s.Close()
+			f := s.Font(FontDesc{Family: "Helvetica Neue", SizePt: 13, Scale: 2})
+			p := Para{Text: []byte(strings.Repeat("ffi ", n)), Fonts: []FontKey{f}, Width: 1e7}
+			v := s.Paragraph(s.Layout(&p))
+			dst := make([][4]float32, 0, 1)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				dst = v.RangeRects(0, len(p.Text), p.Width, dst[:0])
+			}
+		})
 	}
 }

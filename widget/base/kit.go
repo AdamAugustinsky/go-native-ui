@@ -66,24 +66,29 @@ type Kit struct {
 	nDis  int
 	nOff  int // how many of them are on
 
-	rowPt      float32 // NextRowHeight, in points; 0 when none
-	scrollTop  float32 // NextScrollInset, pixels
-	scrollMaxH float32 // NextScrollMaxHeight, pixels
-	nw, nh     ui.Size // Size for the next component (NextSize)
-	hasW, hasH bool
-	passed     [2]bool     // the axes of NextSize also set on the context, for a box opened through it
-	sizeMark   ui.SizeMark // the context's mark of them (syncSize)
-	nextAlign  ui.Align
-	hasAlign   bool
-	nextMono   bool // NextMono
+	rowPt          float32 // NextRowHeight, in points; 0 when none
+	scrollTop      float32 // NextScrollInset, pixels
+	scrollMaxH     float32 // NextScrollMaxHeight, pixels
+	scrollContentH float32 // known content height + 1, pixels (zero: use previous layout)
+	nw, nh         ui.Size // Size for the next component (NextSize)
+	hasW, hasH     bool
+	passed         [2]bool     // the axes of NextSize also set on the context, for a box opened through it
+	sizeMark       ui.SizeMark // the context's mark of them (syncSize)
+	nextAlign      ui.Align
+	hasAlign       bool
+	nextMono       bool // NextMono
 
 	mouse     [2]float32 // pointer position at the previous Begin
 	mouseMove bool       // the pointer moved since then
 
-	lay     layoutState
-	pop     Popup
-	popKept bool // the open PopupItems menu was built this frame (KeepPopup)
-	tip     tipState
+	lay        layoutState
+	pop        Popup
+	popKept    bool // the open PopupItems menu was built this frame (KeepPopup)
+	tip        tipState
+	menuLabels [MaxMenuDepth][48]byte
+	holdKey    ui.Key
+	holdFrame  uint32
+	holdStart  int64
 
 	// ReduceMotion makes animations that loop (an indeterminate progress bar)
 	// stand still and stop asking for frames, as the system setting for
@@ -381,4 +386,19 @@ func StrBytes(s string) []byte { return unsafe.Slice(unsafe.StringData(s), len(s
 func (k *Kit) Visible(r [4]float32) bool {
 	w, h := k.c.Size()
 	return r[2] > r[0] && r[3] > r[1] && r[2] > 0 && r[3] > 0 && r[0] < float32(w) && r[1] < float32(h)
+}
+
+// MenuLabelScratch is stable shortcut-label storage at one popup depth.
+func (k *Kit) MenuLabelScratch(depth int) []byte { return k.menuLabels[depth][:0] }
+
+// HeldMillis is the elapsed time in milliseconds of a control requested in
+// consecutive frames. Missing a frame or changing the key starts a new hold.
+func (k *Kit) HeldMillis(key ui.Key) int64 {
+	frame := k.c.Frame()
+	now := k.c.Input().Time / 1e6
+	if k.holdKey != key || (frame != k.holdFrame && frame != k.holdFrame+1) {
+		k.holdKey, k.holdStart = key, now
+	}
+	k.holdFrame = frame
+	return now - k.holdStart
 }

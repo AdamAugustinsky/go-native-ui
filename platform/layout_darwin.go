@@ -91,22 +91,22 @@ func initLayout() {
 	// notification, and AppKit's own for the text input context (a local one,
 	// which every application with a text view gets), each only drops what is
 	// cached (the next key reads the new layout).
-	sel := objc.Sel("gnuiLayoutChanged:")
+	sel := objc.SelZ("gnuiLayoutChanged:\x00")
 	def := objc.Define("GNUILayoutObserver", objc.Cls("NSObject"), nil)
 	def.Method(sel, "v@:@", func(*ffi.CB) { dropLayout(); refreshShiftedKeys() })
 	obs := objc.Send(objc.Send(def.Register(), selAlloc), selInitPlain)
 	layout.observer, layout.changed = obs, sel
-	dc := objc.Send(objc.Cls("NSDistributedNotificationCenter"), objc.Sel("defaultCenter"))
+	dc := objc.Send(objc.Cls("NSDistributedNotificationCenter"), objc.SelZ("defaultCenter\x00"))
 	// (Delivered at once: the default would hold it while the application is inactive.)
 	nameStr := stringConstant(carbon, "kTISNotifySelectedKeyboardInputSourceChanged")
 	if nameStr == 0 {
 		nameStr = objc.Str(ucLayoutChangedNn)
 	}
-	name, add := nameStr, objc.Sel("addObserver:selector:name:object:suspensionBehavior:") // (before the frame is filled: both use it)
+	name, add := nameStr, objc.SelZ("addObserver:selector:name:object:suspensionBehavior:\x00") // (before the frame is filled: both use it)
 	objc.F.Reset().Arg(uintptr(dc)).Arg(uintptr(add)).Arg(uintptr(obs)).Arg(uintptr(sel)).
 		Arg(uintptr(name)).Arg(0).Arg(4 /* NSNotificationSuspensionBehaviorDeliverImmediately */).Call(objc.MsgSend)
-	nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
-	objc.Send4(nc, objc.Sel("addObserver:selector:name:object:"), uintptr(obs), uintptr(sel), uintptr(objc.Str(ucTextInputChangedNn)), 0)
+	nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.SelZ("defaultCenter\x00"))
+	objc.Send4(nc, objc.SelZ("addObserver:selector:name:object:\x00"), uintptr(obs), uintptr(sel), uintptr(objc.Str(ucTextInputChangedNn)), 0)
 }
 
 // dropLayout forgets the cached layout.

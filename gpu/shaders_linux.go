@@ -55,6 +55,7 @@ flat out vec4 vC2;
 flat out vec4 vC3;
 flat out vec4 vBorderColor;
 flat out vec4 vParams;   // border, soft, fadeX.x, fadeX.y
+flat out uint vTex;
 flat out uint vMode;
 flat out uint vUniformColor;
 
@@ -92,6 +93,7 @@ void main() {
 	vBorderColor = premul(unpackRGBA(aBorderColor));
 	vParams = vec4(aBorder, aSoft, aFadeX.x, aFadeX.y);
 	vMode = aMode | (aMode == 0u ? (aTex & 1u) << 8 : 0u); // ShapeContinuous rides in bit 8
+	vTex = aTex;
 	vUniformColor = all(equal(aColor, aColor.xxxx)) ? 1u : 0u;
 }
 `
@@ -107,11 +109,12 @@ flat in vec4 vC2;
 flat in vec4 vC3;
 flat in vec4 vBorderColor;
 flat in vec4 vParams;
+flat in uint vTex;
 flat in uint vMode;
 flat in uint vUniformColor;
 
 uniform vec2 uViewport;
-uniform sampler2D uTex;
+uniform sampler2D uTex[8];
 
 out vec4 oColor;
 
@@ -187,6 +190,9 @@ float rrect_shadow(vec2 p, vec4 rect, vec4 radii, float sigma) {
 	float r = p.x < 0.0 ? (p.y < 0.0 ? radii.x : radii.w)
 	                    : (p.y < 0.0 ? radii.y : radii.z);
 	r = min(r, min(h.x, h.y));
+	if (all(lessThan(abs(p), h - (3.0 * sigma + r)))) {
+		return 1.0;
+	}
 	float lo = p.y - h.y, hi = p.y + h.y;
 	float start = clamp(-3.0 * sigma, lo, hi);
 	float stop = clamp(3.0 * sigma, lo, hi);
@@ -198,6 +204,21 @@ float rrect_shadow(vec2 p, vec4 rect, vec4 radii, float sigma) {
 		y += dy;
 	}
 	return clamp(v, 0.0, 1.0);
+}
+
+// Constant sampler indices work on both GLSL 330 and GLSL ES 300.
+vec4 sample_atlas(uint slot, vec2 texel) {
+	switch (slot) {
+	case 0u: return textureLod(uTex[0], texel / vec2(textureSize(uTex[0], 0)), 0.0);
+	case 1u: return textureLod(uTex[1], texel / vec2(textureSize(uTex[1], 0)), 0.0);
+	case 2u: return textureLod(uTex[2], texel / vec2(textureSize(uTex[2], 0)), 0.0);
+	case 3u: return textureLod(uTex[3], texel / vec2(textureSize(uTex[3], 0)), 0.0);
+	case 4u: return textureLod(uTex[4], texel / vec2(textureSize(uTex[4], 0)), 0.0);
+	case 5u: return textureLod(uTex[5], texel / vec2(textureSize(uTex[5], 0)), 0.0);
+	case 6u: return textureLod(uTex[6], texel / vec2(textureSize(uTex[6], 0)), 0.0);
+	case 7u: return textureLod(uTex[7], texel / vec2(textureSize(uTex[7], 0)), 0.0);
+	}
+	return vec4(0.0);
 }
 
 void main() {
@@ -234,13 +255,18 @@ void main() {
 			}
 			res = col * outer;
 		}
+	} else if (mode == 4u) {
+		vec2 a = p - rect.xy - uv.xy, d = uv.zw - uv.xy;
+		float along = clamp(dot(a, d) / max(dot(d, d), 1e-6), 0.0, 1.0);
+		float sd = length(a - d * along) - radii.x;
+		res = col * clamp(0.5 - sd, 0.0, 1.0);
 	} else {
 		float cov = 1.0;
 		if (any(greaterThan(radii, vec4(0.0)))) {
 			cov = clamp(0.5 - rrect_sdf(p, rect, radii), 0.0, 1.0);
 		}
 		vec2 texel = uv.xy + (p - rect.xy) * ((uv.zw - uv.xy) / size);
-		vec4 s = texture(uTex, texel / vec2(textureSize(uTex, 0)));
+		vec4 s = sample_atlas(vTex, texel);
 		res = (mode == 1u ? col * s.r : s * col.a) * cov;
 	}
 

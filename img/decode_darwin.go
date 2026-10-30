@@ -33,8 +33,9 @@ type osDecoder struct {
 }
 
 var iio struct {
-	once sync.Once
-	err  error
+	cfEqual, typeGIF uintptr
+	once             sync.Once
+	err              error
 
 	cfRelease, cfDataNoCopy, cfDictCreate, cfDictGet     uintptr
 	cfNumCreate, cfNumGet, cfURLFromPath                 uintptr
@@ -161,9 +162,13 @@ func loadImageIO() error {
 		iio.ctxRelease = fn(cg, "CGContextRelease")
 		iio.cgColorSpaceCreate = fn(cg, "CGColorSpaceCreateWithName")
 		iio.colorSpaceName = val(cg, "kCGColorSpaceSRGB", false)
+		iio.cfEqual = fn(cf, "CFEqual")
+		str := fn(cf, "CFStringCreateWithBytes")
 		if iio.err != nil {
 			return
 		}
+		uti := "com.compuserve.gif"
+		iio.typeGIF = new(ffi.Frame).Reset().Arg(0).ArgPtr(unsafe.Pointer(unsafe.StringData(uti))).Arg(uintptr(len(uti))).Arg(0x08000100).Arg(0).Call(str).R0()
 		iio.srgb = new(ffi.Frame).Call1(iio.cgColorSpaceCreate, iio.colorSpaceName) // kept for the process
 		if iio.srgb == 0 {
 			iio.err = errors.New("img: no sRGB colour space")
@@ -172,22 +177,28 @@ func loadImageIO() error {
 	return iio.err
 }
 
-// allocMem allocates n bytes of C memory. libc's malloc was resolved when
-// the process started (objc.Malloc): the owner copies inline bytes here, and
-// a symbol lookup could wait for a worker loading the decoding frameworks.
-func allocMem(n int, fr *ffi.Frame) (unsafe.Pointer, []byte) {
-	p := fr.Call1(objc.Malloc, uintptr(n))
-	if p == 0 {
-		panic("img: out of memory")
-	}
-	return ffi.PtrFromC(p), nil
+// pixbuf holds C memory, which the Go collector need not scan.
+type pixbuf struct {
+	mem  uintptr
+	size int
 }
 
-// freeMem frees memory from allocMem.
-func freeMem(p unsafe.Pointer, fr *ffi.Frame) {
-	if p != nil {
-		fr.Call1(objc.Free, uintptr(p))
+func (b *pixbuf) alloc(n int, fr *ffi.Frame) {
+	b.mem = fr.Call1(objc.Malloc, uintptr(n))
+	if b.mem == 0 {
+		panic("img: out of memory")
 	}
+	b.size = n
+}
+
+func (b *pixbuf) free(fr *ffi.Frame) {
+	if b.mem != 0 {
+		fr.Call1(objc.Free, b.mem)
+	}
+}
+
+func (b *pixbuf) bytes(n int) []byte {
+	return unsafe.Slice((*byte)(ffi.PtrFromC(b.mem)), n)
 }
 
 const (
@@ -237,7 +248,8 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 	}
 	defer runtime.KeepAlive(data) // ImageIO reads it until src is released
 	defer fr.Call1(iio.cfRelease, src)
-	if fr.Call1(iio.srcType, src) == 0 {
+	typ := fr.Call1(iio.srcType, src)
+	if typ == 0 {
 		return fail(errUnsupported)
 	}
 	frames := int32(fr.Call1(iio.srcCount, src))
@@ -339,8 +351,8 @@ func (w *worker) decode(c *Cache, j *job, data []byte) result {
 	}
 	// ImageIO leaves the screen around a partial first frame of a GIF
 	// transparent, whatever its background colour.
-	if head := w.header(j, data); sniff(head) == "gif" {
-		if bg, ok := gifBackground(head); ok {
+	if fr.Call2(iio.cfEqual, typ, iio.typeGIF) != 0 {
+		if bg, ok := gifBackground(w.header(j, data)); ok {
 			overBackground(pix, bw*4, int(pad), int(pad), int(iw), int(ih), bg)
 		}
 	}

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"runtime"
 	"slices"
+	"sync"
 	"testing"
 
+	"gonativeui/core"
 	"gonativeui/fs"
 )
 
@@ -43,5 +45,63 @@ func TestFillSynthColdAllocationBudget(t *testing.T) {
 	// room for the name arena and runtime noise, but not the old 108 MiB waste.
 	if used := after.TotalAlloc - before.TotalAlloc; used > 150<<20 {
 		t.Fatalf("cold FillSynth allocated %.2f MiB, want <=150", float64(used)/(1<<20))
+	}
+}
+
+// The pool learns the larger of two repeatedly used panes without retaining
+// a one-off peak. Alternating 1M and 100k listings must still reuse all buffers.
+func TestLargeTwoPaneServiceReuse(t *testing.T) {
+	synth := new(SynthSource)
+	p := core.NewParker()
+	defer p.Close()
+	s := fs.NewServiceWith(p.Unpark, synth.List)
+	defer s.Close()
+	paths := [2]string{synthDir(1_000_000), synthDir(100_000)}
+	var held [2]fs.Result
+	buf := make([]fs.Result, 0, 2)
+	round := func() {
+		for i, path := range paths {
+			s.List(uint32(i), path, fs.SortName, false)
+		}
+		for got := 0; got < 2; {
+			buf = s.Poll(buf[:0])
+			for _, r := range buf {
+				s.Release(held[r.ID].Listing, held[r.ID].Lease)
+				held[r.ID] = r
+				got++
+			}
+			if got < 2 {
+				p.Park()
+			}
+		}
+	}
+	// The two workers may sort at once in any round, the large listing on
+	// either; rounds alone need not overlap before the measured ones (on an
+	// idle host they seldom do). Sort two large listings at once first, as an
+	// overlapping round would, so the sort scratch is warm for both.
+	var big [2]fs.Listing
+	var wg sync.WaitGroup
+	for i := range big {
+		FillSynth(&big[i], 1_000_000, 0)
+	}
+	for i := range big {
+		wg.Go(func() { fs.Sort(&big[i], fs.SortName, false) })
+	}
+	wg.Wait()
+	big = [2]fs.Listing{}
+	for range 8 {
+		round()
+	}
+	// Attributed, as the other gates here: under a loaded test run a parked
+	// worker can make the runtime start a thread, which is not ours (D27).
+	if n, sites := oursDuring(func() {
+		for range 5 {
+			round()
+		}
+	}); n != 0 {
+		t.Fatalf("warm large two-pane service: %d allocations of ours:\n%s", n, sites)
+	}
+	for _, r := range held {
+		s.Release(r.Listing, r.Lease)
 	}
 }

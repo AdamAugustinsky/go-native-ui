@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"gonativeui/core"
 )
 
 // The application object's events and their delivery (DECISIONS D37). The
@@ -292,6 +294,7 @@ type recTable struct {
 	source  Source
 	recs    []record
 	free    []atomic.Uint64 // a set bit is a free record
+	onFree  func()          // setup-only callback after a record becomes free (any thread)
 	maxData int             // data a record may hold without growing (Post: a hard limit)
 	budget  int64           // ring: bytes of data at once
 	used    atomic.Int64
@@ -317,6 +320,7 @@ var tables struct {
 }
 
 func newTable(kind tableKind, src Source, n, maxData int) *recTable {
+	ready.init()
 	t := &recTable{kind: kind, source: src, recs: make([]record, n), maxData: maxData}
 	t.free = make([]atomic.Uint64, (n+63)/64)
 	for i := 0; i < n; i++ {
@@ -354,7 +358,12 @@ func (t *recTable) alloc() (int, bool) {
 	return -1, false
 }
 
-func (t *recTable) release(i int) { t.free[i/64].Or(1 << (i % 64)) }
+func (t *recTable) release(i int) {
+	t.free[i/64].Or(1 << (i % 64))
+	if t.onFree != nil {
+		t.onFree()
+	}
+}
 
 // fill copies the payload into record i (its state is stWriting) and makes
 // it ready.
@@ -408,6 +417,11 @@ type Ticket uint64
 func NewTickets(src Source, n, dataCap int) *Tickets {
 	return &Tickets{newTable(kindTickets, src, n, dataCap)}
 }
+
+// OnFree installs f, called after a record becomes available, on the thread
+// releasing it. Setup only, before reserving any tickets. f must not block
+// or reserve tickets; it may signal a waiting producer to try again.
+func (k *Tickets) OnFree(f func()) { k.t.onFree = f }
 
 // Reserve takes a record for a request about to be made, for window win (0:
 // none). It fails at once with ErrBusy when every record is taken. Any
@@ -764,26 +778,35 @@ func PostStats() (accepted, refused uint64) {
 // (table<<16 | record) with one consumer, the dispatcher (Vyukov's bounded
 // queue). It cannot be full: it has a cell for every record.
 type readyQueue struct {
-	cells [readyCells]struct {
-		seq atomic.Uint64
-		ref atomic.Uint32
-	}
-	enq atomic.Uint64
-	deq uint64 // the dispatcher's
+	cells atomic.Pointer[[readyCells]readyCell]
+	once  sync.Once
+	enq   atomic.Uint64
+	deq   uint64 // the dispatcher's
 }
 
-var ready = func() *readyQueue {
-	q := new(readyQueue)
-	for i := range q.cells {
-		q.cells[i].seq.Store(uint64(i))
-	}
-	return q
-}()
+type readyCell struct {
+	seq atomic.Uint64
+	ref atomic.Uint32
+}
+
+var ready readyQueue
+
+// init allocates the queue with the first delivery table, before producers
+// can publish. Apps using only window events need no delivery storage.
+func (q *readyQueue) init() {
+	q.once.Do(func() {
+		cells := new([readyCells]readyCell)
+		for i := range cells {
+			cells[i].seq.Store(uint64(i))
+		}
+		q.cells.Store(cells)
+	})
+}
 
 func (q *readyQueue) push(ref uint32) {
 	for {
 		pos := q.enq.Load()
-		c := &q.cells[pos%readyCells]
+		c := &q.cells.Load()[pos%readyCells]
 		switch seq := c.seq.Load(); {
 		case seq == pos:
 			if q.enq.CompareAndSwap(pos, pos+1) {
@@ -803,7 +826,11 @@ func (q *readyQueue) push(ref uint32) {
 // pop takes the oldest reference; false when there is none (or the oldest is
 // still being written: its producer signals again when it is done).
 func (q *readyQueue) pop() (uint32, bool) {
-	c := &q.cells[q.deq%readyCells]
+	cells := q.cells.Load()
+	if cells == nil {
+		return 0, false
+	}
+	c := &cells[q.deq%readyCells]
 	if c.seq.Load() != q.deq+1 {
 		return 0, false
 	}
@@ -818,7 +845,8 @@ func (q *readyQueue) pending() uint64 { return q.enq.Load() - q.deq }
 // headReady reports whether the oldest reference is published: a producer
 // that has claimed its cell but not written it yet signals when it has.
 func (q *readyQueue) headReady() bool {
-	return q.cells[q.deq%readyCells].seq.Load() == q.deq+1
+	cells := q.cells.Load()
+	return cells != nil && cells[q.deq%readyCells].seq.Load() == q.deq+1
 }
 
 // testHookReadyClaimed runs inside push between claiming a cell and
@@ -889,7 +917,7 @@ func signalApp() {
 // app's safe-point work and wakes no window (Wake hands each an EvWake, and
 // each draws). The GPU's completion handler calls it so that the safe point
 // releases what a finished frame held (gpu.Renderer.Collect). On
-// macOS; elsewhere the dispatcher runs with the loop's Wake.
+// macOS; elsewhere the dispatcher runs with the loop's WakeLoop.
 func SignalDispatch() { signalApp() }
 
 // DispatchApp delivers the ready events, in the order they became ready, then
@@ -1172,7 +1200,7 @@ var quitState struct {
 	serial   uint64
 	reason   QuitReason
 	opts     AppOptions
-	timer    *time.Timer
+	timer    *core.Timer
 	approved atomic.Bool // the quit was allowed and the app's loop ends (where the OS does not end the process itself)
 }
 
@@ -1292,7 +1320,7 @@ func beginQuit(reason QuitReason) int {
 		quitState.phase = quitLater
 		if d := quitState.opts.QuitDeadline; d > 0 {
 			serial := quitState.serial
-			quitState.timer = time.AfterFunc(d, func() {
+			quitState.timer = core.AfterFunc(d, func() {
 				dispatch.quitDue.Store(serial)
 				signalApp()
 			})

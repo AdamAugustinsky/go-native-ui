@@ -5,6 +5,12 @@ with backpressure (`TerminalInbox`), one parse budget per window shared by
 its terminals (`TerminalScheduler`), and the diagnostics of both. Code:
 `rexui/terminal_feed.go`; tests: `rexui/terminal_feed_test.go`.
 
+Parse budgets use the framework clock (`core.WallNow` and `core.Since`).
+Under deterministic simulation (D89), each parsed byte charges a fixed 4 ns
+work unit instead of measured time. Both the window budget and a view's
+`FeedBudget` use that charge; a real frame's learned parse rate cannot change
+a replay. These simulated durations are work accounting, not CPU measurements.
+
 ## The problem
 
 `TerminalState.Feed` appended to an unbounded buffer on the UI thread, and

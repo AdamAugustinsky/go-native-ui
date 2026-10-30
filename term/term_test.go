@@ -527,3 +527,68 @@ func TestSteadyStateAllocations(t *testing.T) {
 		t.Fatalf("%v allocations per steady-state frame, want 0", n)
 	}
 }
+
+// Render and mode caches follow every public mutation, including callers
+// that use Terminal directly instead of the Rex view's Feed method.
+func TestCachedRenderAndViewportInvalidation(t *testing.T) {
+	tm := newTerm(t, term.Options{Cols: 20, Rows: 4, Scrollback: 100})
+	tm.Write([]byte("before\r\n"))
+	if tm.Update() == term.Clean {
+		t.Fatal("initial update was clean")
+	}
+	tm.CleanFrame()
+	for range 10 {
+		if tm.Update() != term.Clean {
+			t.Fatal("unchanged screen became dirty")
+		}
+	}
+	var row term.Row
+	for tm.NextRow(&row) {
+	}
+	tm.Update()
+	if !tm.NextRow(&row) || row.Y != 0 {
+		t.Fatal("clean Update did not reset the row iterator")
+	}
+	if tm.MouseTracking() || !tm.AtBottom() {
+		t.Fatal("initial modes or viewport")
+	}
+	tm.Write([]byte("\x1b[?1000h"))
+	if !tm.MouseTracking() {
+		t.Fatal("mouse cache ignored Write")
+	}
+	tm.Reset()
+	if tm.MouseTracking() {
+		t.Fatal("mouse cache ignored Reset")
+	}
+	for range 30 {
+		tm.Write([]byte("line\r\n"))
+	}
+	tm.Update()
+	tm.CleanFrame()
+	if !tm.AtBottom() {
+		t.Fatal("output did not follow bottom")
+	}
+	tm.ScrollToTop()
+	if tm.AtBottom() {
+		t.Fatal("viewport cache ignored scrolling")
+	}
+	if tm.Update() == term.Clean {
+		t.Fatal("viewport change reused render state")
+	}
+	tm.CleanFrame()
+	tm.ScrollToBottom()
+	if !tm.AtBottom() {
+		t.Fatal("viewport cache ignored ScrollToBottom")
+	}
+	tm.Update()
+	tm.CleanFrame()
+	tm.SelectAll()
+	if tm.Update() == term.Clean {
+		t.Fatal("selection change reused render state")
+	}
+	tm.CleanFrame()
+	tm.ClearSelection()
+	if tm.Update() == term.Clean {
+		t.Fatal("clearing selection reused render state")
+	}
+}

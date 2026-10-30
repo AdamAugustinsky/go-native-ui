@@ -101,7 +101,8 @@ func (t *TextBuffer) wordBounds(off int) (lo, hi int) {
 
 // appendMasked appends a bullet for each character cluster of b to a.
 func appendMasked(a *core.Arena, b []byte) {
-	for i := 0; i < len(b); i = text.NextGrapheme(b, i) {
+	var it text.GraphemeIterator
+	for i := 0; i < len(b); i = it.Next(b) {
 		a.AppendString(bullet)
 	}
 }
@@ -113,7 +114,8 @@ func maskedOff(secure bool, b []byte, off int) int {
 		return off
 	}
 	n := 0
-	for i := 0; i < off && i < len(b); i = text.NextGrapheme(b, i) {
+	var it text.GraphemeIterator
+	for i := 0; i < off && i < len(b); i = it.Next(b) {
 		n++
 	}
 	return n * len(bullet)
@@ -123,8 +125,9 @@ func maskedOff(secure bool, b []byte, off int) int {
 // the start of the cluster of bullet m.
 func unmaskOff(b []byte, m int) int {
 	i := 0
+	var it text.GraphemeIterator
 	for n := m / len(bullet); n > 0 && i < len(b); n-- {
-		i = text.NextGrapheme(b, i)
+		i = it.Next(b)
 	}
 	return i
 }

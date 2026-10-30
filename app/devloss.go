@@ -21,8 +21,8 @@ import (
 //     next Prepare (icon.Atlas) or Poll (img.Cache);
 //   - widget masks (gpu.PathMask): at the next Mask.
 //
-// Textures an owner made from pixels it did not keep (a paused video's
-// poster) are blank until it makes them again.
+// A paused video restores its poster or owned playback snapshot at its
+// next Frame call, when it observes the renderer's new epoch.
 
 // retryLostNs is how long after a failed recovery the next one is tried.
 const retryLostNs = int64(1e9)

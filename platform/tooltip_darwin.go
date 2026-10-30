@@ -29,6 +29,7 @@ const NativeTooltips = true
 type nativeAux struct {
 	closed bool
 
+	rects      regionRefresh
 	tips       tooltipMap
 	tipH       float64 // the view height (points) and scale the rects were registered for
 	tipScale   float32
@@ -43,6 +44,7 @@ var (
 	tipOnce    sync.Once
 	tipIndex   *objc.Ivar
 	tipClass   objc.ID
+	tipFree    []int     // reusable indices in tipWindows
 	tipWindows []*Window // the owners' windows, indexed by the owner's index ivar - 1
 
 	selAddToolTipRect    = objc.Sel("addToolTipRect:owner:userData:")
@@ -86,17 +88,21 @@ func (w *Window) SetTooltipRegions(r []TooltipRegion) {
 		a.tipH, a.tipScale = w.hPt, w.scale // nothing registered, nothing to move
 		return
 	}
-	w.applyTooltips()
+	a.rects.changed = true
+	a.rects.tooltipDirty = true
+	if !a.rects.scrolling || a.tipH != w.hPt || a.tipScale != w.scale {
+		w.applyTooltips()
+	}
 }
 
 // applyTooltips replaces the registered tooltip rects with the current regions.
 func (w *Window) applyTooltips() {
 	a := &w.aux
+	a.rects.tooltipDirty = false
 	if a.tipOwner == 0 {
 		tipInit()
 		owner := objc.Send(objc.Send(tipClass, selAlloc), selInit)
-		tipWindows = append(tipWindows, w)
-		a.tipIdx = len(tipWindows)
+		a.tipIdx = keepTipWindow(w)
 		tipIndex.Set(owner, uintptr(a.tipIdx))
 		a.tipOwner = owner // +1: AppKit does not retain a tooltip owner
 	}
@@ -153,9 +159,52 @@ func (w *Window) closeAux() {
 	a.closed = true
 	if a.tipOwner != 0 {
 		objc.Send(w.view, selRemoveAllToolTips)
-		tipWindows[a.tipIdx-1] = nil
+		tipIndex.Set(a.tipOwner, 0)
+		freeTipWindow(a.tipIdx)
+		a.tipIdx = 0
 		objc.Release(a.tipOwner)
 		a.tipOwner = 0
 	}
 	a.tipText = nil
+}
+
+// keepTipWindow and freeTipWindow bound the registry by peak live owners.
+func keepTipWindow(w *Window) int {
+	if n := len(tipFree); n > 0 {
+		i := tipFree[n-1]
+		tipFree = tipFree[:n-1]
+		tipWindows[i] = w
+		return i + 1
+	}
+	tipWindows = append(tipWindows, w)
+	return len(tipWindows)
+}
+
+func freeTipWindow(index int) {
+	i := index - 1
+	tipWindows[i] = nil
+	tipFree = append(tipFree, i)
+}
+
+// FinishRegionFrame flushes deferred native rects on the first still frame.
+// Call after both cursor and tooltip regions. It schedules no timer or frame.
+func (w *Window) FinishRegionFrame() {
+	if !w.aux.rects.changed {
+		w.flushRegionRects()
+	}
+	w.aux.rects.changed = false
+}
+
+func (w *Window) flushRegionRects() {
+	a := &w.aux
+	a.rects.scrolling = false
+	if a.closed {
+		return
+	}
+	if a.rects.cursorDirty && w.curs.override == CursorArrow {
+		w.rebuildCursorRects()
+	}
+	if a.rects.tooltipDirty {
+		w.applyTooltips()
+	}
 }

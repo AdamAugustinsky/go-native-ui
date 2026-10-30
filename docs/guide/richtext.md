@@ -201,13 +201,13 @@ Nothing, once warm: the body is `[]byte` made at start because converting a
 string in `Build` would allocate, the spans and styles are plain arrays, and the
 layout comes from the cache. `TestSteadyFramesAllocateNothing` checks 200 frames.
 An app that shapes unbounded new strings calls `Text.ReserveRuns` in `Init`, as
-the example does, so that the run cache never grows:
+the example does, so that the run cache grows only past its working set:
 
 ```go examples/richtext/main.go
 func (d *doc) Init(a *app.App) error {
 	d.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	a.UI.Reserve(256)
-	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
+	a.Text.ReserveRuns(text.WorkingSetRuns, text.WorkingSetGlyphs, text.WorkingSetTextBytes)
 	return nil
 }
 ```

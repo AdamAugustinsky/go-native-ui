@@ -731,6 +731,29 @@ func TestTableHeaderAndRowsShareTheirWidth(t *testing.T) {
 	}
 }
 
+func TestTableRightHeaderTextSharesCellEdge(t *testing.T) {
+	var st base.TableState
+	cols := []base.Column{{ID: 1, Title: "Size", Width: 200, Align: ui.AlignRight}}
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		g.c.NextSize(ui.Px(400), ui.Px(180))
+		tb := rexui.BeginTable(g.k, "files", &st, cols, 3, rexui.TableOpts{})
+		for r := tb.First; r < tb.Last; r++ {
+			tb.Row(r, st.Item(r), nil)
+			tb.CellText(0, "123 KB")
+		}
+		rexui.EndTable(g.k, &tb)
+	})
+	for _, scale := range []float32{1, 2, 1.5} {
+		g.scale = scale
+		g.settle()
+		for _, f := range g.c.Audit(nil) {
+			if f.Check == ui.AuditColumn {
+				t.Fatalf("scale=%g: %v", scale, f)
+			}
+		}
+	}
+}
+
 // A striped list scrolled deep, then shrunk (a filter that matches nothing,
 // or a few rows): the frame that sees the new row count stripes only the
 // room in view, as many boxes as the viewport holds whatever the stale

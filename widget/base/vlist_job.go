@@ -3,6 +3,9 @@ package base
 import (
 	"math/bits"
 	"time"
+
+	"gonativeui/core"
+	"gonativeui/ui"
 )
 
 // The sliced rebuild. An edit too long for one frame (or a Reset) is built
@@ -61,18 +64,20 @@ const (
 )
 
 type vlJob struct {
-	on, ready bool
-	reset     bool
-	recon     bool // the log overflowed: reconcile every height
-	phase     uint8
-	segs      [4]vlSeg
-	nseg      int
-	si, so    int // the segment being copied and how much of it is done
-	dst       int // items copied
-	i         int // the cursor of the other phases
-	nNew      int
-	insAt     int // the inserted ids' place in the new order (a Splice's)
-	insN      int
+	on, ready               bool
+	reset                   bool
+	recon                   bool // the log overflowed: reconcile every height
+	phase                   uint8
+	segs                    [4]vlSeg
+	nseg                    int
+	si, so                  int // the segment being copied and how much of it is done
+	dst                     int // items copied
+	i                       int // the cursor of the other phases
+	nNew                    int
+	insAt                   int // the inserted ids' place in the new order (a Splice's)
+	sweep                   bool
+	moveFrom, moveN, moveTo int
+	insN                    int
 }
 
 func (j *vlJob) add(ins bool, off, n int) {
@@ -84,6 +89,8 @@ func (j *vlJob) add(ins bool, off, n int) {
 
 // vlSliceNs is the work a rebuild does per Sync (D27's 1 ms slice).
 const vlSliceNs = int64(time.Millisecond)
+
+const vlBackIdleNs = int64(30 * time.Second)
 
 // vlChunk is the work between two looks at the clock.
 const vlChunk = 4096
@@ -120,6 +127,7 @@ func (st *VListState) enqueue(op vlOp) {
 // startJob begins the rebuild of op from the front buffer; ins are the ids
 // it inserts (a Splice's or a Reset's), copied into the back buffer now.
 func (st *VListState) startJob(op vlOp, ins []uint64) {
+	st.bkUsed = core.Now()
 	f := &st.f
 	j := &st.job
 	*j = vlJob{on: true}
@@ -196,6 +204,8 @@ func (st *VListState) startJob(op vlOp, ins []uint64) {
 		}
 		b.tab.setCap(tc)
 	}
+	j.sweep = op.kind == opMove && len(b.tab.keys) == len(f.tab.keys)
+	j.moveFrom, j.moveN, j.moveTo = op.a, op.b, op.c
 	b.tab.n = 0
 	b.lo, b.n, b.vbase = (c-j.nNew)/2, 0, 0
 	copy(b.ids[b.lo+insAt:], ins)
@@ -213,27 +223,31 @@ func (st *VListState) jobCost() int {
 
 // step advances the rebuild by one slice.
 func (st *VListState) step() {
-	start := time.Now()
+	start := core.WallNow()
 	units := 0
+	sliceUnits := vlSliceUnits
+	if core.SimulationForTesting() != nil && sliceUnits == 0 {
+		sliceUnits = vlChunk
+	}
 	for st.job.on && !st.job.ready {
 		n := vlChunk
 		var room int // the units left in the slice
-		if vlSliceUnits > 0 {
-			room = vlSliceUnits - units
+		if sliceUnits > 0 {
+			room = sliceUnits - units
 			n = min(n, room)
 		} else {
-			room = int((vlSliceNs - int64(time.Since(start))) / vlSlotNs)
+			room = int((vlSliceNs - int64(core.Since(start))) / vlSlotNs)
 		}
 		did := st.work(n, room, units == 0)
 		if did == 0 {
 			return
 		}
 		units += did
-		if vlSliceUnits > 0 {
-			if units >= vlSliceUnits {
+		if sliceUnits > 0 {
+			if units >= sliceUnits {
 				return
 			}
-		} else if time.Since(start) >= time.Duration(vlSliceNs) {
+		} else if core.Since(start) >= time.Duration(vlSliceNs) {
 			return
 		}
 	}
@@ -260,6 +274,9 @@ func (st *VListState) work(n, room int, fresh bool) int {
 	switch j.phase {
 	case phClear:
 		nh, total := len(b.hs), len(b.hs)+len(b.tab.keys)
+		if j.sweep {
+			total = nh
+		}
 		s, e := j.i, min(j.i+n, total)
 		if s < nh {
 			clear(b.hs[s:min(e, nh)])
@@ -302,6 +319,34 @@ func (st *VListState) work(n, room int, fresh bool) int {
 		}
 		return max(did, 1)
 	case phIndex:
+		if j.sweep {
+			e := min(j.i+n, len(f.tab.keys))
+			for i := j.i; i < e; i++ {
+				id := f.tab.keys[i]
+				b.tab.keys[i] = id
+				if id == NoID {
+					continue
+				}
+				pos := int(f.tab.pos[i] - f.vbase)
+				from, k, to := j.moveFrom, j.moveN, j.moveTo
+				switch {
+				case pos >= from && pos < from+k:
+					pos += to - from
+				case to < from && pos >= to && pos < from:
+					pos += k
+				case to > from && pos >= from+k && pos < to+k:
+					pos -= k
+				}
+				b.tab.pos[i] = int32(pos)
+			}
+			did := e - j.i
+			j.i = e
+			if e >= len(f.tab.keys) {
+				b.tab.n = j.nNew
+				j.phase, j.i = phSum, 0
+			}
+			return max(did, 1)
+		}
 		e := min(j.i+min(n, vlRandomChunk), j.nNew)
 		for i := j.i; i < e; i++ {
 			p := b.lo + i
@@ -479,6 +524,9 @@ func (st *VListState) Sync(frame uint32) {
 		return
 	}
 	st.frame, st.synced = frame, true
+	if !st.job.on && st.bk.slots() > 0 && core.Now()-st.bkUsed >= vlBackIdleNs {
+		st.bk = vlBuf{}
+	}
 	if st.job.on {
 		st.step()
 		if st.job.ready {
@@ -534,6 +582,7 @@ func (st *VListState) publish() {
 		}
 	}
 	st.f, st.bk = st.bk, st.f
+	st.bkUsed = core.Now()
 	st.rev++
 	st.job = vlJob{}
 	if st.qhead < len(st.queue) {
@@ -614,4 +663,12 @@ func prevClear(g []uint64, i int) int {
 		i = i&^63 - 1
 	}
 	return -1
+}
+
+// keepBack asks for one cleanup frame after a long idle, rather than
+// retaining a peak-size rebuild buffer until the next user event.
+func (st *VListState) keepBack(c *ui.Context) {
+	if !st.job.on && st.bk.slots() > 0 {
+		c.WakeIn(max(vlBackIdleNs-(core.Now()-st.bkUsed), 1))
+	}
 }

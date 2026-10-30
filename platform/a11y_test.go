@@ -396,3 +396,61 @@ func TestAXCharacterRanges(t *testing.T) {
 		t.Errorf("byte range of units {2, 1}: %d..%d, want 1..5 (the start rounds down to the pair)", lo, hi)
 	}
 }
+
+func TestAXWideHitHasNoAllocations(t *testing.T) {
+	b := newAXBuild()
+	for i := 0; i < 1024; i++ {
+		b.add(0, uint64(i+1), AXRoleButton, "").Bounds = [4]float32{0, float32(i), 10, float32(i + 1)}
+	}
+	if got := testing.AllocsPerRun(50, func() {
+		if axHit(&b.t, 1, .5) != 1 {
+			panic("wrong hit")
+		}
+	}); got != 0 {
+		t.Fatalf("wide hit: %v allocations", got)
+	}
+	b.t.Nodes[100].State = AXModal
+	if got := axHit(&b.t, 1, .5); got != 0 {
+		t.Fatalf("a modal outside the point exposed node %d below it", got)
+	}
+	b.t.Nodes[1024].Bounds = [4]float32{0, 0, 10, 1}
+	if got := axHit(&b.t, 1, .5); got != 1024 {
+		t.Fatalf("last matching exposed sibling: %d", got)
+	}
+}
+
+func TestAXDuplicateKeyIsNotEmittedTwice(t *testing.T) {
+	b := newAXBuild()
+	b.add(0, 1, AXRoleButton, "one")
+	e := &exporter{next: &b.t}
+	var c axCore
+	c.begin(e.export)
+	b.t.Nodes[1].Name = [2]uint32{}
+	b.add(0, 1, AXRoleButton, "duplicate")
+	c.sync(e.export)
+	if c.nodeSlots[2] != -1 {
+		t.Fatal("duplicate key has a slot")
+	}
+	if got := events(&c); got != "title:1" {
+		t.Fatalf("events: %s", got)
+	}
+}
+
+func TestAXActivationWaitsForACompleteFrame(t *testing.T) {
+	var c axCore
+	c.begin(func(*AXTree) bool { return false })
+	if !c.active || !c.awaiting {
+		t.Fatal("activation lost the pending first frame")
+	}
+	b := newAXBuild()
+	b.add(0, 1, AXRoleButton, "ready")
+	e := &exporter{next: &b.t}
+	c.sync(e.export)
+	if c.awaiting || events(&c) != "layout:window" {
+		t.Fatalf("first deferred tree must notify the client: %s", events(&c))
+	}
+	c.sync(e.export)
+	if len(c.events) != 0 {
+		t.Fatal("unchanged tree repeated the notification")
+	}
+}

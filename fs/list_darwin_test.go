@@ -41,7 +41,7 @@ func TestListDirTooLarge(t *testing.T) {
 
 // A service has the scratch of its workers ready, with path buffers that fit
 // any path: listings and stats that overlap for the first time allocate no
-// 264 KiB buffer, and none grows its path (D27: the Pilot bench gate met both
+// bulk buffer, and none grows its path (D27: the Pilot bench gate met both
 // in a measured window).
 func TestServicePrewarmsScratch(t *testing.T) {
 	scratchMu.Lock()

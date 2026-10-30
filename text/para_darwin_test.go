@@ -630,7 +630,7 @@ func TestReserveRunsKeepsTheDefaultParagraphBudget(t *testing.T) {
 		t.Errorf("budget %+v after ReserveRuns", got)
 	}
 	n := s.paras.reservedBytes()
-	if n > 3<<20 {
+	if n > 4<<20 { // includes the pointer-free caret geometry
 		t.Errorf("ReserveRuns reserved %.1f MiB for paragraphs", float64(n)/(1<<20))
 	}
 	t.Logf("paragraph cache reserved by ReserveRuns: %.2f MiB", float64(n)/(1<<20))
@@ -676,5 +676,21 @@ func TestParagraphLayoutAllocationsCoreText(t *testing.T) {
 	})
 	if a := testing.AllocsPerRun(100, func() { s.Layout(p) }); a != 0 {
 		t.Fatalf("%v allocations per cache hit", a)
+	}
+}
+
+func TestLargeParagraphReleasesNativeText(t *testing.T) {
+	s := newSys(t)
+	f := uiFont(s)
+	p := Para{Fonts: []FontKey{f}, Text: []byte(strings.Repeat("word ", 4000)), Width: 600, MaxLines: 1}
+	if len(s.Paragraph(s.Layout(&p)).Glyphs) == 0 {
+		t.Fatal("large paragraph lost its glyphs")
+	}
+	if s.pl.mas != 0 {
+		t.Fatal("large paragraph retained its native UTF-16 text")
+	}
+	p.Text = []byte("small")
+	if len(s.Paragraph(s.Layout(&p)).Glyphs) == 0 || s.pl.mas == 0 {
+		t.Fatal("small paragraph did not recreate reusable native text")
 	}
 }

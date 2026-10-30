@@ -169,7 +169,8 @@ type ShellCounts struct {
 	// Materials are material views alive (effect, glass and solid views).
 	Materials int64
 	// Applies counts the times staged material or host changes were
-	// applied, and Synced those of them applied in step with a present:
+	// applied after diagnostics are enabled by ShellObjects on macOS, and
+	// Synced those of them applied in step with a present:
 	// inside a transaction with implicit animations off while the GPU layer
 	// presents with the transaction (FlushShell's applies are not).
 	Applies, Synced int64

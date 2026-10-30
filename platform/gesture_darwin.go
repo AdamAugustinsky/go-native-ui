@@ -16,11 +16,11 @@ import (
 // to the box under the first one.
 
 var (
-	selMagnification = objc.Sel("magnification")
-	selRotation      = objc.Sel("rotation")
-	selMagnify       = objc.Sel("magnifyWithEvent:")
-	selRotate        = objc.Sel("rotateWithEvent:")
-	selSmartMagnify  = objc.Sel("smartMagnifyWithEvent:")
+	selMagnification = objc.SelZ("magnification\x00")
+	selRotation      = objc.SelZ("rotation\x00")
+	selMagnify       = objc.SelZ("magnifyWithEvent:\x00")
+	selRotate        = objc.SelZ("rotateWithEvent:\x00")
+	selSmartMagnify  = objc.SelZ("smartMagnifyWithEvent:\x00")
 )
 
 func registerViewGesture(v *objc.ClassDef) {

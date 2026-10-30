@@ -303,3 +303,38 @@ func TestFilterUnicodeToASCIIFolds(t *testing.T) {
 		t.Errorf("Filter allocates %v", a)
 	}
 }
+
+func TestNamePrefixMatchesFullComparator(t *testing.T) {
+	rng := rand.New(rand.NewSource(37))
+	l := synth("", "a", "a\x00", "abcdefgh0", "abcdefgh1", "File01", "file1", "K", "k", "\xff", "same", "same")
+	for i := 0; i < 2000; i++ {
+		name := fmt.Sprintf("%c%07d_É.txt", 'a'+rng.Intn(20), rng.Intn(1000))
+		l.Entries = append(l.Entries, Entry{NameOff: uint32(len(l.Names)), NameLen: uint16(len(name)), Kind: Kind(rng.Intn(4))})
+		l.Names = append(l.Names, name...)
+	}
+	for i := range l.Entries {
+		if i%9 == 0 {
+			l.Entries[i].Flags |= FlagSymlinkDir
+		}
+	}
+	s := new(sorter)
+	for _, desc := range []bool{false, true} {
+		s.buildKeys(l)
+		want := make([]uint32, len(l.Entries))
+		for i := range want {
+			want[i] = uint32(i)
+		}
+		c := cmpCtx{l: l, s: s, key: SortName, desc: desc}
+		slices.SortFunc(want, c.cmp)
+		Sort(l, SortName, desc)
+		if !slices.Equal(want, l.Order) {
+			t.Fatalf("prefix order differs, desc=%v", desc)
+		}
+		l.reverse(!desc)
+		c.desc = !desc
+		slices.SortFunc(want, c.cmp)
+		if !slices.Equal(want, l.Order) {
+			t.Fatalf("group reversal differs, desc=%v", !desc)
+		}
+	}
+}

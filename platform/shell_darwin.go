@@ -39,39 +39,39 @@ import (
 // NSVisualEffectView with material n.
 
 var (
-	selSetFrame              = objc.Sel("setFrame:")
-	selSetOpaqueWin          = objc.Sel("setOpaque:")
-	selSetBGColor            = objc.Sel("setBackgroundColor:")
-	selColorWhiteAlpha       = objc.Sel("colorWithWhite:alpha:")
-	selSetWantsLayerV        = objc.Sel("setWantsLayer:")
-	selSetAutoresizing       = objc.Sel("setAutoresizingMask:")
-	selAddSubview            = objc.Sel("addSubview:")
-	selAddSubviewPos         = objc.Sel("addSubview:positioned:relativeTo:")
-	selSetMaterial           = objc.Sel("setMaterial:")
-	selSetBlendingMode       = objc.Sel("setBlendingMode:")
-	selSetEffectState        = objc.Sel("setState:")
-	selSetGlassStyle         = objc.Sel("setStyle:")
-	selSetCornerRadius       = objc.Sel("setCornerRadius:")
-	selSetImage              = objc.Sel("setImage:")
-	selSetImagePosition      = objc.Sel("setImagePosition:")
-	selSetBezelStyle         = objc.Sel("setBezelStyle:")
-	selSetBorderShape        = objc.Sel("setBorderShape:")
-	selSetShowsBorderOnHover = objc.Sel("setShowsBorderOnlyWhileMouseInside:")
-	selSetToolTip            = objc.Sel("setToolTip:")
-	selSetTarget             = objc.Sel("setTarget:")
-	selSetAction             = objc.Sel("setAction:")
-	selSetTag                = objc.Sel("setTag:")
-	selTag                   = objc.Sel("tag")
-	selSetBordered           = objc.Sel("setBordered:")
-	selSetEnabled            = objc.Sel("setEnabled:")
-	selSymbolImage           = objc.Sel("imageWithSystemSymbolName:accessibilityDescription:")
-	selButtonAction          = objc.Sel("gnuiButtonAction:")
-	selSetRefusesFirstResp   = objc.Sel("setRefusesFirstResponder:")
-	selRemoveFromSuper       = objc.Sel("removeFromSuperview")
-	selContentView           = objc.Sel("contentView")
-	selWillEnterFull         = objc.Sel("windowWillEnterFullScreen:")
-	selDidFailFull           = objc.Sel("windowDidFailToEnterFullScreen:")
-	selDidExitFull           = objc.Sel("windowDidExitFullScreen:")
+	selSetFrame              = objc.SelZ("setFrame:\x00")
+	selSetOpaqueWin          = objc.SelZ("setOpaque:\x00")
+	selSetBGColor            = objc.SelZ("setBackgroundColor:\x00")
+	selColorWhiteAlpha       = objc.SelZ("colorWithWhite:alpha:\x00")
+	selSetWantsLayerV        = objc.SelZ("setWantsLayer:\x00")
+	selSetAutoresizing       = objc.SelZ("setAutoresizingMask:\x00")
+	selAddSubview            = objc.SelZ("addSubview:\x00")
+	selAddSubviewPos         = objc.SelZ("addSubview:positioned:relativeTo:\x00")
+	selSetMaterial           = objc.SelZ("setMaterial:\x00")
+	selSetBlendingMode       = objc.SelZ("setBlendingMode:\x00")
+	selSetEffectState        = objc.SelZ("setState:\x00")
+	selSetGlassStyle         = objc.SelZ("setStyle:\x00")
+	selSetCornerRadius       = objc.SelZ("setCornerRadius:\x00")
+	selSetImage              = objc.SelZ("setImage:\x00")
+	selSetImagePosition      = objc.SelZ("setImagePosition:\x00")
+	selSetBezelStyle         = objc.SelZ("setBezelStyle:\x00")
+	selSetBorderShape        = objc.SelZ("setBorderShape:\x00")
+	selSetShowsBorderOnHover = objc.SelZ("setShowsBorderOnlyWhileMouseInside:\x00")
+	selSetToolTip            = objc.SelZ("setToolTip:\x00")
+	selSetTarget             = objc.SelZ("setTarget:\x00")
+	selSetAction             = objc.SelZ("setAction:\x00")
+	selSetTag                = objc.SelZ("setTag:\x00")
+	selTag                   = objc.SelZ("tag\x00")
+	selSetBordered           = objc.SelZ("setBordered:\x00")
+	selSetEnabled            = objc.SelZ("setEnabled:\x00")
+	selSymbolImage           = objc.SelZ("imageWithSystemSymbolName:accessibilityDescription:\x00")
+	selButtonAction          = objc.SelZ("gnuiButtonAction:\x00")
+	selSetRefusesFirstResp   = objc.SelZ("setRefusesFirstResponder:\x00")
+	selRemoveFromSuper       = objc.SelZ("removeFromSuperview\x00")
+	selContentView           = objc.SelZ("contentView\x00")
+	selWillEnterFull         = objc.SelZ("windowWillEnterFullScreen:\x00")
+	selDidFailFull           = objc.SelZ("windowDidFailToEnterFullScreen:\x00")
+	selDidExitFull           = objc.SelZ("windowDidExitFullScreen:\x00")
 
 	nsImageClass  objc.ID
 	glassMaterial = map[Backdrop]uintptr{BackdropGlass: 0, BackdropGlassClear: 1}
@@ -98,8 +98,10 @@ var liveHosts, liveMaterials, shellApplies, shellSynced atomic.Int64
 // ShellObjects counts the native shell objects alive in the process (hosts
 // created and not released, and material views) and how their changes were
 // applied. The leak gate checks that the objects return to where they were
-// after windows open and close.
+// after windows open and close. Calling it enables transaction diagnostics
+// for later applies; otherwise they make no diagnostic native calls.
 func ShellObjects() ShellCounts {
+	testHookApplyShell.CompareAndSwap(nil, &shellObserver)
 	return ShellCounts{Hosts: liveHosts.Load(), Materials: liveMaterials.Load(), Applies: shellApplies.Load(), Synced: shellSynced.Load()}
 }
 
@@ -448,14 +450,8 @@ func (w *Window) FlushShell() {
 }
 
 func (w *Window) applyShell() {
-	shellApplies.Add(1)
-	// The view's layer is the surface's CAMetalLayer, or none; but a window
-	// without a surface whose hosts asked for layers has an ordinary backing
-	// layer, which does not know presentsWithTransaction (AppKit threw, and
-	// the process aborted: TestKeyEquivalentWithHostFocused with -count=3).
-	if l := objc.Send(w.view, selLayerOf); objc.SendBool(clsCATransaction(), selDisableActions) &&
-		objc.SendBool1(l, selRespondsTo, uintptr(selPresentsWithTx)) && objc.SendBool(l, selPresentsWithTx) {
-		shellSynced.Add(1)
+	if hook := testHookApplyShell.Load(); hook != nil {
+		(*hook)(w)
 	}
 	if w.mat.dirty {
 		w.applyMaterials()
@@ -465,13 +461,27 @@ func (w *Window) applyShell() {
 	}
 }
 
+func observeShellApply(w *Window) {
+	shellApplies.Add(1)
+	// A plain backing layer does not implement presentsWithTransaction.
+	if l := objc.Send(w.view, selLayerOf); objc.SendBool(clsCATransaction(), selDisableActions) &&
+		objc.SendBool1(l, selRespondsTo, uintptr(selPresentsWithTx)) && objc.SendBool(l, selPresentsWithTx) {
+		shellSynced.Add(1)
+	}
+}
+
+// testHookApplyShell observes the native transaction only in shell tests.
+var testHookApplyShell atomic.Pointer[func(*Window)]
+
+var shellObserver = observeShellApply
+
 var (
-	selBegin             = objc.Sel("begin")
-	selCommit            = objc.Sel("commit")
-	selSetDisableActions = objc.Sel("setDisableActions:")
-	selDisableActions    = objc.Sel("disableActions")
-	selPresentsWithTx    = objc.Sel("presentsWithTransaction")
-	selSetHidden         = objc.Sel("setHidden:")
+	selBegin             = objc.SelZ("begin\x00")
+	selCommit            = objc.SelZ("commit\x00")
+	selSetDisableActions = objc.SelZ("setDisableActions:\x00")
+	selDisableActions    = objc.SelZ("disableActions\x00")
+	selPresentsWithTx    = objc.SelZ("presentsWithTransaction\x00")
+	selSetHidden         = objc.SelZ("setHidden:\x00")
 	caTransaction        objc.ID
 )
 

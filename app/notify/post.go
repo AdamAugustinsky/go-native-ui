@@ -10,7 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"sync"
-	"time"
+
+	"gonativeui/core"
 )
 
 // Posting. Every Post of an ID is a new generation, the ID's latest post
@@ -362,7 +363,7 @@ func RemoveThread(thread string) error {
 	var ids []string
 	svc.order.Lock()
 	svc.mu.Lock()
-	now, cut := time.Now().UnixNano(), svc.gen
+	now, cut := core.WallNow().UnixNano(), svc.gen
 	svc.listings++ // the entries stay until the listing arrives
 	for id, e := range svc.ids {
 		if c, ok := e.current(); ok && c.thread == thread {

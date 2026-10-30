@@ -3,7 +3,7 @@ package ui
 import (
 	"unicode/utf8"
 
-	"gonativeui/platform"
+	"gonativeui/internal/uitypes"
 )
 
 // Mouse buttons (indices into the Input arrays).
@@ -290,6 +290,9 @@ type Input struct {
 	// focus (became the active window). A caller that shows the file system or
 	// the like can look again; it costs nothing while nothing happens.
 	FocusGained bool
+	// FocusLost records a loss even if focus returned before the next frame,
+	// such as while hidden. Transient UI must still observe that loss.
+	FocusLost bool
 	// Hidden is true while the window is not showing: minimised, hidden, on
 	// another Space or covered (the platform's last visibility event). Nothing
 	// is on screen then, so an animation that loops should stop asking for
@@ -616,6 +619,7 @@ func (in *Input) ClearFrame() {
 	in.NKeys, in.NText = 0, 0
 	in.CommitOff, in.CommitLen = 0, 0
 	in.FocusGained, in.AltTap = false, false
+	in.FocusLost = false
 	in.NEdit, in.NCommands, in.NActions, in.NGestures = 0, 0, 0, 0
 	in.HasPaste, in.HasReplace, in.ReplaceN = false, false, 0
 	in.HasMenuChoice, in.MenuOutcome = false, MenuPending
@@ -632,7 +636,7 @@ func (in *Input) ClearFrame() {
 // 16 MiB), so that repeated supported pastes of any size reuse the storage the
 // first one grew and allocate nothing. The storage stays reserved after a
 // large paste; ReleasePaste gives it back.
-const MaxKeptPaste = platform.MaxPaste
+const MaxKeptPaste = uitypes.MaxPaste
 
 // ReservePaste makes room for a paste of up to n bytes (at most MaxKeptPaste)
 // now, so that not even the first one allocates.

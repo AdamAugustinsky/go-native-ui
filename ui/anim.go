@@ -37,6 +37,9 @@ func (c *Context) KeepValue(key Key, initial, v float32) (prev float32) {
 	prev = initial
 	if i, ok := c.avTable.Get(uint64(key)); ok {
 		prev = c.av[i].cur
+		if c.av[i].lastFrame != c.frame {
+			c.avOrder = append(c.avOrder, i)
+		}
 		c.av[i].cur, c.av[i].tgt, c.av[i].lastFrame = v, v, c.frame
 		return prev
 	}
@@ -46,10 +49,13 @@ func (c *Context) KeepValue(key Key, initial, v float32) (prev float32) {
 
 func (c *Context) animate(key Key, initial, target, k float32) float32 {
 	var e *animEnt
+	var idx uint32
 	if v, ok := c.avTable.Get(uint64(key)); ok {
+		idx = v
 		e = &c.av[v]
 	} else {
 		i := c.avPool.Alloc().Index()
+		idx = i
 		if int(i) >= len(c.av) {
 			c.av = append(c.av, animEnt{})
 		}
@@ -59,6 +65,7 @@ func (c *Context) animate(key Key, initial, target, k float32) float32 {
 	}
 	e.tgt = target
 	if e.lastFrame != c.frame { // step once per frame however often it is asked
+		c.avOrder = append(c.avOrder, idx)
 		e.lastFrame = c.frame
 		if math.Abs(float64(target-e.cur)) < animEps {
 			e.cur = target
@@ -107,6 +114,7 @@ func approach(v *float32, target, rate float32) bool {
 // animateBoxes steps hot_t, active_t and focus_t of the boxes built this
 // frame and drops the animation values nobody asked for.
 func (c *Context) animateBoxes() {
+	c.settledKey = 0
 	for _, id := range c.order {
 		b := &c.boxes[id]
 		if b.prevTooltip && !b.tooltip {
@@ -123,8 +131,11 @@ func (c *Context) animateBoxes() {
 			if b.key == c.hotKey && (c.active[0] == 0 || c.active[0] == b.key) {
 				t = 1
 			}
+			prev := b.hotT
 			if approach(&b.hotT, t, c.rHot) {
 				c.animating = true
+			} else if b.hotT != prev { // it arrived: Build sees the final value next frame
+				c.animating, c.settledKey = true, b.key
 			}
 		}
 		if b.flags&ActiveAnimation != 0 {
@@ -132,8 +143,11 @@ func (c *Context) animateBoxes() {
 			if b.key == c.active[0] {
 				t = 1
 			}
+			prev := b.activeT
 			if approach(&b.activeT, t, c.rActive) {
 				c.animating = true
+			} else if b.activeT != prev { // it arrived: Build sees the final value next frame
+				c.animating, c.settledKey = true, b.key
 			}
 		}
 		if b.flags&FocusAnimation != 0 {
@@ -141,13 +155,16 @@ func (c *Context) animateBoxes() {
 			if b.key == c.focusKey {
 				t = 1
 			}
+			prev := b.focusT
 			if approach(&b.focusT, t, c.rFocus) {
 				c.animating = true
+			} else if b.focusT != prev { // it arrived: Build sees the final value next frame
+				c.animating, c.settledKey = true, b.key
 			}
 		}
 	}
-	for i := 1; i < len(c.av); i++ {
-		if c.avPool.Live(uint32(i)) && c.av[i].lastFrame != c.frame {
+	for _, i := range c.avPrev {
+		if c.av[i].lastFrame != c.frame {
 			c.avTable.Delete(uint64(c.av[i].key))
 			c.avPool.FreeIndex(uint32(i))
 		}
@@ -165,6 +182,9 @@ func (c *Context) prune() {
 				c.animating = true
 			}
 			c.table.Delete(uint64(b.key))
+			if b.cut != 0 {
+				c.cutPool.FreeIndex(b.cut - 1)
+			}
 			c.pool.FreeIndex(uint32(id))
 		}
 	}

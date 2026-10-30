@@ -159,6 +159,28 @@ type ParaView struct {
 	// lines it makes. Zero for a view that certifies nothing (FitFrom > FitTo
 	// at every width that matters), including the zero ParaView.
 	FitFrom, FitTo float32
+	carets         []lineCarets
+	groups         []caretGroup
+	stops          []caretStop
+}
+
+// lineCarets indexes a line's geometry in its paragraph's pointer-free slabs.
+type lineCarets struct{ g0, g1, s0, s1 uint32 }
+
+// appendCarets prepares each line once, while the layout enters the cache.
+func (b *paraBuild) appendCarets(p *Para, s *paraSlabs, e *paraEnt, scratch *CaretIndex) {
+	v := ParaView{Text: p.Text, Lines: b.lines, Glyphs: b.glyphs, X: b.xs, Faces: b.faces, Clusters: b.clus}
+	for i, line := range b.lines {
+		lc := lineCarets{g0: uint32(len(s.groups)) - e.groupOff, s0: uint32(len(s.stops)) - e.stopOff}
+		if line.G0 != line.G1 {
+			scratch.build(v.LineRun(i), int(line.Start))
+			s.groups = append(s.groups, scratch.data.groups...)
+			s.stops = append(s.stops, scratch.data.stops...)
+		}
+		lc.g1, lc.s1 = uint32(len(s.groups))-e.groupOff, uint32(len(s.stops))-e.stopOff
+		s.carets = append(s.carets, lc)
+	}
+	e.groupN, e.stopN = uint32(len(s.groups))-e.groupOff, uint32(len(s.stops))-e.stopOff
 }
 
 // Style returns the style of glyph g: its span's, or 0.
@@ -190,12 +212,16 @@ func (p *ParaView) LineAt(y float32) int {
 	if n == 0 {
 		return -1
 	}
-	for i := 0; i < n-1; i++ {
-		if y < p.Lines[i].Top+p.Lines[i].Height {
-			return i
+	lo, hi := 0, n-1
+	for lo < hi {
+		m := (lo + hi) / 2
+		if y < p.Lines[m].Top+p.Lines[m].Height {
+			hi = m
+		} else {
+			lo = m + 1
 		}
 	}
-	return n - 1
+	return lo
 }
 
 // LineOf returns the line holding byte offset off: the line with Start <= off
@@ -228,7 +254,14 @@ func (p *ParaView) LineRun(i int) RunView {
 	l := &p.Lines[i]
 	g0, g1 := l.G0, l.G1
 	e := int(l.End)
-	if g1 > g0 {
+	var carets caretData
+	if len(p.carets) == len(p.Lines) {
+		c := p.carets[i]
+		carets = caretData{groups: p.groups[c.g0:c.g1:c.g1], stops: p.stops[c.s0:c.s1:c.s1]}
+	}
+	if len(carets.stops) > 0 {
+		e = int(carets.stops[len(carets.stops)-1].off)
+	} else if g1 > g0 {
 		var last int
 		for g := g0; g < g1; g++ {
 			last = max(last, int(p.Clusters[g]&^ClusterRTL))
@@ -245,6 +278,7 @@ func (p *ParaView) LineRun(i int) RunView {
 		Clusters: p.Clusters[g0:g1:g1],
 		Text:     p.Text[:e:e],
 		Advance:  xr,
+		carets:   carets,
 	}
 }
 
@@ -378,8 +412,11 @@ func (p *ParaView) RangeRects(from, to int, width float32, dst [][4]float32) [][
 	if s := GraphemeStart(p.Text, to); s != to {
 		to = NextGrapheme(p.Text, s)
 	}
-	for i := range p.Lines {
+	for i := max(p.LineOf(from), 0); i < len(p.Lines); i++ {
 		l := &p.Lines[i]
+		if int(l.Start) >= to {
+			break
+		}
 		if int(l.End) <= from || int(l.Start) >= to || l.G1 == l.G0 {
 			continue
 		}
@@ -387,26 +424,50 @@ func (p *ParaView) RangeRects(from, to int, width float32, dst [][4]float32) [][
 		y0, y1 := l.Top, l.Top+l.Height
 		v := p.LineRun(i)
 		n := len(v.Glyphs)
+		indexed := len(v.carets.groups) > 0
+		var fromStop, toStop int
+		if indexed {
+			n = len(v.carets.groups)
+			fromStop, toStop = v.carets.stopAt(from), v.carets.stopAt(to)
+		}
 		open := false
 		var x0, x1 float32
 		m := v.xStart() // the running maximum of X: cells, as in caret.go
 		for lo := 0; lo < n; {
-			s := v.clusterOf(lo)
-			hi := lo + 1
-			for hi < n && v.clusterOf(hi) == s {
-				hi++
-			}
-			g := glyphGroup{lo: lo, hi: hi, start: s, rtl: v.Clusters[lo]&ClusterRTL != 0}
-			g.xl = max(m, v.X[lo])
-			for k := lo; k < hi; k++ {
-				m = max(m, v.X[k])
-			}
-			if hi < n {
-				g.xr = max(m, v.X[hi])
+			var a, b float32
+			var in bool
+			if indexed {
+				g := v.carets.groups[lo]
+				s, e := g.first(), int(g.end)
+				if s == e { // an ellipsis at the cut
+					off := int(v.carets.stops[s].off)
+					a, b, in = g.xl, g.xr, off >= from && off < to
+				} else if s0, s1 := max(s, fromStop), min(e, toStop); s0 < s1 {
+					a, b, in = g.stopX(s0-s), g.stopX(s1-s), true
+					if a > b {
+						a, b = b, a
+					}
+				}
+				lo++
 			} else {
-				g.xr = max(m, v.Advance)
+				s := v.clusterOf(lo)
+				hi := lo + 1
+				for hi < n && v.clusterOf(hi) == s {
+					hi++
+				}
+				g := glyphGroup{lo: lo, hi: hi, start: s, rtl: v.Clusters[lo]&ClusterRTL != 0}
+				g.xl = max(m, v.X[lo])
+				for k := lo; k < hi; k++ {
+					m = max(m, v.X[k])
+				}
+				if hi < n {
+					g.xr = max(m, v.X[hi])
+				} else {
+					g.xr = max(m, v.Advance)
+				}
+				a, b, in = v.groupCover(&g, from, to)
+				lo = hi
 			}
-			a, b, in := v.groupCover(&g, from, to)
 			switch {
 			case in && open && a <= x1+0.01:
 				x0, x1 = min(x0, a), max(x1, b)
@@ -419,7 +480,6 @@ func (p *ParaView) RangeRects(from, to int, width float32, dst [][4]float32) [][
 				dst = append(dst, [4]float32{left + x0, y0, left + x1, y1})
 				open = false
 			}
-			lo = hi
 		}
 		if open {
 			dst = append(dst, [4]float32{left + x0, y0, left + x1, y1})

@@ -2,11 +2,11 @@ package main
 
 import (
 	"os"
-	"runtime"
 	"testing"
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/internal/allocsite"
 	"gonativeui/ui"
 )
 
@@ -248,21 +248,20 @@ func zeroAllocScroll(t *testing.T, rowsPerFrame, warm, window int, wantEvictions
 		frame()
 	}
 	const attempts = 5
-	var mallocs, bytes uint64
+	var ours int64
+	var sites string
 	for a := 0; a < attempts; a++ {
-		runtime.GC()
 		time.Sleep(20 * time.Millisecond)
-		var m0, m1 runtime.MemStats
 		gen0 := o.Text.RunGeneration()
-		runtime.ReadMemStats(&m0)
-		for i := 0; i < window; i++ {
-			frame()
-		}
-		runtime.ReadMemStats(&m1)
+		// Attributed (D27): the runtime's own allocations are passed over.
+		ours, sites = allocsite.During(func() {
+			for i := 0; i < window; i++ {
+				frame()
+			}
+		})
 		evictions := o.Text.RunGeneration() - gen0
-		mallocs, bytes = m1.Mallocs-m0.Mallocs, m1.TotalAlloc-m0.TotalAlloc
-		t.Logf("attempt %d: %d frames, %d rows each, %d quads: %d mallocs, %d bytes", a+1, window, l.last-l.first, len(o.Quads()), mallocs, bytes)
-		if mallocs == 0 && bytes == 0 {
+		t.Logf("attempt %d: %d frames, %d rows each, %d quads: %d objects of ours", a+1, window, l.last-l.first, len(o.Quads()), ours)
+		if ours == 0 {
 			if wantEvictions && evictions == 0 {
 				t.Fatal("the run cache did not evict inside the measured window: the scroll was too short to test eviction")
 			}
@@ -270,7 +269,7 @@ func zeroAllocScroll(t *testing.T, rowsPerFrame, warm, window int, wantEvictions
 			return
 		}
 	}
-	t.Errorf("scroll frames allocated in all %d windows (last: %d mallocs, %d bytes over %d frames)", attempts, mallocs, bytes, window)
+	t.Errorf("scroll frames allocated in all %d windows (last: %d objects of ours over %d frames):\n%s", attempts, ours, window, sites)
 }
 
 // The bench script (scroll, hover, key, click and the jumps to row 900000 and

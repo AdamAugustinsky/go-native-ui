@@ -21,6 +21,8 @@ type paraEnt struct {
 	lineOff, lineN   uint32
 	gOff, gN         uint32
 	fitLo, fitHi     float32 // ParaView.FitFrom and FitTo
+	groupOff, groupN uint32
+	stopOff, stopN   uint32
 }
 
 // paraBuild is the output of one layout, before the cache copies it.
@@ -91,7 +93,8 @@ var maxParaBudget = ParaBudget{MaxCachedParas, MaxCachedParaGlyphs, MaxCachedPar
 // DefaultParaBudget returns the budget of a paragraph cache until the app
 // declares one with ReserveParas: 1024 layouts, 64 Ki glyphs and 64 KiB of
 // text (8 Ki lines, 16 Ki spans, 8 Ki fonts), a few screens of wrapped labels
-// and messages in 1.7 MiB, with scratch for paragraphs of up to 16 KiB.
+// and messages with indexed caret geometry, and scratch for paragraphs of up
+// to 16 KiB.
 // ReserveRuns reserves it when no budget was declared. A chat or document
 // app that keeps more text in view, or scrolls through more of it, declares
 // a larger one.
@@ -109,7 +112,7 @@ const maxParaScratch = 16 << 10
 // is laid out anyway, kept outside the cache, and may allocate.
 // The output (glyphs, lines) is sized by the budget, since a layout over it is
 // not cached anyway; what is shaped from the input (inGlyphs: the basic
-// layout's copies of its shaped style runs) by the paragraph size alone, since
+// layout's measurement scratch) by the paragraph size alone, since
 // a truncated paragraph shapes all of its text to output only a few lines.
 type paraScratch struct{ bytes, glyphs, inGlyphs, lines, runs int }
 
@@ -149,11 +152,15 @@ type paraSlabs struct {
 	faces  []FaceID
 	clus   []uint32
 	spanOf []uint16
+	carets []lineCarets
+	groups []caretGroup
+	stops  []caretStop
 }
 
 func (s *paraSlabs) truncate() {
 	s.text, s.spans, s.fonts, s.lines = s.text[:0], s.spans[:0], s.fonts[:0], s.lines[:0]
 	s.glyphs, s.xs, s.faces, s.clus, s.spanOf = s.glyphs[:0], s.xs[:0], s.faces[:0], s.clus[:0], s.spanOf[:0]
+	s.carets, s.groups, s.stops = s.carets[:0], s.groups[:0], s.stops[:0]
 }
 
 // reserve gives the slabs room for b.
@@ -167,6 +174,9 @@ func (s *paraSlabs) reserve(b ParaBudget) {
 	grow(&s.faces, b.Glyphs)
 	grow(&s.clus, b.Glyphs)
 	grow(&s.spanOf, b.Glyphs)
+	grow(&s.carets, b.Lines)
+	grow(&s.groups, b.Glyphs)
+	grow(&s.stops, b.Text+b.Lines)
 }
 
 // grow gives s a capacity of at least n, keeping its elements.
@@ -177,7 +187,7 @@ func grow[T any](s *[]T, n int) {
 }
 
 // add appends the layout b of p and returns its entry.
-func (s *paraSlabs) add(p *Para, h uint64, b *paraBuild) paraEnt {
+func (s *paraSlabs) add(p *Para, h uint64, b *paraBuild, scratch *CaretIndex) paraEnt {
 	e := paraEnt{
 		hash: h, dir: p.Dir, ellipsis: p.Ellipsis, truncated: b.truncated,
 		maxLines: int32(p.MaxLines), width: p.Width, lineH: p.LineHeight, outW: b.width, outH: b.height, fitLo: b.fitLo, fitHi: b.fitHi,
@@ -186,6 +196,7 @@ func (s *paraSlabs) add(p *Para, h uint64, b *paraBuild) paraEnt {
 		fontOff: uint32(len(s.fonts)), fontN: uint32(len(p.Fonts)),
 		lineOff: uint32(len(s.lines)), lineN: uint32(len(b.lines)),
 		gOff: uint32(len(s.glyphs)), gN: uint32(len(b.glyphs)),
+		groupOff: uint32(len(s.groups)), stopOff: uint32(len(s.stops)),
 	}
 	s.text = append(s.text, p.Text...)
 	s.spans = append(s.spans, p.Spans...)
@@ -196,6 +207,7 @@ func (s *paraSlabs) add(p *Para, h uint64, b *paraBuild) paraEnt {
 	s.faces = append(s.faces, b.faces...)
 	s.clus = append(s.clus, b.clus...)
 	s.spanOf = append(s.spanOf, b.spanOf...)
+	b.appendCarets(p, s, &e, scratch)
 	return e
 }
 
@@ -226,6 +238,9 @@ func (s *paraSlabs) view(e *paraEnt) ParaView {
 		Truncated: e.truncated,
 		FitFrom:   e.fitLo,
 		FitTo:     e.fitHi,
+		carets:    s.carets[l0:l1:l1],
+		groups:    s.groups[e.groupOff : e.groupOff+e.groupN : e.groupOff+e.groupN],
+		stops:     s.stops[e.stopOff : e.stopOff+e.stopN : e.stopOff+e.stopN],
 	}
 }
 
@@ -250,7 +265,8 @@ type paraCache struct {
 	slabs    paraSlabs
 	gen      uint32
 	lim      ParaBudget
-	declared bool // the budget came from ReserveParas
+	declared bool       // the budget came from ReserveParas
+	carets   CaretIndex // reused while indexing a line on insertion
 
 	over    paraSlabs
 	overE   paraEnt
@@ -284,6 +300,8 @@ func (c *paraCache) reserve(b ParaBudget, declare bool) bool {
 	}
 	grow(&c.ents, b.Paras)
 	c.slabs.reserve(b)
+	sc := scratchFor(b)
+	c.carets.reserve(sc.bytes, sc.glyphs)
 	// insert grows the table when entries*2 > len(table).
 	size := len(c.table)
 	for size < b.Paras*2 {
@@ -336,7 +354,7 @@ func (c *paraCache) insert(p *Para, h uint64, b *paraBuild) ParaRef {
 			c.over = paraSlabs{} // no high-water mark: storage to fit this one
 		}
 		c.over.truncate()
-		c.overE, c.overOK, c.overAge = c.over.add(p, h, b), true, 0
+		c.overE, c.overOK, c.overAge = c.over.add(p, h, b, &c.carets), true, 0
 		return overRef
 	}
 	if c.overOK {
@@ -350,7 +368,7 @@ func (c *paraCache) insert(p *Para, h uint64, b *paraBuild) ParaRef {
 			c.drop()
 		}
 	}
-	c.ents = append(c.ents, c.slabs.add(p, h, b))
+	c.ents = append(c.ents, c.slabs.add(p, h, b, &c.carets))
 	if len(c.ents)*2 > len(c.table) {
 		c.rehash(len(c.table) * 2)
 	} else {
@@ -427,7 +445,7 @@ func (c *paraCache) evict() {
 	c.gen++
 	s := &c.slabs
 	w := 0
-	var tw, sw, fw, lw, gw uint32
+	var tw, sw, fw, lw, gw, cw, pw uint32
 	for i := range c.ents {
 		e := c.ents[i]
 		if !e.ref {
@@ -442,18 +460,25 @@ func (c *paraCache) evict() {
 		copy(s.faces[gw:], s.faces[e.gOff:e.gOff+e.gN])
 		copy(s.clus[gw:], s.clus[e.gOff:e.gOff+e.gN])
 		copy(s.spanOf[gw:], s.spanOf[e.gOff:e.gOff+e.gN])
+		copy(s.carets[lw:], s.carets[e.lineOff:e.lineOff+e.lineN])
+		copy(s.groups[cw:], s.groups[e.groupOff:e.groupOff+e.groupN])
+		copy(s.stops[pw:], s.stops[e.stopOff:e.stopOff+e.stopN])
 		e.textOff, e.spanOff, e.fontOff, e.lineOff, e.gOff, e.ref = tw, sw, fw, lw, gw, false
+		e.groupOff, e.stopOff = cw, pw
 		tw += e.textLen
 		sw += e.spanN
 		fw += e.fontN
 		lw += e.lineN
 		gw += e.gN
+		cw += e.groupN
+		pw += e.stopN
 		c.ents[w] = e
 		w++
 	}
 	c.ents = c.ents[:w]
 	s.text, s.spans, s.fonts, s.lines = s.text[:tw], s.spans[:sw], s.fonts[:fw], s.lines[:lw]
 	s.glyphs, s.xs, s.faces, s.clus, s.spanOf = s.glyphs[:gw], s.xs[:gw], s.faces[:gw], s.clus[:gw], s.spanOf[:gw]
+	s.carets, s.groups, s.stops = s.carets[:lw], s.groups[:cw], s.stops[:pw]
 	c.rehash(len(c.table))
 }
 

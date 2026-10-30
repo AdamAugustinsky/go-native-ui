@@ -3,6 +3,7 @@
 package text
 
 import (
+	"bytes"
 	"math"
 	"runtime"
 	"testing"
@@ -552,4 +553,80 @@ func TestCloseReleasesTheCaches(t *testing.T) {
 		t.Errorf("a closed System reports %d atlas pages", s.Pages())
 	}
 	runtime.KeepAlive(s)
+}
+
+// Alternating wide/tall requests converge to one bitmap, and persistent
+// raster state must produce the same pixels as a fresh context at each scale.
+func TestBitmapRetainsBothAxesAndRasterState(t *testing.T) {
+	s := newSys(t)
+	s.bitmapFor(false, 240, 60)
+	bm := s.bitmapFor(false, 60, 240)
+	if bm.w != 256 || bm.h != 256 {
+		t.Fatalf("scratch %dx%d, want 256x256", bm.w, bm.h)
+	}
+	ctx := bm.ctx
+	allocFree(t, "alternating bitmap requests", func() func() {
+		return func() {
+			for i := 0; i < 100; i++ {
+				s.bitmapFor(false, 240, 60)
+				s.bitmapFor(false, 60, 240)
+			}
+		}
+	})
+	if s.gray.ctx != ctx {
+		t.Fatal("bitmap context was replaced")
+	}
+	for _, scale := range []float32{1, 2, 1.5, 3, 1} {
+		f := s.Font(FontDesc{Scale: scale})
+		v := shapeStr(s, f, "A")
+		for _, smooth := range []uint8{0, 1, 4, 2, 0} {
+			e := s.rasterize(v.Faces[0], v.Glyphs[0], 2, smooth)
+			got := pixels(t, s, e)
+			s.freeBitmap(&s.gray)
+			fresh := s.rasterize(v.Faces[0], v.Glyphs[0], 2, smooth)
+			if string(got) != string(pixels(t, s, fresh)) {
+				t.Fatalf("scale %v smooth %d: cached graphics state changed pixels", scale, smooth)
+			}
+		}
+	}
+}
+
+// A glyph rasterized after the bitmap context went through many scales is
+// the glyph a context that only knew its scale draws (the zoom test's
+// travelled window against a fresh one): the scale is set exactly, not
+// reached by ratios that drift.
+func TestRasterAfterManyScalesMatchesFresh(t *testing.T) {
+	bitmaps := func(s *System, scale float32) [][]byte {
+		f := s.Font(FontDesc{SizePt: 13, Weight: 400, Scale: scale})
+		v := s.Run(s.Shape(f, []byte("Hamburgefonstiv 0123456789 Il1|")))
+		var out [][]byte
+		for i, gid := range v.Glyphs {
+			for sub := uint8(0); sub < 4; sub++ {
+				e := s.Glyph(v.Faces[i], gid, sub)
+				p := s.atlas.pages[e.Page]
+				b := make([]byte, 0, int(e.W)*int(e.H))
+				for y := int(e.Y); y < int(e.Y+e.H); y++ {
+					b = append(b, p.pix[(y*p.pack.w+int(e.X))*p.bpp:(y*p.pack.w+int(e.X+e.W))*p.bpp]...)
+				}
+				out = append(out, b)
+			}
+		}
+		return out
+	}
+	// The zoom test's levels on a 2× display, ending at the last.
+	level := func(i int) float32 { return 2 * (0.5 + float32(i)/100*2.5) }
+	travelled := newSys(t)
+	for i := range 100 {
+		bitmaps(travelled, level(i))
+		if i >= 4 {
+			travelled.ReleaseScale(level(i - 4))
+		}
+	}
+	final := level(99)
+	got, want := bitmaps(travelled, final), bitmaps(newSys(t), final)
+	for i := range want {
+		if !bytes.Equal(got[i], want[i]) {
+			t.Fatalf("glyph %d (sub %d) rasterized after 100 scales differs from a fresh system's", i/4, i%4)
+		}
+	}
 }

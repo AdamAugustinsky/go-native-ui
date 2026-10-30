@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/ui"
 )
 
@@ -280,15 +281,23 @@ func (r *parseRate) observe(n int, d time.Duration) {
 }
 
 const (
-	feedChunk    = 64 << 10 // the largest write to the library at once
-	feedMinChunk = 512      // the smallest, so a slice always progresses
+	feedChunk    = 64 << 10            // the largest write to the library at once
+	feedMinChunk = 512                 // the smallest, so a slice always progresses
+	feedSimByte  = 4 * time.Nanosecond // simulation charges work, independent of parse speed
 )
+
+func parseElapsed(start time.Time, parsed int) time.Duration {
+	if core.SimulationForTesting() != nil {
+		return time.Duration(parsed) * feedSimByte
+	}
+	return core.Since(start)
+}
 
 // parse feeds queued output to the library until it is all parsed or d has
 // passed, and returns the bytes parsed. Chunks are sized from rate so the
 // last one ends near d rather than up to a 64 KiB chunk past it.
 func (s *TerminalState) parse(d time.Duration, rate *parseRate) int {
-	start := time.Now()
+	start := core.WallNow()
 	total := 0
 	for {
 		if s.off == len(s.pending) {
@@ -302,14 +311,22 @@ func (s *TerminalState) parse(d time.Duration, rate *parseRate) int {
 				break
 			}
 		}
-		left := d - time.Since(start)
+		left := d - parseElapsed(start, total)
 		if left <= 0 {
 			break
 		}
-		n := min(len(s.pending)-s.off, feedChunk, max(feedMinChunk, rate.bytesFor(left)))
-		t0 := time.Now()
+		var limit int
+		if core.SimulationForTesting() != nil {
+			limit = int(left / feedSimByte)
+		} else {
+			limit = rate.bytesFor(left)
+		}
+		n := min(len(s.pending)-s.off, feedChunk, max(feedMinChunk, limit))
+		t0 := core.WallNow()
 		s.T.Write(s.pending[s.off : s.off+n])
-		rate.observe(n, time.Since(t0))
+		if core.SimulationForTesting() == nil {
+			rate.observe(n, core.Since(t0))
+		}
 		s.off += n
 		total += n
 		if k := min(n, s.fromInbox); k > 0 {
@@ -333,9 +350,9 @@ func (s *TerminalState) feedFrame(d time.Duration, rate *parseRate) bool {
 		return false
 	}
 	s.peak = max(s.peak, q)
-	t0 := time.Now()
+	t0 := core.WallNow()
 	n := s.parse(d, rate)
-	s.parseTime = time.Since(t0)
+	s.parseTime = parseElapsed(t0, n)
 	s.parsedFrame = n
 	s.parsedTotal += int64(n)
 	if s.Pending() > 0 {
@@ -470,7 +487,7 @@ func (q *TerminalScheduler) Run(c *ui.Context) {
 		q.next = (q.next + 1) % n
 	}
 
-	start := time.Now()
+	start := core.WallNow()
 	parsed := 0
 	others := len(q.order)
 	if focused != nil {
@@ -484,7 +501,7 @@ func (q *TerminalScheduler) Run(c *ui.Context) {
 		}
 	}
 	for _, s := range q.order {
-		left := q.budget - time.Since(start)
+		left := q.budget - parseElapsed(start, parsed)
 		if left <= 0 {
 			break
 		}
@@ -503,7 +520,7 @@ func (q *TerminalScheduler) Run(c *ui.Context) {
 	}
 	// Second pass: what is left, in the same order.
 	for _, s := range q.order {
-		left := q.budget - time.Since(start)
+		left := q.budget - parseElapsed(start, parsed)
 		if left <= 0 {
 			break
 		}
@@ -520,7 +537,7 @@ func (q *TerminalScheduler) Run(c *ui.Context) {
 			s.behind = 0
 		}
 	}
-	q.last = TerminalSchedulerStats{Budget: q.budget, Spent: time.Since(start), Parsed: parsed, Terminals: n, Behind: behind}
+	q.last = TerminalSchedulerStats{Budget: q.budget, Spent: parseElapsed(start, parsed), Parsed: parsed, Terminals: n, Behind: behind}
 	if behind > 0 {
 		c.RequestFrame()
 	}
@@ -552,9 +569,9 @@ func (q *TerminalScheduler) feed(s *TerminalState, d time.Duration, f uint32) in
 		s.peak = max(s.peak, s.Pending())
 		s.parsedFrame, s.parseTime = 0, 0
 	}
-	t0 := time.Now()
+	t0 := core.WallNow()
 	n := s.parse(d, &q.rate)
-	el := time.Since(t0)
+	el := parseElapsed(t0, n)
 	s.capUsed += el
 	s.parseTime += el
 	s.parsedFrame += n

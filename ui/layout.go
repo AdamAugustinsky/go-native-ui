@@ -120,7 +120,6 @@ func (c *Context) layout() {
 	order := c.order
 
 	c.sizeAxis(0)
-	c.wrapLines()
 	c.sizeAxis(1)
 
 	// 5. positions
@@ -346,6 +345,9 @@ func (c *Context) sizeAxis(a int) {
 	// 4. violations, parents first so a shrunk parent shrinks its children in turn
 	for _, id := range order {
 		p := &boxes[id]
+		if a == 0 {
+			c.fitText(p)
+		}
 		p.content[a] = float64(p.padSum(a))
 		if p.first == 0 {
 			continue

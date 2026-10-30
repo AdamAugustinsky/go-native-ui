@@ -35,8 +35,10 @@ func (g *gallery) Init(a *app.App) error {
 
 `GPUBytes` is the budget of texture memory; when it is short, the least
 recently drawn images are evicted, never one that was drawn or requested in this
-frame or the last. `CPUBytes` is the budget of decoded pixels kept so that an
-image evicted from the GPU is uploaded again without decoding again.
+frame or the last. `CPUBytes` covers pixels waiting for upload, animation
+frames and canvases, and spare decode buffers. Still-image pixels return to
+the pool after upload; GPU eviction or device loss invalidates their handles
+and the next `Request` decodes them again. Animations keep the frame showing.
 `Entries` sizes the tables, which never grow. Close the cache after the window,
 which stops the workers and frees the textures:
 

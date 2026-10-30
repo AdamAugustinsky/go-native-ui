@@ -48,7 +48,7 @@ func TestNativeTooltips(t *testing.T) {
 			r.asked = append(r.asked, key)
 			return append(dst, texts[key]...)
 		})
-		regs := []TooltipRegion{{[4]float32{20, 20, 220, 120}, 1}, {[4]float32{400, 40, 600, 100}, 2}}
+		regs := []TooltipRegion{{Rect: [4]float32{20, 20, 220, 120}, Key: 1}, {Rect: [4]float32{400, 40, 600, 100}, Key: 2}}
 		step := func() { r.applies = append(r.applies, w.aux.tipApplies) }
 		w.SetTooltipRegions(nil) // nothing registered, nothing to apply
 		step()
@@ -123,4 +123,73 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+func TestTooltipWindowSlotsAreReused(t *testing.T) {
+	var a, b Window
+	onMain(func() {
+		first := keepTipWindow(&a)
+		freeTipWindow(first)
+		for range 1000 {
+			next := keepTipWindow(&b)
+			if next != first {
+				t.Errorf("slot %d was replaced by %d", first, next)
+			}
+			freeTipWindow(next)
+		}
+	})
+}
+
+func TestNativeRegionsDeferDuringScroll(t *testing.T) {
+	var err error
+	onMain(func() {
+		var w *Window
+		w, err = Open(Options{Title: "region deferral", Width: 200, Height: 100, Hidden: true})
+		if err != nil {
+			return
+		}
+		defer w.Close()
+		tips := []TooltipRegion{{Rect: [4]float32{0, 0, 100, 10}, Key: 1}}
+		cursors := []CursorRegion{{Rect: [4]float32{0, 0, 100, 10}, Cursor: CursorText}}
+		w.SetCursorRegions(cursors)
+		w.SetTooltipRegions(tips)
+		w.FinishRegionFrame()
+		applies := w.aux.tipApplies
+		for i := 0; i < 20; i++ {
+			w.aux.rects.scroll(PhaseNone, PhaseChanged)
+			tips[0].Rect[1]++
+			tips[0].Rect[3]++
+			cursors[0].Rect = tips[0].Rect
+			w.SetCursorRegions(cursors)
+			w.SetTooltipRegions(tips)
+			w.FinishRegionFrame()
+		}
+		if w.aux.tipApplies != applies || !w.aux.rects.cursorDirty {
+			t.Error("scroll rebuilt native rectangles")
+		}
+		w.SetCursorRegions(cursors)
+		w.SetTooltipRegions(tips)
+		w.FinishRegionFrame()
+		if w.aux.tipApplies != applies+1 || w.aux.rects.cursorDirty {
+			t.Error("first still frame did not flush")
+		}
+		w.aux.rects.scroll(PhaseChanged, PhaseNone)
+		tips[0].Rect[3]++
+		w.SetTooltipRegions(tips)
+		w.aux.rects.scroll(PhaseEnded, PhaseNone)
+		w.flushRegionRects()
+		if w.aux.tipApplies != applies+2 {
+			t.Error("scroll end did not flush")
+		}
+		w.aux.rects.scroll(PhaseChanged, PhaseNone)
+		tips[0].Rect[3]++
+		w.SetTooltipRegions(tips)
+		w.flushRegionRects() // the pointer-event path
+		if w.aux.tipApplies != applies+3 {
+			t.Error("pointer movement did not flush")
+		}
+	})
+	if err != nil {
+		t.Skipf("hidden window unavailable: %v", err)
+	}
 }

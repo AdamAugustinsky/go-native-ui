@@ -479,3 +479,5 @@ func TestPinnedButtonsFollowResize(t *testing.T) {
 		t.Errorf("after a resize to 600×500 ⌘ is at %v and + at %v: want 26,9 and %d,9 (28×28)", cmd, plus, 600-23-14)
 	}
 }
+
+func init() { testHookApplyShell.Store(&shellObserver) }

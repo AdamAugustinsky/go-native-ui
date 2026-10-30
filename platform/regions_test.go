@@ -8,8 +8,8 @@ import (
 
 func TestCursorMapAt(t *testing.T) {
 	var m cursorMap
-	a := CursorRegion{[4]float32{0, 0, 100, 100}, CursorPointer}
-	b := CursorRegion{[4]float32{50, 50, 150, 150}, CursorResizeEW}
+	a := CursorRegion{Rect: [4]float32{0, 0, 100, 100}, Cursor: CursorPointer}
+	b := CursorRegion{Rect: [4]float32{50, 50, 150, 150}, Cursor: CursorResizeEW}
 	if !m.setRegions([]CursorRegion{a, b}) {
 		t.Fatal("first list must report a change")
 	}
@@ -52,8 +52,8 @@ func TestCursorMapAt(t *testing.T) {
 func TestRegionsDiffAndNoAlloc(t *testing.T) {
 	var m cursorMap
 	var d dragMap
-	list := []CursorRegion{{[4]float32{0, 0, 10, 10}, CursorPointer}, {[4]float32{5, 5, 20, 20}, CursorText}}
-	drags := []DragRegion{{[4]float32{0, 0, 100, 40}, false}, {[4]float32{10, 5, 50, 35}, true}}
+	list := []CursorRegion{{Rect: [4]float32{0, 0, 10, 10}, Cursor: CursorPointer}, {Rect: [4]float32{5, 5, 20, 20}, Cursor: CursorText}}
+	drags := []DragRegion{{Rect: [4]float32{0, 0, 100, 40}, Block: false}, {Rect: [4]float32{10, 5, 50, 35}, Block: true}}
 	m.setRegions(list)
 	d.set(drags)
 	same := append([]CursorRegion(nil), list...) // a different slice with equal contents
@@ -89,10 +89,10 @@ func TestDragMapAt(t *testing.T) {
 	// A titlebar with a tab and a button above it, and a second block that
 	// itself has a drag area drawn over it (a label that should drag again).
 	d.set([]DragRegion{
-		{[4]float32{0, 0, 400, 46}, false},
-		{[4]float32{100, 8, 200, 38}, true},
-		{[4]float32{300, 8, 330, 38}, true},
-		{[4]float32{110, 12, 130, 34}, false},
+		{Rect: [4]float32{0, 0, 400, 46}, Block: false},
+		{Rect: [4]float32{100, 8, 200, 38}, Block: true},
+		{Rect: [4]float32{300, 8, 330, 38}, Block: true},
+		{Rect: [4]float32{110, 12, 130, 34}, Block: false},
 	})
 	for _, c := range []struct {
 		x, y float32
@@ -135,7 +135,7 @@ func TestFlattenMatchesAt(t *testing.T) {
 		regs := make([]CursorRegion, n)
 		for i := range regs {
 			x0, y0 := float32(rng.Intn(40)), float32(rng.Intn(40))
-			regs[i] = CursorRegion{[4]float32{x0, y0, x0 + 1 + float32(rng.Intn(30)), y0 + 1 + float32(rng.Intn(30))}, Cursor(1 + rng.Intn(4))}
+			regs[i] = CursorRegion{Rect: [4]float32{x0, y0, x0 + 1 + float32(rng.Intn(30)), y0 + 1 + float32(rng.Intn(30))}, Cursor: Cursor(1 + rng.Intn(4))}
 		}
 		m.setRegions(regs)
 		flat := m.flatten()
@@ -157,17 +157,17 @@ func TestFlattenExample(t *testing.T) {
 	var m cursorMap
 	// A divider across a pane header: the divider is later, so it cuts the header.
 	m.setRegions([]CursorRegion{
-		{[4]float32{0, 0, 100, 20}, CursorPointer},
-		{[4]float32{40, 0, 48, 100}, CursorResizeEW},
+		{Rect: [4]float32{0, 0, 100, 20}, Cursor: CursorPointer},
+		{Rect: [4]float32{40, 0, 48, 100}, Cursor: CursorResizeEW},
 	})
 	flat := m.flatten()
 	if len(flat) != 3 {
 		t.Fatalf("%v", flat)
 	}
 	want := map[CursorRegion]bool{
-		{[4]float32{0, 0, 40, 20}, CursorPointer}:    true,
-		{[4]float32{48, 0, 100, 20}, CursorPointer}:  true,
-		{[4]float32{40, 0, 48, 100}, CursorResizeEW}: true,
+		{Rect: [4]float32{0, 0, 40, 20}, Cursor: CursorPointer}:    true,
+		{Rect: [4]float32{48, 0, 100, 20}, Cursor: CursorPointer}:  true,
+		{Rect: [4]float32{40, 0, 48, 100}, Cursor: CursorResizeEW}: true,
 	}
 	for _, r := range flat {
 		if !want[r] {
@@ -175,7 +175,7 @@ func TestFlattenExample(t *testing.T) {
 		}
 	}
 	// No overlap in the input: the list is unchanged.
-	m.setRegions([]CursorRegion{{[4]float32{0, 0, 10, 10}, CursorText}, {[4]float32{20, 0, 30, 10}, CursorText}})
+	m.setRegions([]CursorRegion{{Rect: [4]float32{0, 0, 10, 10}, Cursor: CursorText}, {Rect: [4]float32{20, 0, 30, 10}, Cursor: CursorText}})
 	if got := m.flatten(); len(got) != 2 || got[0] != m.regs[0] || got[1] != m.regs[1] {
 		t.Errorf("%v", got)
 	}
@@ -185,8 +185,8 @@ func TestFlattenExample(t *testing.T) {
 // a divider, the last position the window saw is still in the old region.
 func TestPointerShapeUsesTheCurrentPosition(t *testing.T) {
 	var m cursorMap
-	header := CursorRegion{[4]float32{0, 0, 100, 20}, CursorPointer}
-	divider := CursorRegion{[4]float32{40, 0, 48, 100}, CursorResizeEW}
+	header := CursorRegion{Rect: [4]float32{0, 0, 100, 20}, Cursor: CursorPointer}
+	divider := CursorRegion{Rect: [4]float32{40, 0, 48, 100}, Cursor: CursorResizeEW}
 	m.setRegions([]CursorRegion{header, divider})
 	// The last move was inside the header (and outside the divider), the
 	// pointer is now over the divider.
@@ -208,19 +208,19 @@ func TestPointerShapeUsesTheCurrentPosition(t *testing.T) {
 	}
 }
 
-// Past the budget of pieces, regions overlap one another, but none reaches
-// into a hole (a hosted view keeps its own cursor).
+// Past the piece budget, no piece overlaps another or a hosted view.
 func TestFlattenOverBudgetKeepsHoles(t *testing.T) {
 	var m cursorMap
-	regs := []CursorRegion{{[4]float32{0, 0, 1000, 1000}, CursorPointer}}
+	regs := []CursorRegion{{Rect: [4]float32{0, 0, 1000, 1000}, Cursor: CursorPointer}}
 	for i := 0; i < 400; i++ {
 		x, y := float32(i%20*50+10), float32(i/20*50+10)
-		regs = append(regs, CursorRegion{[4]float32{x, y, x + 4, y + 4}, CursorText})
+		regs = append(regs, CursorRegion{Rect: [4]float32{x, y, x + 4, y + 4}, Cursor: CursorText})
 	}
 	m.setRegions(regs)
 	hole := [4]float32{400, 400, 600, 600}
 	m.setHoles([][4]float32{hole})
 	flat := m.flatten()
+	disjoint(t, flat)
 	if len(flat) < maxFlat {
 		t.Fatalf("%d pieces: the budget was not reached", len(flat))
 	}
@@ -266,5 +266,19 @@ func TestRegionListsGrowWithRoom(t *testing.T) {
 	tm.set(tips)
 	if after := at(); after != before {
 		t.Errorf("lists grown from %d to %d entries got new storage: %v, then %v", n, n+n/2, before, after)
+	}
+}
+
+func TestFlattenMergesTouchingCursors(t *testing.T) {
+	var m cursorMap
+	for i := 0; i < 1024; i++ {
+		m.regs = append(m.regs, CursorRegion{Rect: [4]float32{0, float32(i), 10, float32(i + 1)}, Cursor: CursorText})
+	}
+	flat := m.flatten()
+	if len(flat) != 1 || flat[0].Rect != [4]float32{0, 0, 10, 1024} {
+		t.Fatalf("touching pieces: %v", flat)
+	}
+	if got := testing.AllocsPerRun(20, func() { m.flatten() }); got != 0 {
+		t.Fatalf("warm flatten: %v allocations", got)
 	}
 }

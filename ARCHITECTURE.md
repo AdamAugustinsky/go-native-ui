@@ -285,12 +285,15 @@ Raster(face FaceID, glyph GlyphID, sizePx float32, subpixelX uint8, out *GlyphBi
 On top, shared by every backend:
 
 - **Run cache:** keyed by (hash of bytes, font, size). It stores
-  pointer-free glyph arrays in a slab with clock eviction. File names are
-  shaped once, mostly on workers, and prefetched for a listing as it loads.
-  Shaping off the main thread assumes CoreText's immutable objects and the
-  DirectWrite shared factory are thread-safe. Phase 2 verifies this per
-  object type; the fallback is one shaping thread. The main thread
-  only shapes cache misses for rows that just scrolled into view.
+  pointer-free glyph arrays in a slab; a full cache keeps the runs of
+  recent access epochs and drops the rest (D88). File names are
+  shaped once, mostly on workers (`text.Prefetcher`: two by default, each
+  with its own shaper and native faces), and prefetched for a listing as it
+  loads; the frame imports finished runs before it builds boxes
+  (`System.ImportRun`). Worker and main-thread shaping are checked to give
+  the same runs on macOS; one worker is the serial fallback. The main thread
+  only shapes cache misses for rows that just scrolled into view, and a
+  changed range goes to the workers after the frame's rows are built.
 - **Glyph cache:** keyed by (face, glyph, size, subpixel-x variant 0–3),
   pointing into the atlas.
 - **Ellipsis truncation, alignment and caret positions** are computed by us
@@ -351,8 +354,8 @@ On top, shared by every backend:
   the name.
 - **Handles, not pointers:** `type ListingID uint32`, `EntryIdx uint32`,
   `TextureID uint16`, with generation bits where reuse is possible.
-- **Frame scratch:** two byte arenas (current and previous frame, for
-  prev-frame hit testing) that reset each frame. Typed slices are carved
+- **Frame scratch:** one byte arena that resets each frame; hit testing
+  against the last layout reads the rects kept in each box (D88). Typed slices are carved
   from them with `unsafe.Slice` only for pointer-free types. No dependency
   on `GOEXPERIMENT=arenas`.
 - **Steady state allocates nothing.** A test harness runs warmed-up,

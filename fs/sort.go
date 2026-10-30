@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"slices"
 	"time"
@@ -26,7 +27,8 @@ import (
 //
 // Sorting builds one folded key per name (digit runs become '0', a length
 // byte, then the digits without leading zeros) in a recycled scratch
-// buffer, so every comparison is a single bytes.Compare.
+// buffer. Name sorting keeps a prefix beside each index; only prefix ties
+// compare the full keys.
 
 // arenaLimit is the largest arena (names, keys, entry count) that 32-bit
 // offsets can address. A variable only so tests can exercise the overflow
@@ -42,37 +44,56 @@ func arenaFits32(used, add uint64) bool {
 
 // sorter is the recycled scratch of one Sort call.
 type sorter struct {
-	keys []byte   // folded keys of all names, back to back
-	off  []uint32 // key of entry i is keys[off[i]:off[i+1]]
+	keys  []byte   // folded keys of all names, back to back
+	off   []uint32 // key of entry i is keys[off[i]:off[i+1]]
+	pairs []namePair
+	bits  []uint64
 }
 
 var (
 	sorterMu      core.Mutex
 	sorterFree    []*sorter
-	sorterTimer   *time.Timer
+	sorterTimer   *core.Timer
 	sorterLastPut time.Time
 )
 
 const sorterIdle = 30 * time.Second
 
-func getSorter() *sorter {
+// getSorter returns free scratch for n entries: the smallest that already
+// fits them, else the largest, so with two sorts at once (the service's two
+// workers) a big listing does not regrow small scratch while big scratch sits
+// free.
+func getSorter(n int) *sorter {
 	sorterMu.Lock()
 	defer sorterMu.Unlock()
-	if n := len(sorterFree); n > 0 {
-		s := sorterFree[n-1]
-		sorterFree[n-1] = nil
-		sorterFree = sorterFree[:n-1]
-		return s
+	best := -1
+	for i, s := range sorterFree {
+		if best < 0 {
+			best = i
+			continue
+		}
+		b, c := cap(sorterFree[best].off), cap(s.off)
+		if c > n && (b <= n || c < b) || b <= n && c > b {
+			best = i
+		}
 	}
-	return new(sorter)
+	if best < 0 {
+		return new(sorter)
+	}
+	s := sorterFree[best]
+	last := len(sorterFree) - 1
+	sorterFree[best] = sorterFree[last]
+	sorterFree[last] = nil
+	sorterFree = sorterFree[:last]
+	return s
 }
 
 func putSorter(s *sorter) {
 	sorterMu.Lock()
 	sorterFree = append(sorterFree, s)
-	sorterLastPut = time.Now()
+	sorterLastPut = core.WallNow()
 	if sorterTimer == nil {
-		sorterTimer = time.AfterFunc(sorterIdle, trimSorters)
+		sorterTimer = core.AfterFunc(sorterIdle, trimSorters)
 	} else {
 		sorterTimer.Reset(sorterIdle)
 	}
@@ -82,7 +103,7 @@ func putSorter(s *sorter) {
 func trimSorters() {
 	sorterMu.Lock()
 	defer sorterMu.Unlock()
-	if idle := time.Since(sorterLastPut); idle < sorterIdle {
+	if idle := core.Since(sorterLastPut); idle < sorterIdle {
 		// A callback already running when putSorter reset the timer must not
 		// discard newly returned, hot scratch.
 		sorterTimer.Reset(sorterIdle - idle)
@@ -105,12 +126,13 @@ func trimSorters() {
 // Unused scratch is released after 30 seconds idle; a later call warms it again.
 // It may be called from any goroutine on a Listing it owns.
 func Sort(l *Listing, key SortKey, desc bool) {
-	s := getSorter()
+	s := getSorter(len(l.Entries))
 	s.sort(l, key, desc)
 	putSorter(s)
 }
 
 func (s *sorter) sort(l *Listing, key SortKey, desc bool) {
+	l.sorted = false
 	n := len(l.Entries)
 	if !arenaFits32(0, uint64(n)) { // Order holds uint32 indices
 		l.Order = l.Order[:0]
@@ -127,6 +149,7 @@ func (s *sorter) sort(l *Listing, key SortKey, desc bool) {
 		l.Order[i] = uint32(i)
 	}
 	if n < 2 {
+		l.sorted, l.sortKey, l.desc = true, key, desc
 		return
 	}
 	if !s.buildKeys(l) { // the keys do not fit 32-bit offsets: leave the order as listed
@@ -136,7 +159,12 @@ func (s *sorter) sort(l *Listing, key SortKey, desc bool) {
 		return
 	}
 	c := cmpCtx{l: l, s: s, key: key, desc: desc}
-	slices.SortFunc(l.Order, c.cmp)
+	if key == SortName {
+		s.sortNames(&c)
+	} else {
+		slices.SortFunc(l.Order, c.cmp)
+	}
+	l.sorted, l.sortKey, l.desc = true, key, desc
 }
 
 // buildKeys folds every name into s.keys; false if the keys outgrow the
@@ -286,4 +314,43 @@ func cmpExt(a, b []byte) int {
 		}
 	}
 	return cmp3(uint32(len(ea)), uint32(len(eb)))
+}
+
+// namePair keeps the directory bit and the first 63 key bits beside the index.
+// Full keys resolve prefix ties, including short keys and the dropped low bit.
+type namePair struct {
+	prefix uint64
+	index  uint32
+}
+
+func (s *sorter) sortNames(c *cmpCtx) {
+	n := len(c.l.Entries)
+	if cap(s.pairs) < n {
+		s.pairs = make([]namePair, n)
+	}
+	s.pairs = s.pairs[:n]
+	for i := range s.pairs {
+		var b [8]byte
+		copy(b[:], s.keys[s.off[i]:s.off[i+1]])
+		p := binary.BigEndian.Uint64(b[:]) >> 1
+		if c.desc {
+			p ^= (1 << 63) - 1
+		}
+		if !isDirEntry(&c.l.Entries[i]) {
+			p |= 1 << 63
+		}
+		s.pairs[i] = namePair{p, uint32(i)}
+	}
+	slices.SortFunc(s.pairs, func(a, b namePair) int {
+		if a.prefix < b.prefix {
+			return -1
+		}
+		if a.prefix > b.prefix {
+			return 1
+		}
+		return c.cmp(a.index, b.index)
+	})
+	for i, p := range s.pairs {
+		c.l.Order[i] = p.index
+	}
 }

@@ -5,7 +5,7 @@ package videoframe
 
 import "errors"
 
-// Read is unsupported outside macOS.
-func Read(path string, size func(int, int) (int, error)) ([]byte, int, int, error) {
-	return nil, 0, 0, errors.ErrUnsupported
+// ReadInto is unsupported outside macOS.
+func ReadInto(path string, size func(int, int) (int, error), dst func(int, int) ([]byte, int, error)) (int, int, error) {
+	return 0, 0, errors.ErrUnsupported
 }

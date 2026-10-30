@@ -18,6 +18,7 @@
 // directory by name, all in slices of bounded work per frame); keys.go maps
 // the keys the table does not take to it; build.go builds a frame, chrome.go
 // the toolbar, sidebar and path bar; icons.go caches the system's file icons;
+// prefetch.go shapes a bounded neighborhood of names on text workers;
 // menus.go is the View menu's zoom; script.go
 // drives the benchmark; synth.go makes synthetic directories; shot.go renders
 // the offscreen scene.
@@ -123,15 +124,19 @@ type Pilot struct {
 	k  *widget.Kit
 	bk *base.Kit // k's base kit, which rexui's components take
 	// Traffic makes the scene draw the window's traffic lights (offscreen output).
-	Traffic bool
-	opt     Options
-	sys     *sysIcons
-	sym     symbols
-	a       *app.App
-	src     Source
-	loc     *time.Location
-	mac     bool
-	win     bool // Windows: AltGr is Ctrl+Alt
+	Traffic    bool
+	opt        Options
+	sys        *sysIcons
+	shapes     *text.Prefetcher
+	nameDesc   text.FontDesc
+	nameRanges [2]nameRange
+	nameFlush  [2]nameFlush
+	sym        symbols
+	a          *app.App
+	src        Source
+	loc        *time.Location
+	mac        bool
+	win        bool // Windows: AltGr is Ctrl+Alt
 
 	panes  [2]*pane
 	active int
@@ -153,7 +158,7 @@ type Pilot struct {
 	probeStop  guard             // ends the places worker's publishing at Close
 	probeWG    sync.WaitGroup    // the places worker, for whoever wants to know it ended
 	probed     chan placesProbed // the worker's places, until they are taken
-	wake       func()            // wakes the loop (platform.Wake)
+	wake       func()            // Window.Wake after Init; platform.Wake before it
 
 	init     [2]<-chan Ready
 	listedAt [2]int64
@@ -205,7 +210,18 @@ var _ app.Initer = (*Pilot)(nil)
 // first listings.
 func (pl *Pilot) Init(a *app.App) error {
 	pl.a = a
-	pl.k = widget.NewKit(a.UI, a.Text, look(pl.opt.Mono))
+	if a.Win != nil {
+		pl.wake = a.Win.Wake
+		if src, ok := pl.src.(interface{ SetWake(func()) }); ok {
+			src.SetWake(pl.wake)
+		}
+	}
+	th := look(pl.opt.Mono)
+	pl.nameDesc = th.Text[theme.StyleBody].Desc()
+	if pl.opt.Mono {
+		pl.nameDesc = th.Fonts.Mono
+	}
+	pl.k = widget.NewKit(a.UI, a.Text, th)
 	pl.bk = pl.k.Kit
 	pl.bk.SetPreference(pl.opt.Preference)
 	pl.bk.Materials = a.Win != nil && a.Win.HasMaterials()
@@ -225,7 +241,10 @@ func (pl *Pilot) Init(a *app.App) error {
 	pl.bk.SetMenu(m) // the shortcuts, and the zoom the model's commands do
 	a.SetMenu(m)     // the macOS menu bar
 	a.UI.Reserve(4096)
-	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
+	a.Text.ReserveRuns(text.WorkingSetRuns, text.WorkingSetGlyphs, text.WorkingSetTextBytes)
+	// Prefetch is optional: the synchronous path remains correct if a worker
+	// cannot initialize. A single worker can be used to serialize native shaping.
+	pl.shapes, _ = text.NewPrefetcher(2, nameSlots, pl.wake)
 
 	deadline := time.NewTimer(pl.opt.Wait)
 	defer deadline.Stop()
@@ -264,6 +283,7 @@ func (pl *Pilot) land(i int, r Ready) {
 		return
 	}
 	p.setInitial(r.Dir, r.L)
+	pl.initialNames(i)
 }
 
 // ListedAt is when pane i's first listing was finished (platform.Now), 0 if it
@@ -275,7 +295,17 @@ func (pl *Pilot) ListedAt(i int) int64 { return pl.listedAt[i] }
 func (pl *Pilot) Close() {
 	pl.closeOnce.Do(func() {
 		pl.probeStop.close() // (the places worker, if a probe is blocked, ends when it returns)
+		if pl.shapes != nil {
+			pl.shapes.Close()
+			pl.shapes = nil
+		}
 		if pl.src != nil {
+			for _, p := range pl.panes {
+				p.release(p.rc.l, p.rc.lease)
+				p.release(p.v.l, p.v.lease)
+				p.rc.l, p.rc.lease, p.rc.active = nil, 0, false
+				p.v.reset()
+			}
 			pl.src.Close()
 		}
 		if pl.sys != nil {

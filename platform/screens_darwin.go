@@ -34,9 +34,9 @@ func scrSetup() bool {
 	}
 	scrCls = cls
 	scrKey = objc.Retain(objc.Str("NSScreenNumber"))
-	scrSelScreens, scrSelCount, scrSelObjectAtIndex = objc.Sel("screens"), objc.Sel("count"), objc.Sel("objectAtIndex:")
-	scrSelFrame, scrSelVisible, scrSelScale = objc.Sel("frame"), objc.Sel("visibleFrame"), objc.Sel("backingScaleFactor")
-	scrSelDeviceDescription, scrSelObjectForKey, scrSelUnsignedInt = objc.Sel("deviceDescription"), objc.Sel("objectForKey:"), objc.Sel("unsignedIntValue")
+	scrSelScreens, scrSelCount, scrSelObjectAtIndex = objc.SelZ("screens\x00"), objc.SelZ("count\x00"), objc.SelZ("objectAtIndex:\x00")
+	scrSelFrame, scrSelVisible, scrSelScale = objc.SelZ("frame\x00"), objc.SelZ("visibleFrame\x00"), objc.SelZ("backingScaleFactor\x00")
+	scrSelDeviceDescription, scrSelObjectForKey, scrSelUnsignedInt = objc.SelZ("deviceDescription\x00"), objc.SelZ("objectForKey:\x00"), objc.SelZ("unsignedIntValue\x00")
 	scrReady = true
 	return true
 }

@@ -136,7 +136,7 @@ func (n *Notes) Init(a *app.App) error {
 	a.SetMenu(n.model) // the native menu bar on macOS
 	n.addIcons()
 	a.UI.Reserve(2048)
-	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
+	a.Text.ReserveRuns(text.WorkingSetRuns, text.WorkingSetGlyphs, text.WorkingSetTextBytes)
 	return nil
 }
 ```
@@ -638,7 +638,7 @@ proves it twice, offscreen in a test and in a window with the benchmark
    rows are. Never build text with `fmt.Sprintf`, `+` or `string(b)` in `Build`.
 3. **`Reserve` every growable store, and say what happens when it is full.**
    `Context.Reserve(n)` sizes the box cache for n live boxes. `Text.ReserveRuns` sizes
-   the shaped-run cache so that new strings never grow it. A `TextBuffer` grows only
+   the shaped-run cache for its working set, so that new strings rarely grow it. A `TextBuffer` grows only
    past its high-water mark, and
    `Max` bounds it. Undo history is bounded and drops the oldest. The note array is
    fixed, and the Add button is disabled when it is full. Pointer-free fixed

@@ -1,13 +1,14 @@
 package platform
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"gonativeui/internal/uitypes"
 )
 
 // Drag and drop (phase 6, N5).
@@ -109,7 +110,7 @@ import (
 var EnableFilePromises bool
 
 // DragKinds is a set of kinds of dragged content.
-type DragKinds uint8
+type DragKinds = uitypes.DragKinds
 
 const (
 	// DragFiles are file URLs (local files and folders).
@@ -126,7 +127,7 @@ const (
 // DragOp is a drag operation, or a set of them where a set is meant (the
 // operations a source allows, the ones a target can do). The zero value is
 // no operation.
-type DragOp uint8
+type DragOp = uitypes.DragOp
 
 const (
 	// DragOpNone is no operation: the drop is refused.
@@ -227,21 +228,7 @@ type DragItem struct {
 // FilePromise is a file that does not exist yet: media still to download, a
 // document still to render. The destination (Finder) asks for it when the
 // drop happens.
-type FilePromise struct {
-	// Name is the file name (with its extension) the destination creates.
-	Name string
-	// Type is the uniform type identifier of the file ("public.png",
-	// "com.adobe.pdf"); empty is "public.data".
-	Type string
-	// Write creates the file at dest (a path in the destination folder;
-	// write it fully, then return). It runs on a worker goroutine of its own.
-	// ctx is cancelled when the window closes or after Timeout; a writer that
-	// outlives it is answered for already, and its result is ignored. A nil
-	// error completes the promise, any other error fails it.
-	Write func(ctx context.Context, dest string) error
-	// Timeout bounds Write; zero means DefaultPromiseTimeout.
-	Timeout time.Duration
-}
+type FilePromise = uitypes.FilePromise
 
 // DragPreview is the picture of a drag.
 type DragPreview struct {

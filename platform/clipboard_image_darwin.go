@@ -54,17 +54,17 @@ func pbImageInit() {
 		pbConcealed, pbTransient = objc.Retain(objc.Str("org.nspasteboard.ConcealedType")), objc.Retain(objc.Str("org.nspasteboard.TransientType"))
 		clsPBNSData, clsPBNSURL = objc.Cls("NSData"), objc.Cls("NSURL")
 		clsPBArray, clsPBString, clsPBItem = objc.Cls("NSArray"), objc.Cls("NSString"), objc.Cls("NSPasteboardItem")
-		selPBDataForType, selPBSetDataFT = objc.Sel("dataForType:"), objc.Sel("setData:forType:")
-		selPBDataWithBytes, selPBNSDataEmpty = objc.Sel("dataWithBytes:length:"), objc.Sel("data")
-		selPBBytes, selPBLength = objc.Sel("bytes"), objc.Sel("length")
-		selPBCount, selPBObjectAt = objc.Sel("count"), objc.Sel("objectAtIndex:") // selPBItems: drag_darwin.go
-		selPBURLWithString, selPBFilePathURL, selPBPath = objc.Sel("URLWithString:"), objc.Sel("filePathURL"), objc.Sel("path")
-		selPBPropListForType = objc.Sel("propertyListForType:")
-		selPBTypes, selPBIsKind, selPBIsFileURL = objc.Sel("types"), objc.Sel("isKindOfClass:"), objc.Sel("isFileURL")
-		selPBHost, selPBUTF8 = objc.Sel("host"), objc.Sel("UTF8String")
-		selPBGeneral, selPBStringForType, selPBLenBytes = objc.Sel("generalPasteboard"), objc.Sel("stringForType:"), objc.Sel("lengthOfBytesUsingEncoding:")
-		selPBRetain, selPBRelease = objc.Sel("retain"), objc.Sel("release")
-		selPBChangeCount = objc.Sel("changeCount")
+		selPBDataForType, selPBSetDataFT = objc.SelZ("dataForType:\x00"), objc.SelZ("setData:forType:\x00")
+		selPBDataWithBytes, selPBNSDataEmpty = objc.SelZ("dataWithBytes:length:\x00"), objc.SelZ("data\x00")
+		selPBBytes, selPBLength = objc.SelZ("bytes\x00"), objc.SelZ("length\x00")
+		selPBCount, selPBObjectAt = objc.SelZ("count\x00"), objc.SelZ("objectAtIndex:\x00") // selPBItems: drag_darwin.go
+		selPBURLWithString, selPBFilePathURL, selPBPath = objc.SelZ("URLWithString:\x00"), objc.SelZ("filePathURL\x00"), objc.SelZ("path\x00")
+		selPBPropListForType = objc.SelZ("propertyListForType:\x00")
+		selPBTypes, selPBIsKind, selPBIsFileURL = objc.SelZ("types\x00"), objc.SelZ("isKindOfClass:\x00"), objc.SelZ("isFileURL\x00")
+		selPBHost, selPBUTF8 = objc.SelZ("host\x00"), objc.SelZ("UTF8String\x00")
+		selPBGeneral, selPBStringForType, selPBLenBytes = objc.SelZ("generalPasteboard\x00"), objc.SelZ("stringForType:\x00"), objc.SelZ("lengthOfBytesUsingEncoding:\x00")
+		selPBRetain, selPBRelease = objc.SelZ("retain\x00"), objc.SelZ("release\x00")
+		selPBChangeCount = objc.SelZ("changeCount\x00")
 	})
 }
 

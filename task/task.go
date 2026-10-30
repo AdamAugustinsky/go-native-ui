@@ -238,6 +238,7 @@ func NewPool[In, Out any](opt Options, fn func(Token, In) Out) *Pool[In, Out] {
 	}
 	for i := range p.parks {
 		p.parks[i] = core.NewParker()
+		p.parks[i].BindSimWorkerForTesting()
 	}
 	p.running.Store(int32(opt.Workers))
 	for i := 0; i < opt.Workers; i++ {
@@ -547,6 +548,7 @@ func (p *Pool[In, Out]) Close(wait time.Duration) bool {
 	p.mu.Unlock()
 	for _, k := range p.parks {
 		k.Unpark()
+		k.StopSimWorker()
 	}
 	// Workers that have all returned are reported at once, however short
 	// the wait: a timer must not race them.
@@ -570,11 +572,15 @@ func (p *Pool[In, Out]) Close(wait time.Duration) bool {
 }
 
 func (p *Pool[In, Out]) worker(w int) {
+	defer p.parks[w].RecoverSimWorker()
 	defer func() {
 		if p.running.Add(-1) == 0 {
 			close(p.exited)
 		}
 	}()
+	if !p.parks[w].StartSimWorker() {
+		return
+	}
 	for {
 		p.mu.Lock()
 		if p.closed {

@@ -106,8 +106,7 @@ type Kit struct {
 	gl      glyphs
 	scratch []byte
 
-	mns [maxMenuDepth]base.Mnemonics // the open menus' mnemonics, per level
-	bar barKeys                      // the menu bar's keyboard state (menus.go)
+	bar barKeys // the menu bar's keyboard state (menus.go)
 }
 
 // NewKit makes the kit of one window. c is the window's ui context, ts its text

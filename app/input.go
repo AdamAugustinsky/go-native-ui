@@ -383,6 +383,7 @@ func (t *translator) apply(e *platform.Event, txt []byte) bool {
 		in.FocusGained = down
 		t.altArmed = false
 		if !down { // a release that happens in another window never arrives: cancel, not click
+			in.FocusLost = true
 			in.Mods = 0 // nor does a modifier's; the platform reports the ones held when focus returns
 			for b := range in.Down {
 				in.Cancel(b)

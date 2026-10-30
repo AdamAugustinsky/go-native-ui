@@ -1,27 +1,28 @@
 package img
 
 import (
-	"bytes"
 	"errors"
 	"image"
-	"image/gif"
+	"unsafe"
 )
 
 // gifAnim decodes the frames of a GIF one at a time, in order, with the
 // disposal and blending of browsers. The block structure is indexed once
-// (no pixel is decoded); each frame is then decoded alone, by the standard
-// library's decoder, from a one-frame GIF built from its blocks, so that the
-// frames of a long animation are never all in memory. It works at the
-// image's logical screen size; scaling to the display size is the caller's.
+// (no pixel is decoded); a reusable LZW decoder reads each frame's
+// sub-blocks into one index buffer. Frames are never all decoded in memory.
+// It works at the image's logical screen size; scaling to the display size is the caller's.
 type gifAnim struct {
-	data   []byte
-	w, h   int
-	head   []byte // signature, logical screen descriptor and global colour table
-	frames []gifFrame
-	plays  int // times the animation plays; 0 plays forever
-	comp   *compositor
-	next   int    // the frame the compositor is ready to draw
-	mini   []byte // scratch: a one-frame GIF
+	data     []byte
+	w, h     int
+	head     []byte // signature, logical screen descriptor and global colour table
+	frames   []gifFrame
+	plays    int // times the animation plays; 0 plays forever
+	comp     *compositor
+	next     int // the frame the compositor is ready to draw
+	maxFrame int
+	indices  []byte
+	lzw      *gifLZW
+	palette  [256]uint32
 }
 
 // gifFrame is one frame's blocks and the delay and disposal of its graphic
@@ -100,8 +101,7 @@ func openGIF(data []byte) (*gifAnim, error) {
 			}
 			start := i
 			flags := data[i+9]
-			// The standard decoder allocates a frame's own width by height:
-			// a frame has to fit the canvas limit too.
+			// A frame's index buffer must fit the canvas limit too.
 			fw, fh := int64(data[i+5])|int64(data[i+6])<<8, int64(data[i+7])|int64(data[i+8])<<8
 			if fw == 0 || fh == 0 {
 				return nil, errGIF
@@ -117,6 +117,7 @@ func openGIF(data []byte) (*gifAnim, error) {
 			if i > len(data) || !skip() {
 				return g.finish()
 			}
+			g.maxFrame = max(g.maxFrame, int(fw*fh))
 			f := gifFrame{gce: gce, hasGCE: hasGCE, start: int32(start), end: int32(i)}
 			if hasGCE {
 				f.delayMs = (int32(gce[4]) | int32(gce[5])<<8) * 10
@@ -149,14 +150,15 @@ func (g *gifAnim) finish() (*gifAnim, error) {
 
 func (g *gifAnim) size() (w, h int) { return g.w, g.h }
 
-// retained: the file, and the compositor's canvas, the canvas it restores
-// and the converted frame (three canvases at most).
-func (g *gifAnim) retained() int64 { return int64(len(g.data)) + 3*4*int64(g.w)*int64(g.h) }
-func (g *gifAnim) count() int      { return len(g.frames) }
+// retained bounds the file, canvas, disposal snapshot, indices and LZW tables.
+func (g *gifAnim) retained() int64 {
+	return int64(len(g.data)) + 8*int64(g.w)*int64(g.h) + int64(g.maxFrame) + int64(unsafe.Sizeof(gifLZW{}))
+}
+func (g *gifAnim) count() int { return len(g.frames) }
 
 // trim drops the canvases; frame makes them again, from the first frame.
 func (g *gifAnim) trim() int64 {
-	g.comp, g.mini, g.next = nil, nil, 0
+	g.comp, g.indices, g.lzw, g.next = nil, nil, nil, 0
 	return int64(len(g.data))
 }
 
@@ -172,6 +174,8 @@ func (g *gifAnim) frame(i int) (*image.RGBA, error) {
 	}
 	if g.comp == nil {
 		g.comp = newCompositor(g.w, g.h)
+		g.indices = make([]byte, g.maxFrame)
+		g.lzw = new(gifLZW)
 	}
 	if i != g.next {
 		g.comp.reset()
@@ -191,19 +195,37 @@ func (g *gifAnim) frame(i int) (*image.RGBA, error) {
 // draw decodes frame i and puts it on the canvas.
 func (g *gifAnim) draw(i int) error {
 	f := &g.frames[i]
-	g.mini = append(g.mini[:0], g.head...)
-	if f.hasGCE {
-		g.mini = append(g.mini, f.gce[:]...)
+	b := g.data[f.start:f.end]
+	x, y := int(b[1])|int(b[2])<<8, int(b[3])|int(b[4])<<8
+	fw, fh := int(b[5])|int(b[6])<<8, int(b[7])|int(b[8])<<8
+	if x+fw > g.w || y+fh > g.h {
+		return errGIF
 	}
-	g.mini = append(g.mini, g.data[f.start:f.end]...)
-	g.mini = append(g.mini, 0x3B)
-	// The one-frame GIF's logical screen is the real one: the frame keeps
-	// its offset. (image/gif.Decode returns the frame's own paletted image.)
-	m, err := gif.Decode(bytes.NewReader(g.mini))
-	if err != nil {
+	pal := g.head[13:]
+	data := b[10:]
+	if b[9]&0x80 != 0 {
+		n := 3 << (b[9]&7 + 1)
+		pal, data = data[:n], data[n:]
+	}
+	if len(pal) == 0 || len(data) == 0 || data[0] < 2 || data[0] > 8 {
+		return errGIF
+	}
+	trans := -1
+	if f.hasGCE && f.gce[3]&1 != 0 {
+		trans = int(f.gce[6])
+	}
+	npal := len(pal) / 3
+	indices := g.indices[:fw*fh]
+	if err := g.lzw.decode(indices, data[1:], int(data[0]), max(npal, trans+1)); err != nil {
 		return err
 	}
-	g.comp.draw(m, m.Bounds().Min, f.disposal, true)
+	clear(g.palette[:])
+	for i := 0; i < npal; i++ {
+		if i != trans {
+			g.palette[i] = uint32(pal[3*i]) | uint32(pal[3*i+1])<<8 | uint32(pal[3*i+2])<<16 | 0xff000000
+		}
+	}
+	g.comp.drawGIF(indices, image.Rect(x, y, x+fw, y+fh), &g.palette, f.disposal, b[9]&0x40 != 0, trans < 0)
 	g.next = i + 1
 	return nil
 }

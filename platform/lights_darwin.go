@@ -84,14 +84,14 @@ type titlebarChrome struct {
 }
 
 var (
-	selLayoutSubtree        = objc.Sel("layoutSubtreeIfNeeded")
-	selUpdateTrackingAreas  = objc.Sel("updateTrackingAreas")
-	selTitlebarFrameChanged = objc.Sel("gnuiTitlebarFrameChanged:")
-	selLayoutChromeLater    = objc.Sel("gnuiLayoutChrome:")
-	selPerformAfterDelay    = objc.Sel("performSelector:withObject:afterDelay:")
-	selCancelPerform        = objc.Sel("cancelPreviousPerformRequestsWithTarget:")
-	selPostsFrameChanged    = objc.Sel("postsFrameChangedNotifications")
-	selSetPostsFrameChanged = objc.Sel("setPostsFrameChangedNotifications:")
+	selLayoutSubtree        = objc.SelZ("layoutSubtreeIfNeeded\x00")
+	selUpdateTrackingAreas  = objc.SelZ("updateTrackingAreas\x00")
+	selTitlebarFrameChanged = objc.SelZ("gnuiTitlebarFrameChanged:\x00")
+	selLayoutChromeLater    = objc.SelZ("gnuiLayoutChrome:\x00")
+	selPerformAfterDelay    = objc.SelZ("performSelector:withObject:afterDelay:\x00")
+	selCancelPerform        = objc.SelZ("cancelPreviousPerformRequestsWithTarget:\x00")
+	selPostsFrameChanged    = objc.SelZ("postsFrameChangedNotifications\x00")
+	selSetPostsFrameChanged = objc.SelZ("setPostsFrameChangedNotifications:\x00")
 
 	lightsOnce                           sync.Once
 	lightsObserverClass, lightsNSObject  objc.ID
@@ -103,7 +103,7 @@ var (
 func lightsSetup() {
 	appKit, _ := loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
 	lightsFrameChangedName = objc.Retain(stringConstant(appKit, "NSViewFrameDidChangeNotification"))
-	lightsCenter = objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+	lightsCenter = objc.Send(objc.Cls("NSNotificationCenter"), objc.SelZ("defaultCenter\x00"))
 	lightsNSObject = objc.Cls("NSObject")
 	def := objc.Define("GNUITitlebarObserver", lightsNSObject, nil)
 	def.Method(selTitlebarFrameChanged, "v@:@", func(c *ffi.CB) {

@@ -264,6 +264,27 @@ func TestTooltipDrawnAfterTheDelay(t *testing.T) {
 	}
 }
 
+func TestTooltipRestartsAfterHiddenFocusLoss(t *testing.T) {
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		rexui.Tooltip(g.k, rexui.Button(g.k, "Open", rexui.ButtonOpts{}).ID, "Open a file")
+	}))
+	x, y := centre(g.node(ui.RoleButton, "Open"))
+	g.hover(x, y)
+	g.frames(40)
+	if !hasTooltip(g, "Open a file") {
+		t.Fatal("tooltip did not open")
+	}
+	g.in.FocusLost = true
+	g.frames(1)
+	if hasTooltip(g, "Open a file") {
+		t.Fatal("tooltip survived focus loss before the returning frame")
+	}
+	g.frames(40)
+	if !hasTooltip(g, "Open a file") {
+		t.Fatal("tooltip did not restart its delay")
+	}
+}
+
 // Where the system shows tooltips, rexui declares the region and draws none;
 // disabled controls declare their regions too.
 func TestTooltipNativeIsDeclared(t *testing.T) {

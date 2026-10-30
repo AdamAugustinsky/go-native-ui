@@ -2,9 +2,8 @@ package mdview
 
 import (
 	"bytes"
-	"hash/maphash"
+	"sort"
 	"strconv"
-	"sync/atomic"
 	"unicode/utf8"
 
 	"gonativeui/highlight"
@@ -160,8 +159,8 @@ type CodeSignal struct {
 //	toks := view.Tokens(c, key, lang, src) // highlighted on a worker; nil until it is done
 //	sig := mdview.CodeBlock(k, key, src, mdview.CodeOpts{Lang: lang, Tokens: toks, View: view})
 //
-// A file of thousands of lines belongs in a virtual list of CodeLine rows,
-// which this builds one by one.
+// Only visible lines are built; spacers preserve the full block height.
+// CodeLine also supports files shown as individual virtual-list rows.
 func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 	c, r := k.Context(), k.Theme()
 	v := o.View
@@ -212,28 +211,38 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 	}
 
 	// the lines, in a view that scrolls sideways
-	st := v.scrollState(key)
-	k.NextScrollMaxHeight(1 << 20) // as tall as the lines
-	sv := k.BeginScroll("code###lines", st, base.ScrollHorizontal)
-	lines := bytes.Count(src, []byte("\n")) + 1
-	gw := float32(0)
-	adv := k.TextSystem().Metrics(v.mono).MonoAdvance
-	if o.Gutter {
-		gw = float32(len(strconv.Itoa(o.first()+lines-1)))*adv + pt(sc, rc.GutterPad)
-	}
-	pr := c.Rect(sv.Outer)
-	w := max(pr[2]-pr[0], gw+float32(maxColumns(src))*adv+2*pt(sc, rc.PadX)+pt(sc, 8))
-	c.NextSize(ui.Px(w), ui.Children(1))
-	c.NextAxis(ui.AxisY)
+	st := v.source(c, key, src)
+	lines := st.lines
 	head := float32(0)
 	if o.NoHeader {
 		head = pt(sc, rc.PadY)
 	}
+	contentH := float32(lines)*v.line + head + pt(sc, rc.PadY)
+	k.NextScrollContentHeight(contentH)
+	sv := k.BeginScroll("code###lines", &st.scroll, base.ScrollHorizontal)
+	gw := float32(0)
+	adv := k.TextSystem().Metrics(v.mono).MonoAdvance
+	if o.Gutter {
+		gw = float32(digits(o.first()+lines-1))*adv + pt(sc, rc.GutterPad)
+	}
+	pr := c.Rect(sv.Outer)
+	w := max(pr[2]-pr[0], gw+float32(st.columns)*adv+2*pt(sc, rc.PadX)+pt(sc, 8))
+	c.NextSize(ui.Px(w), ui.Px(contentH))
+	c.NextAxis(ui.AxisY)
 	c.NextPadding(0, head, 0, pt(sc, rc.PadY))
-	c.Push(c.BoxKeyed(0, ui.KeyN(key, 2), nil))
+	content := c.BoxKeyed(0, ui.KeyN(key, 2), nil)
+	first, last := codeRange(c, content, lines, v.line, head)
+	c.Push(content)
+	if first > 0 {
+		c.NextSize(ui.Pct(1), ui.Px(float32(first)*v.line))
+		c.BoxKeyed(0, ui.KeyN(key, 4), nil)
+	}
 	toks := o.Tokens
 	lk := ui.KeyN(key, 3)
-	for i, at := 0, 0; at <= len(src); i++ {
+	at := st.offset(src, first)
+	ti := sort.Search(len(toks), func(i int) bool { return toks[i].Off+toks[i].Len > uint32(at) })
+	toks = toks[ti:]
+	for i := first; i < last; i++ {
 		n := bytes.IndexByte(src[at:], '\n')
 		if n < 0 {
 			n = len(src) - at
@@ -250,6 +259,10 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 		toks = v.lineSpans(toks, uint32(at), line)
 		v.codeLine(k, ui.KeyN(lk, uint64(i)), line, v.spans, rc, &lo)
 		at += n + 1
+	}
+	if last < lines {
+		c.NextSize(ui.Pct(1), ui.Px(float32(lines-last)*v.line))
+		c.BoxKeyed(0, ui.KeyN(key, 5), nil)
 	}
 	sig.Parts = uint16(lines)
 	c.Pop()
@@ -343,7 +356,7 @@ func CodeLine(k *base.Kit, key ui.Key, line []byte, toks []highlight.Token, o Co
 	v.prepare(k, rc)
 	gw := float32(0)
 	if o.Number > 0 {
-		d := max(o.GutterDigits, len(strconv.Itoa(o.Number)))
+		d := max(o.GutterDigits, digits(o.Number))
 		gw = float32(d)*k.TextSystem().Metrics(v.mono).MonoAdvance + pt(k.Scale(), rc.GutterPad)
 	}
 	v.lineSpans(toks, 0, line)
@@ -372,7 +385,7 @@ func CodeWidth(k *base.Kit, cols int, o CodeLineOpts) float32 {
 	adv := k.TextSystem().Metrics(v.mono).MonoAdvance
 	w := float32(max(cols, 0))*adv + 2*pt(sc, rc.PadX) + pt(sc, 8)
 	if o.Number > 0 || o.GutterDigits > 0 {
-		d := max(o.GutterDigits, len(strconv.Itoa(max(o.Number, 1))))
+		d := max(o.GutterDigits, digits(max(o.Number, 1)))
 		w += float32(d)*adv + pt(sc, rc.GutterPad)
 	}
 	return theme.Snap(w)
@@ -454,106 +467,19 @@ func (v *MarkdownView) lineSpans(toks []highlight.Token, at uint32, line []byte)
 	return toks
 }
 
-// highlighter highlights code on a worker goroutine: the frame asks for
-// the tokens of a source, gets them once they are ready, and meanwhile the
-// last tokens of the same block (a streaming block grows at its end).
-type highlighter struct {
-	byHash  map[uint64]*hlEntry
-	byBlock map[ui.Key]*hlEntry
-	jobs    chan hlJob
-	seed    maphash.Seed
-	pending atomic.Int32
-}
-
-// hlEntry is one source's tokens: written by the worker, then ready.
-type hlEntry struct {
-	toks  []highlight.Token
-	ready atomic.Bool
-	seen  uint32 // the frame that last asked for it
-}
-
-type hlJob struct {
-	e    *hlEntry
-	lang highlight.Lang
-	src  []byte
-}
-
-// maxEntries is how many sources' tokens the highlighter keeps before it
-// forgets those no frame asked for lately.
-const maxEntries = 512
-
-func (h *highlighter) worker() {
-	for j := range h.jobs {
-		j.e.toks = highlight.Tokens(j.lang, j.src, nil)
-		j.e.ready.Store(true)
-		h.pending.Add(-1)
-	}
-}
-
-// tokens returns the tokens of src in lang for the block key, starting
-// their highlighting on the worker the first time this source is seen.
-func (h *highlighter) tokens(c *ui.Context, key ui.Key, lang highlight.Lang, src []byte) []highlight.Token {
-	if lang == highlight.Plain || len(src) == 0 {
-		return nil
-	}
-	if h.byHash == nil {
-		h.byHash, h.byBlock = map[uint64]*hlEntry{}, map[ui.Key]*hlEntry{}
-		h.jobs = make(chan hlJob, 64)
-		h.seed = maphash.MakeSeed()
-		go h.worker()
-	}
-	hk := maphash.Bytes(h.seed, src) ^ uint64(lang)*0x9E3779B97F4A7C15
-	e := h.byHash[hk]
-	if e == nil {
-		if len(h.byHash) >= maxEntries {
-			h.forget(c.Frame())
-		}
-		e = &hlEntry{}
-		select {
-		case h.jobs <- hlJob{e: e, lang: lang, src: bytes.Clone(src)}:
-			h.byHash[hk] = e
-			h.pending.Add(1)
-		default: // the worker is behind: ask again next frame
-		}
-	}
-	e.seen = c.Frame()
-	if e.ready.Load() {
-		h.byBlock[key] = e
-		return e.toks
-	}
-	c.WakeIn(16_000_000)
-	if last := h.byBlock[key]; last != nil {
-		return clipTokens(last.toks, uint32(len(src)))
-	}
-	return nil
-}
-
-// forget drops the entries no frame asked for in the last 120 frames.
-func (h *highlighter) forget(frame uint32) {
-	for k, e := range h.byHash {
-		if frame-e.seen > 120 && e.ready.Load() {
-			delete(h.byHash, k)
-		}
-	}
-	for k, e := range h.byBlock {
-		if frame-e.seen > 120 {
-			delete(h.byBlock, k)
-		}
-	}
-}
-
-// clipTokens is toks without what lies past n bytes.
-func clipTokens(toks []highlight.Token, n uint32) []highlight.Token {
-	for len(toks) > 0 && toks[len(toks)-1].Off+toks[len(toks)-1].Len > n {
-		toks = toks[:len(toks)-1]
-	}
-	return toks
-}
-
 // codeStyles fills st with the code styles: style i is highlight role i in
 // the mono font.
 func codeStyles(r *theme.Resolved, mono text.FontKey, st *ui.RichStyles) {
 	for role := highlight.Role(0); role < highlight.NumRoles; role++ {
 		st.Set(int(role), ui.RichStyle{Font: mono, Color: CodeColor(role, r.T)})
 	}
+}
+
+func digits(n int) int {
+	d := 1
+	for n >= 10 {
+		n /= 10
+		d++
+	}
+	return d
 }

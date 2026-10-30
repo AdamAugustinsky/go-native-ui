@@ -9,8 +9,7 @@ import (
 // cursor regions of the boxes that have a ui cursor, the cursor of the box
 // that holds the mouse button (a drag keeps its cursor wherever the pointer
 // goes), and the titlebar drag map. The platform copies and compares, so only
-// a change reaches the OS; the buffers here are reused, and a frame without
-// cursor or WindowDrag boxes visits no box.
+// a change reaches the OS. Regions are borrowed from emit's finished buffers.
 //
 // With native tooltips (platform.NativeTooltips) the tooltip regions the
 // widgets declared go to the window the same way; the system asks for their
@@ -19,21 +18,13 @@ import (
 // This is the only cursor mechanism: an app marks boxes with
 // ui.Context.NextCursor / PushCursor and ui.WindowDrag.
 func (a *App) syncRegions() {
-	a.curUI, a.dragUI = a.UI.PointerRegions(a.curUI, a.dragUI)
-	a.curPlat = a.curPlat[:0]
-	for i := range a.curUI {
-		a.curPlat = append(a.curPlat, platform.CursorRegion{Rect: a.curUI[i].Rect, Cursor: platformCursor(a.curUI[i].Cursor)})
-	}
-	a.Win.SetCursorRegions(a.curPlat)
+	cursors, drags := a.UI.FramePointerRegions()
+	a.Win.SetCursorRegions(cursors)
 	a.Win.SetCursorOverride(platformCursor(a.UI.ActiveCursor()))
-
-	a.dragPl = a.dragPl[:0]
-	for i := range a.dragUI {
-		a.dragPl = append(a.dragPl, platform.DragRegion{Rect: a.dragUI[i].Rect, Block: a.dragUI[i].Block})
-	}
-	a.Win.SetDragRegions(a.dragPl)
+	a.Win.SetDragRegions(drags)
 
 	a.syncTooltips(a.Win)
+	a.Win.FinishRegionFrame()
 }
 
 // tooltipTarget is the part of platform.Window that syncTooltips drives.
@@ -48,12 +39,7 @@ func (a *App) syncTooltips(win tooltipTarget) {
 	if !a.UI.NativeTooltips() {
 		return
 	}
-	a.tipUI = a.UI.TooltipRegions(a.tipUI)
-	a.tipPl = a.tipPl[:0]
-	for i := range a.tipUI {
-		a.tipPl = append(a.tipPl, platform.TooltipRegion{Rect: a.tipUI[i].Rect, Key: a.tipUI[i].Key})
-	}
-	win.SetTooltipRegions(a.tipPl)
+	win.SetTooltipRegions(a.UI.FrameTooltipRegions())
 }
 
 // platformCursor maps a ui cursor to the platform's; the values are the same

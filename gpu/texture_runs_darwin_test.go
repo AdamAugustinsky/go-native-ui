@@ -3,39 +3,39 @@
 package gpu
 
 import (
-	"slices"
 	"testing"
 )
 
-func TestTextureTableOverflow(t *testing.T) {
+// Shape flags survive texture-slot remapping, including a full table's split.
+func TestContinuousShapeInTextureBatches(t *testing.T) {
 	r := newTestRenderer(t)
+	shape := solid(0, 0, 48, 48, 0x80C040FF)
+	shape.Radii = [4]float32{12, 12, 12, 12}
+	shape.Tex = ShapeContinuous
 	var quads []Quad
-	for i := range 17 {
-		kind, mode := TexRGBA8, ModeRGBA
-		pixels := []byte{byte(10 * i), 80, 160, 255}
-		if i%2 == 0 {
-			kind, mode, pixels = TexR8, ModeMaskR8, []byte{byte(10 * i)}
+	for i := range 9 {
+		id := r.NewTexture(TexRGBA8, 1, 1)
+		r.Upload(id, 0, 0, 1, 1, []byte{byte(20 * i), 120, 160, 255}, 4)
+		quads = append(quads, yuvQuad(id, 1, 1, 48, 48))
+		if i == 0 || i == 8 {
+			quads = append(quads, shape)
 		}
-		tex := r.NewTexture(kind, 1, 1)
-		r.Upload(tex, 0, 0, 1, 1, pixels, len(pixels))
-		q := solid(float32(i), 0, float32(i+1), 1, 0xFFFFFFFF)
-		q.Mode, q.Tex, q.UV = mode, tex, [4]float32{0, 0, 1, 1}
-		quads = append(quads, q)
 	}
-	original := slices.Clone(quads)
-	m := render(r, 17, 1, transparent, quads...)
-	if got := r.DrawCalls(); got != 3 {
-		t.Errorf("17 textures: %d draws, want 3", got)
+	want := make([]img, len(quads))
+	for i, q := range quads {
+		want[i] = render(r, 48, 48, transparent, q)
+		quads[i].Rect[0], quads[i].Rect[2] = float32(i*48), float32((i+1)*48)
 	}
-	if !slices.Equal(quads, original) {
-		t.Fatal("renderer modified the caller's quads")
+	m := render(r, 48*len(quads), 48, transparent, quads...)
+	if got := r.DrawCalls(); got != 2 {
+		t.Fatalf("nine textures and continuous shapes: %d draws, want 2", got)
 	}
-	for i := range 17 {
-		want := [4]int{10 * i, 80, 160, 255}
-		if i%2 == 0 {
-			want = [4]int{10 * i, 10 * i, 10 * i, 10 * i}
+	for i := range quads {
+		for y := range 48 {
+			for x := range 48 {
+				near(t, "mixed continuous shape equals isolated quad", m.at(i*48+x, y), want[i].at(x, y), 0)
+			}
 		}
-		near(t, "table sample", m.at(i, 0), want, 0)
 	}
 }
 

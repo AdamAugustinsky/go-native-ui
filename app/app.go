@@ -157,14 +157,6 @@ type App struct {
 	zoom   float32 // the app zoom, 0 = 1 (zoom.go)
 	tbZoom float32 // the zoom the window's titlebar metrics were last set for, 0 = 1 (zoom.go)
 
-	// Cursor regions and the titlebar drag map handed to the window after
-	// every frame (regions.go); the buffers are reused.
-	curUI     []ui.CursorRegion
-	curPlat   []platform.CursorRegion
-	dragUI    []ui.DragRegion
-	dragPl    []platform.DragRegion
-	tipUI     []ui.TooltipRegion // native tooltip regions (regions.go), reused
-	tipPl     []platform.TooltipRegion
 	dlg       []platform.DialogResult // dialog results not taken yet (dialogs.go)
 	dlgQ      []pendingDialog         // dialogs queued for the end of the frame
 	dlgShown  []shownDialog           // dialogs on screen
@@ -235,6 +227,7 @@ type App struct {
 	barOn bool        // the window has given the platform its menu bar (menus.go)
 	dbg   *debugState // the debug overlay (debug.go); nil off
 	step  stepState   // Offscreen.Step (debugstep.go)
+	sim   *simWindow  // test-only headless event payloads
 }
 
 // frameRequester is the part of platform.Window that arms the next frame.
@@ -464,6 +457,9 @@ func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
 	uiDefaults(a.UI)
 	a.UI.ClipboardSet = platform.SetClipboardText
+	if a.sim != nil {
+		a.UI.ClipboardSet = a.sim.s.setClipboard
+	}
 	if a.appObject != nil && a.atlas != nil {
 		a.UI.ShareAtlas(a.atlas) // the app's glyph pages, uploaded once for every window (D30)
 		a.ownTex = &winUploader{r: a.R}
@@ -577,65 +573,77 @@ func (a *App) loop() error {
 	a.launch()
 	defer a.inspectStart()() // the agent bridge, with GNUI_INSPECT set in a development build (bridge_dev.go)
 	for !a.done {
-		if len(a.wins) == 0 {
-			a.idleTurn()
-			continue
+		if err := a.loopTurn(); err != nil {
+			return err
 		}
-		for _, w := range a.wins {
-			w.syncMenuBar()
+	}
+	return nil
+}
+
+// loopTurn gives native objects created outside the pump or a draw their
+// own autorelease lifetime, including turns with no windows open.
+func (a *App) loopTurn() error {
+	pool := framePoolPush()
+	defer framePoolPop(pool)
+
+	if len(a.wins) == 0 {
+		a.idleTurn()
+		return nil
+	}
+	for _, w := range a.wins {
+		w.syncMenuBar()
+	}
+	now := platform.Now()
+	if a.bench != nil {
+		a.bench.loopTurn(now, a.lastDrawT)
+		if now > a.bench.deadline {
+			return a.benchTimeout(now)
 		}
-		now := platform.Now()
-		if a.bench != nil {
-			a.bench.loopTurn(now, a.lastDrawT)
-			if now > a.bench.deadline {
-				return a.benchTimeout(now)
-			}
-		}
-		a.pumping = true
-		a.pump(a.waitTimeout(now)) // pump_*.go
-		a.pumping = false
-		for _, w := range a.wins {
-			if a.done {
-				break
-			}
-			w.tr.wheelStep = w.UI.WheelStep
-			evs := w.windowEvents()
-			for i := range evs {
-				w.dispatch(&evs[i])
-			}
-		}
+	}
+	a.pumping = true
+	a.pump(a.waitTimeout(now)) // pump_*.go
+	a.pumping = false
+	for _, w := range a.wins {
 		if a.done {
 			break
 		}
-		for _, w := range a.wins {
-			if w.turn(platform.Now()) {
-				w.present(false, 1)
-			}
+		w.tr.wheelStep = w.UI.WheelStep
+		evs := w.windowEvents()
+		for i := range evs {
+			w.dispatch(&evs[i])
 		}
-		a.pumping = true
-		for _, w := range a.wins {
-			w.popUpMenus()
+	}
+	if a.done {
+		return nil
+	}
+	for _, w := range a.wins {
+		if w.turn(platform.Now()) {
+			w.present(false, 1)
 		}
-		a.pumping = false
-		for _, w := range a.wins {
-			if w.dbg != nil {
-				w.debugSweep(CauseMenu)
-			}
+	}
+	a.pumping = true
+	for _, w := range a.wins {
+		w.popUpMenus()
+	}
+	a.pumping = false
+	for _, w := range a.wins {
+		if w.dbg != nil {
+			w.debugSweep(CauseMenu)
 		}
-		if a.demo != nil {
-			a.demo.run(a)
-		}
-		for _, w := range a.wins {
-			w.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
-		}
-		if a.hook != nil {
-			a.hook()
-		}
-		a.appTurn()
-		for _, w := range a.wins {
-			if w.dbg != nil {
-				w.debugSweep(CauseUnknown)
-			}
+	}
+	if a.demo != nil {
+		a.demo.run(a)
+	}
+	for _, w := range a.wins {
+		w.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
+	}
+	if a.hook != nil {
+		a.hook()
+	}
+	a.appTurn()
+	for _, w := range a.wins {
+		if w.dbg != nil {
+			w.debugSweep(CauseUnknown)
 		}
 	}
 	return nil
@@ -754,7 +762,7 @@ func (a *App) onEvent(e *platform.Event) {
 	case platform.EvDragEnter, platform.EvDragMove, platform.EvDragLeave, platform.EvDrop, platform.EvDragEnd:
 		var txt []byte
 		if e.Kind == platform.EvDrop && e.Text.Len > 0 {
-			txt = a.Win.Text(e.Text)
+			txt = a.eventText(e.Text)
 		}
 		a.onDrag(e, txt)
 	case platform.EvAccessibility:
@@ -769,7 +777,7 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	default:
 		if e.Kind == platform.EvPaste && a.paste.isMedia(e) { // the answer to RequestPaste (paste.go)
-			a.onMediaPaste(e, a.Win.Text(e.Text))
+			a.onMediaPaste(e, a.eventText(e.Text))
 			return
 		}
 		if a.bench != nil && a.script != nil && !a.scriptDone && personInput(e.Kind) {
@@ -777,7 +785,7 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
-			txt = a.Win.Text(e.Text)
+			txt = a.eventText(e.Text)
 		}
 		if a.tr.event(e, txt) {
 			a.p.invalidate()

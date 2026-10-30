@@ -9,7 +9,10 @@
 // buffers are warm).
 package fs
 
-import "errors"
+import (
+	"errors"
+	"slices"
+)
 
 // Kind is the type of a directory entry.
 type Kind uint8
@@ -55,8 +58,11 @@ type Listing struct {
 	// Names holds the entries' names back to back; see Name.
 	Names []byte
 	// Order lists the indices into Entries in the requested sort order.
-	Order []uint32
-	Err   error // non-nil: the listing failed or is partial
+	Order   []uint32
+	Err     error // non-nil: the listing failed or is partial
+	sorted  bool
+	sortKey SortKey
+	desc    bool
 }
 
 // Name returns entry i's name. It aliases l.Names.
@@ -67,7 +73,23 @@ func (l *Listing) Name(i int) []byte {
 
 // Reset empties l, keeping its capacity.
 func (l *Listing) Reset() {
+	l.sorted = false
 	l.Entries, l.Names, l.Order, l.Err = l.Entries[:0], l.Names[:0], l.Order[:0], nil
+}
+
+func (l *Listing) bufferBytes() int { return cap(l.Entries)*24 + cap(l.Names) + cap(l.Order)*4 }
+
+func (l *Listing) reverse(desc bool) {
+	if l.desc == desc {
+		return
+	}
+	n := 0
+	for n < len(l.Order) && isDirEntry(&l.Entries[l.Order[n]]) {
+		n++
+	}
+	slices.Reverse(l.Order[:n])
+	slices.Reverse(l.Order[n:])
+	l.desc = desc
 }
 
 // SortKey selects the sort column. Directories always come first.
@@ -87,6 +109,7 @@ const (
 	ChangeDir      ChangeKind = iota // something in the directory changed: relist it
 	ChangeOverflow                   // events were lost: relist everything watched
 	ChangeGone                       // the watched directory was deleted or moved away
+	ChangeContent                    // only file contents or attributes changed
 )
 
 // ErrTooLarge is reported (in Listing.Err, with a partial listing) when a
@@ -113,7 +136,7 @@ var ErrUnsupported = errors.New("fs: not supported on this OS yet")
 //	newWatcher(wake func()) (watcher, error)
 //
 // The Service calls add, remove and close from one control goroutine (they
-// may be slow: they open handles and register watches) and drain from the UI thread,
+// may be slow: they open handles and register watches) and drain from that same goroutine,
 // so a backend must make drain safe against concurrent add/remove and
 // against its own notification thread. wake may be called from any thread
 // and must not block.
@@ -130,6 +153,13 @@ type watcher interface {
 	remove(id uint32)
 	drain(dst []Change) []Change // appends to dst; zero-alloc with a reused dst
 	close()
+}
+
+// listingWatcher accepts a service listing to maintain its file watches. Calls
+// are serialized by control; l is pinned and read-only until syncListing returns.
+type listingWatcher interface {
+	addListingWatch(id uint32, path string, gen uint64) error
+	syncListing(id uint32, gen, req uint64, l *Listing)
 }
 
 // osOpenPath opens path with the OS default application (a folder in the

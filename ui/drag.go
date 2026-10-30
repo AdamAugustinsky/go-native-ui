@@ -4,7 +4,7 @@ import (
 	"math"
 	"slices"
 
-	"gonativeui/platform"
+	"gonativeui/internal/uitypes"
 )
 
 // Drag and drop (phase 6, N5; platform/drag.go has the system contract).
@@ -45,30 +45,30 @@ import (
 
 // DropKinds is a set of kinds of dragged content; DropOp an operation, or a
 // set of them (what a target can do, what a source allows). They are the
-// platform's types.
+// same plain types the platform uses.
 type (
-	DropKinds = platform.DragKinds
-	DropOp    = platform.DragOp
+	DropKinds = uitypes.DragKinds
+	DropOp    = uitypes.DragOp
 	// FilePromise is a file that does not exist yet, written when the
 	// destination asks for it (see platform.FilePromise).
-	FilePromise = platform.FilePromise
+	FilePromise = uitypes.FilePromise
 )
 
 const (
 	// DropFiles are file URLs, DropImage image data, DropText plain text.
-	DropFiles = platform.DragFiles
-	DropImage = platform.DragImage
-	DropText  = platform.DragText
+	DropFiles = uitypes.DragFiles
+	DropImage = uitypes.DragImage
+	DropText  = uitypes.DragText
 	// DropAny is every kind.
-	DropAny = platform.DragAny
+	DropAny = uitypes.DragAny
 
 	// DropNone is no operation (the drop is refused), DropCopy copies,
 	// DropLink links, DropMove moves, DropAllOps is the set of them.
-	DropNone   = platform.DragOpNone
-	DropCopy   = platform.DragOpCopy
-	DropLink   = platform.DragOpLink
-	DropMove   = platform.DragOpMove
-	DropAllOps = platform.DragOpAll
+	DropNone   = uitypes.DragOpNone
+	DropCopy   = uitypes.DragOpCopy
+	DropLink   = uitypes.DragOpLink
+	DropMove   = uitypes.DragOpMove
+	DropAllOps = uitypes.DragOpAll
 )
 
 // DropSpec is what a drop target takes.
@@ -333,7 +333,7 @@ func (c *Context) DropAt(x, y float32, offered DropKinds, allowed DropOp) (op Dr
 	if r == nil {
 		return DropNone, 0, 0
 	}
-	return platform.Pick(r.ops, allowed), r.kinds, r.key
+	return uitypes.Pick(r.ops, allowed), r.kinds, r.key
 }
 
 // dropFind finds the topmost target at (x, y) that takes one of the kinds
@@ -430,7 +430,7 @@ func (c *Context) dropBegin() {
 		}
 	case in.Drag.Active:
 		if r := c.dropFind(in.Drag.X, in.Drag.Y, in.Drag.Offered, true); r != nil {
-			d.over, d.overOp, d.overOffered = r.key, platform.Pick(r.ops, in.Drag.Allowed), in.Drag.Offered
+			d.over, d.overOp, d.overOffered = r.key, uitypes.Pick(r.ops, in.Drag.Allowed), in.Drag.Offered
 			d.overPos = c.dropRel(r, in.Drag.X, in.Drag.Y)
 		}
 	}
@@ -570,3 +570,25 @@ func (c *Context) DragEnd() (op DropOp, ended bool) { return c.drop.endOp, c.dro
 // DragRunning reports whether the app's drag out is in progress (taken and
 // not yet ended).
 func (c *Context) DragRunning() bool { return c.drop.running }
+
+// appendDrawPath appends to dst the position of box b in the draw order: its
+// overlay (0 for the main tree), then, from the root of that tree down to b,
+// each box's place among its siblings, with floating boxes after the others.
+// Comparing two paths lexicographically gives the draw order (a box before its
+// descendants, which are drawn over it).
+func (c *Context) appendDrawPath(dst []uint32, b *box) []uint32 {
+	dst = append(dst, uint32(b.ovl))
+	n := len(dst)
+	for x := b; !x.ovRoot && x.parent != 0; x = &c.boxes[x.parent] {
+		var pos uint32
+		for p := x.prev; p != 0; p = c.boxes[p].prev {
+			pos++
+		}
+		if x.flags&floatingMask != 0 {
+			pos |= 1 << 31
+		}
+		dst = append(dst, pos)
+	}
+	slices.Reverse(dst[n:]) // collected from b upwards
+	return dst
+}

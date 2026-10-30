@@ -136,14 +136,16 @@ func classify(pcs []uintptr) (s Site, own bool) {
 	for {
 		f, more := frames.Next()
 		fn := f.Function
-		if strings.HasPrefix(fn, "gonativeui/internal/allocsite.") {
-			return Site{}, true
-		}
 		if fn != "" {
-			s.Stack = append(s.Stack, fmt.Sprintf("%s %s:%d", fn, f.File, f.Line))
 			if !past && !allocHelper(fn) {
+				// Only this package's own allocations: During's fn runs
+				// under it too.
+				if strings.HasPrefix(fn, "gonativeui/internal/allocsite.") {
+					return Site{}, true
+				}
 				past, s.Func = true, fn
 			}
+			s.Stack = append(s.Stack, fmt.Sprintf("%s %s:%d", fn, f.File, f.Line))
 			ours = ours || isOurs(fn)
 		}
 		if !more {
@@ -210,4 +212,23 @@ func Write(w io.Writer, sites []Site) {
 			fmt.Fprintf(w, "    %s\n", f)
 		}
 	}
+}
+
+// During runs fn and returns the objects our code allocated in it, and every
+// site (ours, the runtime's, others') as Write prints them. It collects
+// garbage before and after fn.
+func During(fn func()) (ours int64, sites string) {
+	defer Enable()()
+	var s0, s1 Snapshot
+	s0.Take()
+	s1.Take()
+	runtime.GC()
+	s0.Take()
+	fn()
+	runtime.GC()
+	s1.Take()
+	d := Diff(&s0, &s1)
+	var w strings.Builder
+	Write(&w, d)
+	return Objects(d, Ours), w.String()
 }

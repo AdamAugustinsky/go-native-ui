@@ -34,6 +34,8 @@ go-text's own tests and test data are not copied.
 - `harfbuzz/aat_layout.go`, `harfbuzz/buffer.go`: the AAT/kern apply context (fonts with a `kern`, `kerx`, `morx` or `trak` table) lives in a field on `Buffer` and keeps its glyph set's storage; upstream made one, and a glyph set, on every shape. The regression test is `harfbuzz/zeroalloc_test.go`, which CI runs from the root module (`go test github.com/go-text/typesetting/harfbuzz`).
 - `font/opentype/tables/ot_layout.go`: `parseValueRecord` reads into a 16-element stack array. Sixteen because the size counts every format bit, reserved ones included; the regression test is `font/opentype/tables/zeroalloc_test.go`, which CI runs.
 
+`font/opentype/tables/glyphs_bitmap_src.go` (2026-10-30, found by `FuzzCBDT`): `CBLC.parseIndexSubTables` rejects a reversed glyph range and an index subtable offset past the table, which upstream turned into a negative allocation and an out-of-range slice. The regressions are `text/testdata/fuzz/FuzzCBDT/`.
+
 `forgetface.patch` (C9, 2026-10-20) adds two methods to `harfbuzz.Buffer`, `ForgetFace` and `CachedFaces`. Upstream's plan cache keeps every face it has shaped with alive; our text engine releases a zoom level's faces (`ReleaseScale` in `text/engine.go`) and drops their plans with `ForgetFace`. `TestEngineReleaseScaleBoundsThePlanCache` checks it.
 
 ## Updating

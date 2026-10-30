@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -295,14 +294,28 @@ func do(ctx context.Context, u *url.URL, c *call, s *sink, opt Options) (Respons
 	defer close(t.done)
 
 	var out uintptr // the body's write stream
+	var upload *uploadStream
 	if c.hasBody() && c.length != 0 {
 		t.bodyStream, out = nsurl.BoundPair(fr, bodyBuffer)
 		if t.bodyStream == 0 || out == 0 {
+			cf.CFRelease(fr, t.bodyStream)
+			cf.CFRelease(fr, out)
 			return Response{}, cf.ErrUnavailable
+		}
+		var err error
+		upload, err = watchUpload(fr, out)
+		if err != nil {
+			nsurl.CloseStream(fr, out)
+			cf.CFRelease(fr, t.bodyStream)
+			cf.CFRelease(fr, out)
+			return Response{}, err
 		}
 	}
 	delegate, queue, session, task, err := start(fr, t, u, opt)
 	if err != nil {
+		if upload != nil {
+			upload.close(fr)
+		}
 		cf.CFRelease(fr, t.bodyStream)
 		cf.CFRelease(fr, out)
 		return Response{}, err
@@ -313,7 +326,7 @@ func do(ctx context.Context, u *url.URL, c *call, s *sink, opt Options) (Respons
 		msg(fr, task, "cancel")
 		msg(fr, session, "invalidateAndCancel")
 		if out != 0 {
-			nsurl.CloseStream(fr, out)
+			upload.close(fr)
 		}
 		for _, o := range []uintptr{task, session, queue, delegate, t.bodyStream, out} {
 			cf.CFRelease(fr, o)
@@ -348,6 +361,9 @@ func do(ctx context.Context, u *url.URL, c *call, s *sink, opt Options) (Respons
 				reported = e.sent
 			}
 		case evDone:
+			if upload != nil {
+				c.sent = upload.sent.Load()
+			}
 			if e.err != nil {
 				return true, e.err
 			}
@@ -362,55 +378,30 @@ func do(ctx context.Context, u *url.URL, c *call, s *sink, opt Options) (Respons
 		return false, nil
 	}
 
-	// The body: read a piece, write it into the stream while it has room,
-	// otherwise wait a little for room (or for events). A write never
-	// blocks, so cancelling is never held up by the stream.
-	var buf, pending []byte
-	writing := out != 0
+	// Keep one body buffer in flight. Native callouts write it without blocking
+	// and signal when it is consumed; this goroutine keeps delivering session
+	// events and cancellation while the reader holds the stream back.
+	var buf []byte
+	writing, submitted := out != 0, false
 	if writing {
 		buf = make([]byte, bodyBuffer)
 	}
-	wait := time.NewTimer(time.Hour)
-	wait.Stop()
-	backoff := 100 * time.Microsecond
 	for {
+		if writing && !submitted {
+			n, err := c.fill(buf)
+			if err == io.EOF {
+				upload.close(fr)
+				writing = false
+			} else if err != nil {
+				return res, err
+			} else {
+				upload.submit(fr, buf[:n])
+				submitted = true
+			}
+		}
+		var writable <-chan struct{}
 		if writing {
-			if len(pending) == 0 {
-				n, err := c.fill(buf)
-				if err == io.EOF {
-					nsurl.CloseStream(fr, out)
-					writing = false
-					continue
-				}
-				if err != nil {
-					return res, err
-				}
-				pending = buf[:n]
-			}
-			if nsurl.CanWrite(fr, out) {
-				n := nsurl.WriteStream(fr, out, pending)
-				runtime.KeepAlive(buf)
-				if n < 0 { // the session closed the stream: the task's end says why
-					writing = false
-				} else {
-					c.sent += int64(n)
-					pending = pending[n:]
-					backoff = 100 * time.Microsecond
-				}
-				select { // drain what has arrived, without waiting
-				case <-ctx.Done():
-					msg(fr, task, "cancel")
-					return res, ctx.Err()
-				case e := <-t.events:
-					if end, err := handle(e); end {
-						return res, err
-					}
-				default:
-				}
-				continue
-			}
-			wait.Reset(backoff)
-			backoff = min(2*backoff, 5*time.Millisecond)
+			writable = upload.wake
 		}
 		select {
 		case <-ctx.Done():
@@ -420,10 +411,13 @@ func do(ctx context.Context, u *url.URL, c *call, s *sink, opt Options) (Respons
 			if end, err := handle(e); end {
 				return res, err
 			}
-		case <-wait.C:
+		case <-writable:
+			c.sent = upload.sent.Load()
+			writing = !upload.finished()
+			submitted = false
 		}
-		wait.Stop()
 	}
+
 }
 
 // start builds the session and starts the task. The objects it returns are

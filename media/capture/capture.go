@@ -100,6 +100,7 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 
@@ -263,7 +264,7 @@ type clock struct {
 func (c *clock) start() {
 	c.mu.Lock()
 	if !c.running {
-		c.since, c.running = time.Now(), true
+		c.since, c.running = core.WallNow(), true
 	}
 	c.mu.Unlock()
 }
@@ -271,7 +272,7 @@ func (c *clock) start() {
 func (c *clock) stop() {
 	c.mu.Lock()
 	if c.running {
-		c.acc += time.Since(c.since)
+		c.acc += core.Since(c.since)
 		c.running = false
 	}
 	c.mu.Unlock()
@@ -281,7 +282,7 @@ func (c *clock) read() time.Duration {
 	c.mu.Lock()
 	d := c.acc
 	if c.running {
-		d += time.Since(c.since)
+		d += core.Since(c.since)
 	}
 	c.mu.Unlock()
 	return d

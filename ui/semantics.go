@@ -1,6 +1,10 @@
 package ui
 
-import "gonativeui/core"
+import (
+	"gonativeui/core"
+	"gonativeui/internal/uitypes"
+	"slices"
+)
 
 // Semantics (phase 5, D28): the roles, states and actions an accessibility
 // bridge (phase 6) needs, recorded by the boxes that have a role and exported
@@ -8,7 +12,7 @@ import "gonativeui/core"
 
 // Role is what a box is, for assistive technologies. The zero value marks a
 // box that is not part of the semantic tree.
-type Role uint8
+type Role = uitypes.Role
 
 const (
 	// RoleNone is not part of the semantic tree.
@@ -94,7 +98,7 @@ const (
 )
 
 // SemState are the state bits of a node.
-type SemState uint16
+type SemState = uitypes.SemState
 
 const (
 	SemChecked        SemState = 1 << iota // checked, on or pressed
@@ -113,7 +117,7 @@ const (
 
 // SemAction are the actions a node supports (SemNode.Actions) and that an
 // assistive technology can request (Input.Actions, Signal.Action).
-type SemAction uint16
+type SemAction = uitypes.SemAction
 
 const (
 	ActPress          SemAction = 1 << iota // activate: click a button, toggle a checkbox
@@ -126,6 +130,81 @@ const (
 	ActSetValue                             // set the value (SemRequest.Value for ranges)
 	ActShowMenu                             // show the box's context menu
 )
+
+// semTracking owns the optional bridge snapshots and sibling ordinals.
+// Standalone contexts record semantics by default; app disables it until AX activates.
+type semTracking struct {
+	disabled   bool
+	skip       bool // latched at Begin; activation during a build waits for the next frame
+	ordinals   []semOrdinal
+	trees      [2]SemTree
+	current    int
+	frame      uint32
+	generation uint64
+}
+
+type semOrdinal struct{ index, children int32 }
+
+// SetSemanticsActive enables semantic records for subsequent builds. Contexts
+// default to active; an app that never reads Semantics and wants the records'
+// cost back switches them off, and an AX client's first query switches them
+// on again.
+func (c *Context) SetSemanticsActive(active bool) {
+	if c.semTrack.disabled == !active {
+		return
+	}
+	c.semTrack.disabled = !active
+	c.semTrack.frame = 0
+}
+
+// SemanticsActive reports whether builds record accessibility semantics.
+func (c *Context) SemanticsActive() bool { return !c.semTrack.disabled }
+
+func (c *Context) recordSemantics(id ID) {
+	n := &c.semNext
+	if c.semTrack.skip {
+		c.semNext = semNext{}
+		return
+	}
+	ord := &c.semTrack.ordinals
+	if len(*ord) < len(c.boxes) {
+		*ord = append(*ord, make([]semOrdinal, cap(c.boxes)-len(*ord))...)
+	}
+	b := &c.boxes[id]
+	(*ord)[id] = semOrdinal{}
+	if b.parent != 0 && b.flags&floatingMask == 0 {
+		(*ord)[id].index = (*ord)[b.parent].children
+		(*ord)[b.parent].children++
+	}
+	if n.role != RoleNone {
+		c.sems = append(c.sems, semRec{id: id, role: n.role, state: n.state, actions: n.actions, hasActions: n.hasActions,
+			name: n.name, value: n.value, rng: n.rng, hasRange: n.hasRange, pos: n.pos, hasPos: n.hasPos, level: n.level})
+		b.sem = int32(len(c.sems))
+	}
+	c.semNext = semNext{}
+}
+
+// SemanticSnapshot returns a read-only tree and a generation that changes only
+// when its contents change. It exports at most once per frame, compares exactly,
+// and retains the previous tree for bridge diffing. The tree is borrowed until
+// the next call. Disabled or not-yet-built semantics return nil and generation 0.
+func (c *Context) SemanticSnapshot() (*SemTree, uint64) {
+	st := &c.semTrack
+	if st.disabled || st.skip || len(c.sems) == 0 {
+		return nil, 0
+	}
+	if st.frame != c.frame || st.generation == 0 {
+		next, prev := &st.trees[1-st.current], &st.trees[st.current]
+		c.Semantics(next)
+		if st.generation == 0 || !slices.Equal(next.Nodes, prev.Nodes) || !slices.Equal(next.Bytes, prev.Bytes) ||
+			next.Dropped != prev.Dropped || next.Announce != prev.Announce || next.AnnounceSeq != prev.AnnounceSeq || next.AnnouncePolite != prev.AnnouncePolite {
+			st.current = 1 - st.current
+			st.generation++
+		}
+		st.frame = c.frame
+	}
+	return &st.trees[st.current], st.generation
+}
 
 // semNext is the semantics given to the next box (the NextRole family).
 type semNext struct {
@@ -169,7 +248,11 @@ func (c *Context) NextRole(r Role) { c.semNext.role = r }
 
 // NextSemName sets the accessible name (the label) of the next box. The text
 // is copied.
-func (c *Context) NextSemName(s string) { c.semNext.name = c.semA.AppendString(s) }
+func (c *Context) NextSemName(s string) {
+	if !c.semTrack.skip {
+		c.semNext.name = c.semA.AppendString(s)
+	}
+}
 
 // SetSemNameBytes names box id, which was built in this frame with a role, from
 // bytes (copied): for a name that is known only from the box's content, after
@@ -181,11 +264,19 @@ func (c *Context) SetSemNameBytes(id ID, b []byte) {
 }
 
 // NextSemNameBytes is NextSemName for bytes (such as a Fmt result).
-func (c *Context) NextSemNameBytes(b []byte) { c.semNext.name = c.semA.AppendBytes(b) }
+func (c *Context) NextSemNameBytes(b []byte) {
+	if !c.semTrack.skip {
+		c.semNext.name = c.semA.AppendBytes(b)
+	}
+}
 
 // NextSemValueBytes sets the accessible value (the text of a field, the
 // current choice) of the next box. The text is copied.
-func (c *Context) NextSemValueBytes(b []byte) { c.semNext.value = c.semA.AppendBytes(b) }
+func (c *Context) NextSemValueBytes(b []byte) {
+	if !c.semTrack.skip {
+		c.semNext.value = c.semA.AppendBytes(b)
+	}
+}
 
 // NextSemState sets the state bits of the next box. SemDisabled, SemFocused
 // and SemModal are added by the export.
@@ -230,47 +321,10 @@ const (
 // SemNode is one node of the exported semantic tree. It is pointer-free; Name
 // and Value are (offset, length) pairs into SemTree.Bytes, and the tree is
 // linked by indices into SemTree.Nodes, -1 for none.
-type SemNode struct {
-	// Key is the key of the box.
-	Key Key
-	// Role is the box's role.
-	Role Role
-	// State is the node's state bits.
-	State SemState
-	// Actions are the actions the node supports.
-	Actions SemAction
-	Bounds  [4]float32 // x0, y0, x1, y1 in window pixels
-	// Parent is the nearest ancestor box that has a role (an overlay's is the
-	// window node), FirstChild and NextSibling follow build order.
-	Parent, FirstChild, NextSibling int32
-	Name, Value                     [2]uint32
-	// Range is min, max, value and step of a range (sliders, scroll bars,
-	// progress bars); all zero for other nodes.
-	Range [4]float64
-	// Pos is the node's index in its list and the list's length (virtual rows
-	// report their place in the whole list); Pos[1] is 0 when unknown.
-	Pos [2]int32
-	// TextSel is the selection of a text field in byte offsets of Value: the
-	// anchor and the caret. Both are 0 for other nodes.
-	TextSel [2]int32
-	// Level is the node's depth in a tree (NextSemLevel): 1 for a root row
-	// of an outline, 2 for its children, and so on; 0 for a node not in a
-	// tree. Whether the row shows its children is SemExpanded.
-	Level int32
-	// Host is the platform.HostID of the native view hosted in the node's
-	// box: a RoleHost node, or a host box given a role of its own (the native
-	// view is then inside the node); 0 for others.
-	Host uint32
-	// Text says which text of the node has character geometry (lines,
-	// ranges, the selection), for the text functions of assistive
-	// technologies: SemTextField (the Value of a text field) or SemTextRich
-	// (the Name of a RichText box; TextSel is then its selection in a
-	// selection scope, see Context.RichSelection).
-	Text SemTextKind
-}
+type SemNode = uitypes.SemNode
 
 // SemTextKind is which text of a node has character geometry (SemNode.Text).
-type SemTextKind uint8
+type SemTextKind = uitypes.SemTextKind
 
 const (
 	// SemTextNone: the node's text has no geometry to ask about.
@@ -352,6 +406,10 @@ func defaultActions(r Role) SemAction {
 // ListRange box that did not say NextSemPos reports its place in the whole list.
 func (c *Context) Semantics(dst *SemTree) {
 	dst.Nodes, dst.Bytes, dst.Dropped, dst.Announce, dst.AnnounceSeq = dst.Nodes[:0], dst.Bytes[:0], 0, [2]uint32{}, 0
+	dst.AnnouncePolite = false
+	if c.semTrack.skip {
+		return
+	}
 	if c.shell.frame == c.frame && c.shell.nHosts > 0 {
 		c.semWithHosts(dst)
 	} else {
@@ -402,12 +460,7 @@ func (c *Context) semAppend(dst *SemTree, rec *semRec) bool {
 		n.Pos = rec.pos
 	case b.parent != 0 && c.boxes[b.parent].listRows > 0 && b.flags&floatingMask == 0:
 		pb := &c.boxes[b.parent]
-		idx := pb.listFirst
-		for q := b.prev; q != 0; q = c.boxes[q].prev {
-			if c.boxes[q].flags&floatingMask == 0 {
-				idx++
-			}
-		}
+		idx := pb.listFirst + int(c.semTrack.ordinals[rec.id].index)
 		n.Pos = [2]int32{int32(idx), int32(pb.listRows)}
 	}
 	n.Level = rec.level

@@ -81,7 +81,7 @@ func ContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item 
 	}
 	k.KeepPopup()
 	cm := contextMenu{k: k, chosen: -1, keyed: keyed}
-	cm.panel(0, k.MenuItems(), pop.At, ui.PlaceBelow, ui.HashString(owner, "contextmenu"))
+	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, ui.PlaceBelow, ui.HashString(owner, "contextmenu"))
 	if cm.chosen >= 0 {
 		return cm.item, true
 	}
@@ -119,11 +119,6 @@ type contextMenu struct {
 	item   int  // the chosen item's ID
 }
 
-// labelBuf holds a drawn menu's key equivalent while it is measured and
-// drawn (main thread). A local array escaped to the heap through the text
-// system's interface, an allocation in every frame of an open menu.
-var labelBuf [48]byte
-
 // shortcutLabel is the key equivalent of it as text ("" for none), in buf.
 func shortcutLabel(buf []byte, it *ui.MenuItem) []byte {
 	if it.Key == 0 {
@@ -138,7 +133,7 @@ func shortcutLabel(buf []byte, it *ui.MenuItem) []byte {
 
 // panel builds the menu of items at nesting level, placed against anchor,
 // and the submenu open from it.
-func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, place ui.Placement, okey ui.Key) {
+func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place ui.Placement, okey ui.Key) {
 	k := m.k
 	c, r := k.Context(), k.Theme()
 	pop := k.Popup()
@@ -154,17 +149,17 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 	checkW, chevW = theme.Snap(checkW), theme.Snap(chevW)
 
 	// the widths: the widest title and the widest key equivalent
-	buf := &labelBuf
+	buf := k.MenuLabelScratch(level)
 	var lw, sw float32
 	hasSub := false
-	for i := range items {
-		it := &items[i]
+	for i := 0; i < items.len(); i++ {
+		it := items.item(i)
 		if it.Separator {
 			continue
 		}
 		lw = max(lw, k.TextWidth(font, it.Title))
-		sw = max(sw, k.TextWidthBytes(font, shortcutLabel(buf[:], it)))
-		hasSub = hasSub || it.Sub != nil
+		sw = max(sw, k.TextWidthBytes(font, shortcutLabel(buf, &it)))
+		hasSub = hasSub || items.hasSub(i)
 	}
 	lw, sw = ui.CeilText(lw), theme.Snap(sw) // a title's box is never narrower than its text
 	rowW := 2*rowPad + checkW + gap + lw
@@ -179,12 +174,9 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 
 	// the mnemonics: an item's Key without modifiers, else a letter of its title
 	var mns base.Mnemonics
-	for i := range items {
-		it := &items[i]
-		var want rune
-		if it.Key < 0x80 && it.Mods == 0 {
-			want = rune(it.Key)
-		}
+	for i := 0; i < items.len(); i++ {
+		it := items.item(i)
+		want := items.mnemonic(i)
 		if it.Separator {
 			mns.Add("", 0)
 		} else {
@@ -209,6 +201,9 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 	c.NextSize(ui.Px(w), ui.Children(1))
 	c.NextRole(ui.RoleMenu)
 	c.NextFlags(ui.DrawBackground | ui.DrawBorder | ui.DrawShadow)
+	if items.model != nil {
+		c.NextSemName(items.model.Menus()[items.index].Title)
+	}
 	os := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
 	if os.Dismissed {
 		if level == 0 {
@@ -222,15 +217,15 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 	// the last item; the keyboard opens it with the first item focused
 	panel := c.BoxKeyed(ui.Focusable, ui.KeyN(okey, 1), nil)
 	opened := os.Rect == [4]float32{}
-	focusFirst := opened && ((level == 0 && m.keyed) || (level > 0 && c.FocusVisible()))
+	focusFirst := opened && ((items.model != nil) || (level == 0 && m.keyed) || (level > 0 && c.FocusVisible()))
 
-	n := len(items)
+	n := items.len()
 	var nv base.PopupNav
 	var first, last ui.Key
 	anyFocused := false
 	active := !k.Inactive()
-	for i := range items {
-		it := &items[i]
+	for i := 0; i < items.len(); i++ {
+		it := items.item(i)
 		if it.Separator {
 			c.NextSize(ui.Pct(1), ui.Px(sepH))
 			sep := c.BoxKeyed(0, ui.KeyN(okey, uint64(1000+i)), nil)
@@ -242,8 +237,8 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 			continue
 		}
 		key := ui.KeyN(okey, uint64(i+2))
-		disabled := it.Disabled
-		subOpen := it.Sub != nil && pop.Hi[level] == int32(i)
+		disabled := it.Disabled || k.Disabled()
+		subOpen := items.hasSub(i) && pop.Hi[level] == int32(i)
 		hi := !disabled && (c.FocusKey() == key || subOpen)
 		fill, fg, fg2 := uint32(0), rc.Text.RGBA(r), rc.Shortcut.RGBA(r)
 		switch {
@@ -305,7 +300,7 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 		if _, off := mns.At(i); show && off >= 0 && !disabled {
 			k.MnemonicUnderline(ui.KeyN(key, 7), font, it.Title, off, rowPad+checkW+gap, 0, rowH, fg)
 		}
-		if lab := shortcutLabel(buf[:], it); len(lab) > 0 {
+		if lab := shortcutLabel(buf, &it); len(lab) > 0 {
 			c.NextSize(ui.Px(sw+2*gap), ui.Px(rowH))
 			c.NextFont(font)
 			c.NextTextColor(fg2)
@@ -315,7 +310,7 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 			c.NextSize(ui.Px(sw+2*gap), ui.Px(rowH))
 			c.BoxKeyed(0, ui.KeyN(key, 3), nil)
 		}
-		if it.Sub != nil {
+		if items.hasSub(i) {
 			c.NextSize(ui.Px(gap), ui.Px(rowH))
 			c.BoxKeyed(0, ui.KeyN(key, 6), nil)
 			c.NextSize(ui.Px(chevW), ui.Px(chevH))
@@ -338,7 +333,7 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 			if s.Hovering && k.MouseMoved() {
 				c.SetFocus(key)
 				c.SetFocusVisible(false)
-				if it.Sub != nil {
+				if items.hasSub(i) {
 					k.OpenSubmenu(level, i, key)
 				} else if pop.Hi[level] >= 0 {
 					pop.Hi[level] = -1
@@ -349,13 +344,17 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 			anyFocused = anyFocused || focused
 			switch {
 			case s.Clicked || s.Activated:
-				if it.Sub != nil {
+				if items.hasSub(i) {
 					k.OpenSubmenu(level, i, key)
 				} else if m.chosen < 0 {
 					m.chosen, m.item = level, it.ID
 				}
-			case focused && it.Sub != nil && c.TakeKey(ui.KeyRight, 0):
+			case focused && items.hasSub(i) && c.TakeKey(ui.KeyRight, 0):
 				k.OpenSubmenu(level, i, key)
+			case focused && level == 0 && items.model != nil && pop.Kind == base.PopupMenu && c.TakeKey(ui.KeyLeft, 0):
+				k.StepMenuBar(-1)
+			case focused && level == 0 && items.model != nil && pop.Kind == base.PopupMenu && !items.hasSub(i) && c.TakeKey(ui.KeyRight, 0):
+				k.StepMenuBar(1)
 			case focused && level > 0 && c.TakeKey(ui.KeyLeft, 0):
 				c.SetFocus(pop.Row[level-1])
 				c.SetFocusVisible(true)
@@ -366,7 +365,7 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 		}
 		if subOpen {
 			c.Push(row)
-			m.panel(level+1, it.Sub, c.Rect(row), ui.PlaceRight, subKey(okey, i))
+			m.panel(level+1, items.sub(i), c.Rect(row), ui.PlaceRight, subKey(okey, i))
 			c.Pop()
 		}
 	}
@@ -383,7 +382,11 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 	}
 	c.EndOverlay()
 	if level == 0 && m.chosen >= 0 {
-		m.close()
+		if items.model != nil {
+			k.ChooseCommand(menu.ID(m.item))
+		} else {
+			m.close()
+		}
 	}
 }
 
@@ -391,7 +394,7 @@ func (m *contextMenu) panel(level int, items []ui.MenuItem, anchor [4]float32, p
 // whose mnemonic was typed this frame, with or without Alt: an item is
 // chosen, a submenu opens; when several items have the letter, the focus
 // moves to the next of them instead.
-func (m *contextMenu) letter(level int, items []ui.MenuItem, mns *base.Mnemonics, okey ui.Key) {
+func (m *contextMenu) letter(level int, items menuRows, mns *base.Mnemonics, okey ui.Key) {
 	k := m.k
 	c := k.Context()
 	letter, at := base.TypedMnemonic(c, 0)
@@ -402,7 +405,7 @@ func (m *contextMenu) letter(level int, items []ui.MenuItem, mns *base.Mnemonics
 		return
 	}
 	from := -1
-	for i := range items {
+	for i := 0; i < items.len(); i++ {
 		if c.FocusKey() == ui.KeyN(okey, uint64(i+2)) {
 			from = i
 		}
@@ -412,7 +415,7 @@ func (m *contextMenu) letter(level int, items []ui.MenuItem, mns *base.Mnemonics
 		return
 	}
 	base.ClaimMnemonic(c, at)
-	it := &items[i]
+	it := items.item(i)
 	if it.Disabled {
 		return
 	}
@@ -422,7 +425,7 @@ func (m *contextMenu) letter(level int, items []ui.MenuItem, mns *base.Mnemonics
 	switch {
 	case n > 1:
 		c.RequestFrame()
-	case it.Sub != nil:
+	case items.hasSub(i):
 		k.OpenSubmenu(level, i, key)
 	case m.chosen < 0:
 		m.chosen, m.item = level, it.ID
@@ -443,4 +446,88 @@ func (m *contextMenu) close() {
 	}
 	pop.Reset()
 	c.RequestFrame()
+}
+
+// DrawMenu draws a menu from the kit's command model using the same panel,
+// navigation and styling as ContextMenu. Choices reach Command next frame.
+func DrawMenu(k *base.Kit, index int, anchor [4]float32, place ui.Placement) {
+	model := k.Menu()
+	if model == nil || index < 0 || index >= len(model.Menus()) {
+		return
+	}
+	cm := contextMenu{k: k, chosen: -1}
+	cm.panel(0, menuRows{model: model, index: index}, anchor, place, ui.KeyN(base.PopupKeyBase, uint64(index+1)))
+}
+
+// menuRows adapts the two public menu models without copying their items.
+type menuRows struct {
+	items []ui.MenuItem
+	model *menu.Model
+	index int
+}
+
+func (s menuRows) len() int {
+	if s.model != nil {
+		return len(s.model.Menus()[s.index].Items)
+	}
+	return len(s.items)
+}
+
+func (s menuRows) mnemonic(i int) rune {
+	if s.model != nil {
+		it := s.model.Menus()[s.index].Items[i]
+		switch it.Kind {
+		case menu.ItemCommand:
+			cmd, _ := s.model.Command(it.Command)
+			return cmd.Mnemonic
+		case menu.ItemSubmenu:
+			return s.model.Menus()[it.Submenu].Mnemonic
+		}
+		return 0
+	}
+	it := &s.items[i]
+	if it.Key < 0x80 && it.Mods == 0 {
+		return rune(it.Key)
+	}
+	return 0
+}
+
+func (s menuRows) hasSub(i int) bool {
+	if s.model != nil {
+		return s.model.Menus()[s.index].Items[i].Kind == menu.ItemSubmenu
+	}
+	return s.items[i].Sub != nil
+}
+func (s menuRows) sub(i int) menuRows {
+	if s.model != nil {
+		return menuRows{model: s.model, index: s.model.Menus()[s.index].Items[i].Submenu}
+	}
+	return menuRows{items: s.items[i].Sub}
+}
+func (s menuRows) item(i int) ui.MenuItem {
+	if s.model == nil {
+		return s.items[i]
+	}
+	it := s.model.Menus()[s.index].Items[i]
+	switch it.Kind {
+	case menu.ItemSeparator:
+		return ui.MenuItem{Separator: true}
+	case menu.ItemSubmenu:
+		title := it.Title
+		if title == "" {
+			title = s.model.Menus()[it.Submenu].Title
+		}
+		return ui.MenuItem{Title: title}
+	default:
+		cmd, _ := s.model.Command(it.Command)
+		title := cmd.Title
+		if title == "" {
+			title = menu.RoleTitle(cmd.Role)
+		}
+		mark := ui.MarkNone
+		if s.model.Checked(cmd.ID) {
+			mark = ui.MarkOn
+		}
+		return ui.MenuItem{ID: int(cmd.ID), Title: title, Key: cmd.Shortcut.Key, Mods: cmd.Shortcut.Mods, Mark: mark, Disabled: !s.model.Enabled(cmd.ID)}
+	}
 }

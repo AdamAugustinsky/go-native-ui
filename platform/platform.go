@@ -45,7 +45,9 @@
 //	SetSecureInput(on bool)               macOS: bracket EnableSecureEventInput for a password field (balanced, released while the app is inactive); no-op elsewhere
 //	Clipboard() string                    plain UTF-8 text of the system clipboard; main thread
 //	SetClipboard(text string)             replace the clipboard with plain text; main thread
-//	Wake()                                any goroutine; coalesced
+//	Wake()                                any goroutine; coalesced; tells every window to redraw
+//	WakeLoop()                            any goroutine; turns the loop without redrawing windows
+//	(*Window).Wake()                      any goroutine; tells only this window to redraw
 //	Now() int64                           monotonic ns, same timebase as Event.Time
 //
 // Text input. Typed characters arrive as EvText together with the EvKey of
@@ -106,6 +108,9 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 	_ "unsafe" // go:linkname
+
+	"gonativeui/core"
+	"gonativeui/internal/uitypes"
 )
 
 func init() { runtime.LockOSThread() }
@@ -289,7 +294,7 @@ const (
 )
 
 // Cursor is a pointer shape.
-type Cursor uint8
+type Cursor = uitypes.Cursor
 
 const (
 	CursorArrow      Cursor = iota // the default arrow
@@ -339,6 +344,11 @@ type Event struct {
 	DX, DY float32 // scroll delta, physical pixels, positive = content moves right/down
 	W, H   int32   // EvResize: content size in physical pixels
 	Scale  float32 // EvResize: physical pixels per logical unit
+	// Amount is the size of an EvMagnify (the change in scale: 0.1 grows by
+	// 10 %, negative shrinks) or EvRotate (degrees, counterclockwise positive
+	// as the user sees it). The Phase of both is Began, Changed, Ended or
+	// Cancelled, or PhaseNone from a device without phases.
+	Amount float32
 	Text   TextRef // EvText, EvPreedit
 	// EvPreedit: the caret (SelLen 0) or the part being converted inside the
 	// composition, as a byte offset and length into the UTF-8 text.
@@ -361,11 +371,6 @@ type Event struct {
 	// 2 for a double click, ...), as the OS counts it with the user's
 	// double-click interval; 0 when the OS does not say (the app counts).
 	Clicks uint8
-	// Amount is the size of an EvMagnify (the change in scale: 0.1 grows by
-	// 10 %, negative shrinks) or EvRotate (degrees, counterclockwise positive
-	// as the user sees it). The Phase of both is Began, Changed, Ended or
-	// Cancelled, or PhaseNone from a device without phases.
-	Amount float32
 	// Paste is which kind of data an EvPaste carries in Text (PasteText,
 	// the zero value, for every other event too). See RequestPasteKinds.
 	Paste PasteKind
@@ -501,7 +506,7 @@ type eventQueue struct {
 }
 
 func newEventQueue() eventQueue {
-	return eventQueue{ev: make([]Event, 0, 256), text: make([]byte, 0, 4096), pend: make([]Event, 0, 256)}
+	return eventQueue{ev: make([]Event, 0, 256), text: make([]byte, 0, 4096)}
 }
 
 // takePending moves the queued events into the pending slice and clears the
@@ -600,6 +605,10 @@ var wakePending atomic.Bool
 // Wake makes the main loop's Wait return with an EvWake event. It is safe
 // to call from any goroutine and cheap when a wake is already pending.
 func Wake() {
+	if c := core.SimulationForTesting(); c != nil {
+		c.Wake()
+		return
+	}
 	if wakePending.CompareAndSwap(false, true) {
 		osWake()
 	}

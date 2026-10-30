@@ -31,10 +31,10 @@
 //	r.Stop()             // then a Recorded event, and
 //	pcm, err := r.Take() // the PCM in r.Format()
 //
-//	v, err := media.OpenVideo(path, media.VideoOptions{Muted: true})
+//	v, err := media.OpenVideo(path, media.VideoOptions{Muted: true, Wake: a.Win.Wake})
 //	v.Play()
 //
-//	// in Build, while its box shows: no allocation
+//	// in Build, while its box shows: no allocation once textures are warm
 //	if k.ImageShown(1) {
 //		tex, w, h, next = v.Frame(a.R, c.Input().Time)
 //		if next > 0 {

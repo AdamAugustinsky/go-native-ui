@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/gpu"
 	"gonativeui/internal/fakeui"
 	"gonativeui/term"
@@ -21,6 +22,68 @@ import (
 	"gonativeui/ui"
 	"gonativeui/widget/base"
 )
+
+// A simulated parse spends deterministic byte work, even when a real frame
+// previously measured a different parse rate. The shared budget and each
+// pane's cap still hold with a clock that does not advance during parsing.
+func TestTerminalSimulationParseBudget(t *testing.T) {
+	clock, err := core.InstallSimClockForTesting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clock.Restore()
+	newPane := func() *TerminalState {
+		s, err := NewTerminal(term.Options{})
+		if err != nil {
+			if os.Getenv("GNUI_REQUIRE_LIBGHOSTTY") != "" {
+				t.Fatal(err)
+			}
+			t.Skip(err)
+		}
+		return s
+	}
+	const work = 4096
+	const budget = work * feedSimByte
+	a, b := newPane(), newPane()
+	defer a.Close()
+	defer b.Close()
+	data := bytes.Repeat([]byte("x"), 8*work)
+	a.Feed(data)
+	a.rate.nsPerByte = 1e9
+	if !a.feedFrame(budget, &a.rate) || a.parsedFrame != work || a.parseTime != budget {
+		t.Fatalf("standalone simulated slice: %+v", a.Stats())
+	}
+	b.OpenInbox(TerminalInboxOpts{HighWater: len(data)})
+	if _, err := b.Inbox().Write(data); err != nil {
+		t.Fatal(err)
+	}
+	q := NewTerminalScheduler(TerminalSchedulerOpts{Budget: budget})
+	q.rate.nsPerByte = 1e9
+	q.Add(a)
+	q.Add(b)
+	a.feedCap = budget / 4
+	c := ui.New(fakeui.New())
+	var in ui.Input
+	var list gpu.DrawList
+	for frame := range 3 {
+		c.Begin(&in, 100, 100, 1, 1.0/60)
+		a.seenOK, a.seen, a.wantFocus = true, c.Frame()-1, true
+		q.Run(c)
+		st := q.Stats()
+		if st.Parsed != work || st.Spent != budget || st.Behind != 2 {
+			t.Fatalf("frame %d: shared simulated budget: %+v", frame, st)
+		}
+		if a.parsedFrame != work/4 || b.parsedFrame != work*3/4 {
+			t.Fatalf("frame %d: capped/focused pane %d, other %d", frame, a.parsedFrame, b.parsedFrame)
+		}
+		q.Run(c)
+		if q.Stats() != st {
+			t.Fatal("scheduler parsed twice in one frame")
+		}
+		c.End(&list)
+		in.ClearFrame()
+	}
+}
 
 // A writer blocks at the high-water mark, resumes at the low one, and a
 // Close unblocks it; nothing written before the Close is lost.

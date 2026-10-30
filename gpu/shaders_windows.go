@@ -32,7 +32,7 @@ cbuffer Globals : register(b0) {
 	float2 vpad;
 };
 
-Texture2D<float4> atlas : register(t0);
+Texture2D<float4> atlas[8] : register(t0);
 SamplerState smp : register(s0);
 
 struct VIn {
@@ -58,6 +58,7 @@ struct VOut {
 	nointerpolation uint4  color  : QCOLOR;
 	nointerpolation float4 radii  : QRADII;
 	nointerpolation float4 misc   : QMISC;   // border, soft, fadeX.x, fadeX.y
+	nointerpolation uint tex : QTEX;
 	nointerpolation uint2  flags  : QFLAGS;  // borderColor, mode
 };
 
@@ -85,6 +86,7 @@ VOut vs_main(VIn i) {
 	o.misc = float4(i.border, i.soft, i.fadeX.x, i.fadeX.y);
 	// ShapeContinuous (the tex of a shape quad) rides in bit 8 of the mode
 	o.flags = uint2(i.borderColor, i.mode | (i.mode == 0u ? (i.tex & 1u) << 8u : 0u));
+	o.tex = i.tex;
 	return o;
 }
 
@@ -168,6 +170,9 @@ float rrect_shadow(float2 p, float4 rect, float4 radii, float sigma) {
 	float r = p.x < 0.0 ? (p.y < 0.0 ? radii.x : radii.w)
 	                    : (p.y < 0.0 ? radii.y : radii.z);
 	r = min(r, min(h.x, h.y));
+	if (all(abs(p) < h - (3.0 * sigma + r))) {
+		return 1.0;
+	}
 	float lo = p.y - h.y;
 	float hi = p.y + h.y;
 	float start = clamp(-3.0 * sigma, lo, hi);
@@ -181,6 +186,22 @@ float rrect_shadow(float2 p, float4 rect, float4 radii, float sigma) {
 		y += dy;
 	}
 	return clamp(v, 0.0, 1.0);
+}
+
+// Literal resource indices also work with the shader-model 4 compiler.
+float4 sample_atlas(uint slot, float2 texel) {
+	uint w, h;
+	switch (slot) {
+	case 0u: atlas[0].GetDimensions(w, h); return atlas[0].SampleLevel(smp, texel / float2(w, h), 0.0);
+	case 1u: atlas[1].GetDimensions(w, h); return atlas[1].SampleLevel(smp, texel / float2(w, h), 0.0);
+	case 2u: atlas[2].GetDimensions(w, h); return atlas[2].SampleLevel(smp, texel / float2(w, h), 0.0);
+	case 3u: atlas[3].GetDimensions(w, h); return atlas[3].SampleLevel(smp, texel / float2(w, h), 0.0);
+	case 4u: atlas[4].GetDimensions(w, h); return atlas[4].SampleLevel(smp, texel / float2(w, h), 0.0);
+	case 5u: atlas[5].GetDimensions(w, h); return atlas[5].SampleLevel(smp, texel / float2(w, h), 0.0);
+	case 6u: atlas[6].GetDimensions(w, h); return atlas[6].SampleLevel(smp, texel / float2(w, h), 0.0);
+	case 7u: atlas[7].GetDimensions(w, h); return atlas[7].SampleLevel(smp, texel / float2(w, h), 0.0);
+	}
+	return 0.0;
 }
 
 float4 ps_main(VOut i) : SV_Target {
@@ -223,15 +244,18 @@ float4 ps_main(VOut i) : SV_Target {
 			}
 			res = col * outer;
 		}
+	} else if (mode == 4u) {
+		float2 a = p - rect.xy - uv.xy, d = uv.zw - uv.xy;
+		float along = clamp(dot(a, d) / max(dot(d, d), 1e-6), 0.0, 1.0);
+		float sd = length(a - d * along) - radii.x;
+		res = col * clamp(0.5 - sd, 0.0, 1.0);
 	} else {
 		float cov = 1.0;
 		if (any(radii > 0.0)) {
 			cov = clamp(0.5 - rrect_sdf(p, rect, radii), 0.0, 1.0);
 		}
-		uint tw, th;
-		atlas.GetDimensions(tw, th);
 		float2 texel = uv.xy + (p - rect.xy) * ((uv.zw - uv.xy) / size);
-		float4 s = atlas.SampleLevel(smp, texel / float2(float(tw), float(th)), 0.0);
+		float4 s = sample_atlas(i.tex, texel);
 		res = (mode == 1u ? col * s.r : s * col.a) * cov;
 	}
 

@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"slices"
 	"sync"
 	"unicode/utf8"
 	"unsafe"
@@ -62,101 +63,102 @@ var (
 	clsNSUndoManager       objc.ID
 	clsEdString, clsNSNote objc.ID
 
-	selInitUsingTLM        = objc.Sel("initUsingTextLayoutManager:")
-	selSetDocumentView     = objc.Sel("setDocumentView:")
-	selDocumentView        = objc.Sel("documentView")
-	selSetHasVScroller     = objc.Sel("setHasVerticalScroller:")
-	selSetAutohides        = objc.Sel("setAutohidesScrollers:")
-	selSetDrawsBackground  = objc.Sel("setDrawsBackground:")
-	selSetBorderType       = objc.Sel("setBorderType:")
-	selSetMinSize          = objc.Sel("setMinSize:")
-	selSetMaxSize          = objc.Sel("setMaxSize:")
-	selSetVResizable       = objc.Sel("setVerticallyResizable:")
-	selSetHResizable       = objc.Sel("setHorizontallyResizable:")
-	selSetRichText         = objc.Sel("setRichText:")
-	selSetEditable         = objc.Sel("setEditable:")
-	selSetImportsGraphics  = objc.Sel("setImportsGraphics:")
-	selSetAllowsUndo       = objc.Sel("setAllowsUndo:")
-	selSetFont             = objc.Sel("setFont:")
-	selSetTextColor        = objc.Sel("setTextColor:")
-	selTextColor           = objc.Sel("textColor")
-	selSystemFontOfSize    = objc.Sel("systemFontOfSize:")
-	selSetContainerInset   = objc.Sel("setTextContainerInset:")
-	selTextContainer       = objc.Sel("textContainer")
-	selLayoutManager       = objc.Sel("layoutManager")
-	selTextStorage         = objc.Sel("textStorage")
-	selSetWidthTracks      = objc.Sel("setWidthTracksTextView:")
-	selSetContainerSize    = objc.Sel("setContainerSize:")
-	selDefaultLineHeight   = objc.Sel("defaultLineHeightForFont:")
-	selEnsureLayout        = objc.Sel("ensureLayoutForTextContainer:")
-	selUsedRect            = objc.Sel("usedRectForTextContainer:")
-	selSetContSpell        = objc.Sel("setContinuousSpellCheckingEnabled:")
-	selSetAutoCorrect      = objc.Sel("setAutomaticSpellingCorrectionEnabled:")
-	selSetSelectedRange    = objc.Sel("setSelectedRange:")
-	selShouldChange        = objc.Sel("shouldChangeTextInRange:replacementString:")
-	selBeginEditing        = objc.Sel("beginEditing")
-	selEndEditing          = objc.Sel("endEditing")
-	selReplaceChars        = objc.Sel("replaceCharactersInRange:withString:")
-	selSetAttributesRange  = objc.Sel("setAttributes:range:")
-	selTypingAttributes    = objc.Sel("typingAttributes")
-	selDidChangeText       = objc.Sel("didChangeText")
-	selBreakUndoCoalescing = objc.Sel("breakUndoCoalescing")
-	selSetString           = objc.Sel("setString:")
-	selRemoveAllActions    = objc.Sel("removeAllActions")
-	selLengthOfBytes       = objc.Sel("lengthOfBytesUsingEncoding:")
-	selLengthEd            = objc.Sel("length")
-	selFrameEd             = objc.Sel("frame")
-	selCurrentEvent        = objc.Sel("currentEvent")
-	selTypes               = objc.Sel("types")
-	selContainsObject      = objc.Sel("containsObject:")
-	selFirstObjectCommon   = objc.Sel("firstObjectCommonWithArray:")
-	selArrayWithObjects    = objc.Sel("arrayWithObjects:count:")
-	selArrayByAdding       = objc.Sel("arrayByAddingObjectsFromArray:")
-	selSRGBColor           = objc.Sel("colorWithSRGBRed:green:blue:alpha:")
-	selAddTempAttr         = objc.Sel("addTemporaryAttribute:value:forCharacterRange:")
-	selRemoveTempAttr      = objc.Sel("removeTemporaryAttribute:forCharacterRange:")
-	selDefaultCenter       = objc.Sel("defaultCenter")
-	selAddObserver         = objc.Sel("addObserver:selector:name:object:")
-	selRemoveObserver      = objc.Sel("removeObserver:")
-	selSetPostsFrame       = objc.Sel("setPostsFrameChangedNotifications:")
-	selConvertRectFromScr  = objc.Sel("convertRectFromScreen:")
-	selConvertRectFromView = objc.Sel("convertRect:fromView:")
-	selSetDelegateEd       = objc.Sel("setDelegate:")
-	selPlaceholderColor    = objc.Sel("placeholderTextColor")
-	selUndo                = objc.Sel("undo:")
-	selRedo                = objc.Sel("redo:")
-	selUndoManager         = objc.Sel("undoManager")
-	selUndoNow             = objc.Sel("undo")
-	selRedoNow             = objc.Sel("redo")
-	selCanUndo             = objc.Sel("canUndo")
-	selCanRedo             = objc.Sel("canRedo")
-	selReadSelectionPB     = objc.Sel("readSelectionFromPasteboard:")
-	selReadablePBTypes     = objc.Sel("readablePasteboardTypes")
-	selResignFirstResp     = objc.Sel("resignFirstResponder")
-	selComplete            = objc.Sel("complete:")
-	selMoveUp              = objc.Sel("moveUp:")
-	selMoveDown            = objc.Sel("moveDown:")
-	selInsertLineBreak     = objc.Sel("insertLineBreak:")
-	selInsertNLIgnoring    = objc.Sel("insertNewlineIgnoringFieldEditor:")
-	selTextDidChange       = objc.Sel("textDidChange:")
-	selDidChangeSelection  = objc.Sel("textViewDidChangeSelection:")
-	selShouldChangeDel     = objc.Sel("textView:shouldChangeTextInRange:replacementString:")
-	selUndoManagerFor      = objc.Sel("undoManagerForTextView:")
-	selFrameChanged        = objc.Sel("gnuiFrameChanged:")
-	selSetMarkedText2      = objc.Sel("setMarkedText:selectedRange:")
-	selExtraLineRect       = objc.Sel("extraLineFragmentRect")
-	selLabelWithString     = objc.Sel("labelWithString:")
-	selSetLineBreakMode    = objc.Sel("setLineBreakMode:")
-	selSetAXElement        = objc.Sel("setAccessibilityElement:")
-	selSetAXPlaceholder    = objc.Sel("setAccessibilityPlaceholderValue:")
-	selAddSubviewRel       = objc.Sel("addSubview:positioned:relativeTo:")
-	selSizeToFit           = objc.Sel("sizeToFit")
-	selLineFragPadding     = objc.Sel("lineFragmentPadding")
-	selHitTestEd           = objc.Sel("hitTest:")
-	selSetStringValueEd    = objc.Sel("setStringValue:")
-	selNumberOfGlyphs      = objc.Sel("numberOfGlyphs")
-	selGlyphIndexForChar   = objc.Sel("glyphIndexForCharacterAtIndex:")
-	selLineFragForGlyph    = objc.Sel("lineFragmentRectForGlyphAtIndex:effectiveRange:")
+	selInitUsingTLM        = objc.SelZ("initUsingTextLayoutManager:\x00")
+	selSetDocumentView     = objc.SelZ("setDocumentView:\x00")
+	selDocumentView        = objc.SelZ("documentView\x00")
+	selSetHasVScroller     = objc.SelZ("setHasVerticalScroller:\x00")
+	selSetAutohides        = objc.SelZ("setAutohidesScrollers:\x00")
+	selSetDrawsBackground  = objc.SelZ("setDrawsBackground:\x00")
+	selSetBorderType       = objc.SelZ("setBorderType:\x00")
+	selSetMinSize          = objc.SelZ("setMinSize:\x00")
+	selSetMaxSize          = objc.SelZ("setMaxSize:\x00")
+	selSetVResizable       = objc.SelZ("setVerticallyResizable:\x00")
+	selSetHResizable       = objc.SelZ("setHorizontallyResizable:\x00")
+	selSetRichText         = objc.SelZ("setRichText:\x00")
+	selSetEditable         = objc.SelZ("setEditable:\x00")
+	selSetImportsGraphics  = objc.SelZ("setImportsGraphics:\x00")
+	selSetAllowsUndo       = objc.SelZ("setAllowsUndo:\x00")
+	selSetFont             = objc.SelZ("setFont:\x00")
+	selSetTextColor        = objc.SelZ("setTextColor:\x00")
+	selTextColor           = objc.SelZ("textColor\x00")
+	selSystemFontOfSize    = objc.SelZ("systemFontOfSize:\x00")
+	selSetContainerInset   = objc.SelZ("setTextContainerInset:\x00")
+	selTextContainer       = objc.SelZ("textContainer\x00")
+	selLayoutManager       = objc.SelZ("layoutManager\x00")
+	selTextStorage         = objc.SelZ("textStorage\x00")
+	selSetWidthTracks      = objc.SelZ("setWidthTracksTextView:\x00")
+	selSetContainerSize    = objc.SelZ("setContainerSize:\x00")
+	selDefaultLineHeight   = objc.SelZ("defaultLineHeightForFont:\x00")
+	selEnsureLayout        = objc.SelZ("ensureLayoutForTextContainer:\x00")
+	selUsedRect            = objc.SelZ("usedRectForTextContainer:\x00")
+	selSetContSpell        = objc.SelZ("setContinuousSpellCheckingEnabled:\x00")
+	selSetAutoCorrect      = objc.SelZ("setAutomaticSpellingCorrectionEnabled:\x00")
+	selSetSelectedRange    = objc.SelZ("setSelectedRange:\x00")
+	selShouldChange        = objc.SelZ("shouldChangeTextInRange:replacementString:\x00")
+	selBeginEditing        = objc.SelZ("beginEditing\x00")
+	selEndEditing          = objc.SelZ("endEditing\x00")
+	selReplaceChars        = objc.SelZ("replaceCharactersInRange:withString:\x00")
+	selSetAttributesRange  = objc.SelZ("setAttributes:range:\x00")
+	selTypingAttributes    = objc.SelZ("typingAttributes\x00")
+	selDidChangeText       = objc.SelZ("didChangeText\x00")
+	selBreakUndoCoalescing = objc.SelZ("breakUndoCoalescing\x00")
+	selSetString           = objc.SelZ("setString:\x00")
+	selRemoveAllActions    = objc.SelZ("removeAllActions\x00")
+	selLengthOfBytes       = objc.SelZ("lengthOfBytesUsingEncoding:\x00")
+	selLengthEd            = objc.SelZ("length\x00")
+	selFrameEd             = objc.SelZ("frame\x00")
+	selCurrentEvent        = objc.SelZ("currentEvent\x00")
+	selTypes               = objc.SelZ("types\x00")
+	selContainsObject      = objc.SelZ("containsObject:\x00")
+	selFirstObjectCommon   = objc.SelZ("firstObjectCommonWithArray:\x00")
+	selArrayWithObjects    = objc.SelZ("arrayWithObjects:count:\x00")
+	selArrayByAdding       = objc.SelZ("arrayByAddingObjectsFromArray:\x00")
+	selSRGBColor           = objc.SelZ("colorWithSRGBRed:green:blue:alpha:\x00")
+	selAddTempAttr         = objc.SelZ("addTemporaryAttribute:value:forCharacterRange:\x00")
+	selRemoveTempAttr      = objc.SelZ("removeTemporaryAttribute:forCharacterRange:\x00")
+	selDefaultCenter       = objc.SelZ("defaultCenter\x00")
+	selAddObserver         = objc.SelZ("addObserver:selector:name:object:\x00")
+	selRemoveObserver      = objc.SelZ("removeObserver:\x00")
+	selSetPostsFrame       = objc.SelZ("setPostsFrameChangedNotifications:\x00")
+	selConvertRectFromScr  = objc.SelZ("convertRectFromScreen:\x00")
+	selConvertRectFromView = objc.SelZ("convertRect:fromView:\x00")
+	selSetDelegateEd       = objc.SelZ("setDelegate:\x00")
+	selPlaceholderColor    = objc.SelZ("placeholderTextColor\x00")
+	selUndo                = objc.SelZ("undo:\x00")
+	selRedo                = objc.SelZ("redo:\x00")
+	selUndoManager         = objc.SelZ("undoManager\x00")
+	selUndoNow             = objc.SelZ("undo\x00")
+	selRedoNow             = objc.SelZ("redo\x00")
+	selCanUndo             = objc.SelZ("canUndo\x00")
+	selCanRedo             = objc.SelZ("canRedo\x00")
+	selReadSelectionPB     = objc.SelZ("readSelectionFromPasteboard:\x00")
+	selReadablePBTypes     = objc.SelZ("readablePasteboardTypes\x00")
+	selResignFirstResp     = objc.SelZ("resignFirstResponder\x00")
+	selComplete            = objc.SelZ("complete:\x00")
+	selMoveUp              = objc.SelZ("moveUp:\x00")
+	selMoveDown            = objc.SelZ("moveDown:\x00")
+	selInsertLineBreak     = objc.SelZ("insertLineBreak:\x00")
+	selInsertNLIgnoring    = objc.SelZ("insertNewlineIgnoringFieldEditor:\x00")
+	selStorageEdited       = objc.SelZ("textStorage:didProcessEditing:range:changeInLength:\x00")
+	selTextDidChange       = objc.SelZ("textDidChange:\x00")
+	selDidChangeSelection  = objc.SelZ("textViewDidChangeSelection:\x00")
+	selShouldChangeDel     = objc.SelZ("textView:shouldChangeTextInRange:replacementString:\x00")
+	selUndoManagerFor      = objc.SelZ("undoManagerForTextView:\x00")
+	selFrameChanged        = objc.SelZ("gnuiFrameChanged:\x00")
+	selSetMarkedText2      = objc.SelZ("setMarkedText:selectedRange:\x00")
+	selExtraLineRect       = objc.SelZ("extraLineFragmentRect\x00")
+	selLabelWithString     = objc.SelZ("labelWithString:\x00")
+	selSetLineBreakMode    = objc.SelZ("setLineBreakMode:\x00")
+	selSetAXElement        = objc.SelZ("setAccessibilityElement:\x00")
+	selSetAXPlaceholder    = objc.SelZ("setAccessibilityPlaceholderValue:\x00")
+	selAddSubviewRel       = objc.SelZ("addSubview:positioned:relativeTo:\x00")
+	selSizeToFit           = objc.SelZ("sizeToFit\x00")
+	selLineFragPadding     = objc.SelZ("lineFragmentPadding\x00")
+	selHitTestEd           = objc.SelZ("hitTest:\x00")
+	selSetStringValueEd    = objc.SelZ("setStringValue:\x00")
+	selNumberOfGlyphs      = objc.SelZ("numberOfGlyphs\x00")
+	selGlyphIndexForChar   = objc.SelZ("glyphIndexForCharacterAtIndex:\x00")
+	selLineFragForGlyph    = objc.SelZ("lineFragmentRectForGlyphAtIndex:effectiveRange:\x00")
 )
 
 // editorNative is the macOS half of an Editor.
@@ -207,7 +209,8 @@ func registerEditorClasses() {
 	ph.Method(selHitTestEd, "@@:{CGPoint=dd}", edPlaceholderHit)
 	edPHClass = ph.Register()
 
-	d := objc.Define("GNUIEditorDelegate", objc.Cls("NSObject"), []string{"NSTextViewDelegate"})
+	d := objc.Define("GNUIEditorDelegate", objc.Cls("NSObject"), []string{"NSTextViewDelegate", "NSTextStorageDelegate"})
+	d.Method(selStorageEdited, "v@:@Q{_NSRange=QQ}q", edStorageEdited)
 	d.Method(selTextDidChange, "v@:@", edTextDidChange)
 	d.Method(selDidChangeSelection, "v@:@", edSelectionDidChange)
 	d.Method(selShouldChangeDel, "c@:@{_NSRange=QQ}@", edShouldChange)
@@ -287,6 +290,7 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	e.del = objc.Send(objc.Send(edDelClass, selAlloc), selInitPlain)
 	edDelDef.Index().Set(e.del, uintptr(slot+1))
 	objc.Send1(tv, selSetDelegateEd, uintptr(e.del))
+	objc.Send1(objc.Send(tv, selTextStorage), selSetDelegateEd, uintptr(e.del))
 	objc.Send1(tv, selSetPostsFrame, 1)
 	objc.Send4(objc.Send(clsNSNote, selDefaultCenter), selAddObserver, uintptr(e.del), uintptr(selFrameChanged), uintptr(edFrameNote), uintptr(tv))
 
@@ -303,6 +307,7 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	objc.Send(sv, selReleaseObj) // the host owns it (or nobody, on failure)
 	if err != nil {
 		objc.Send1(objc.Send(clsNSNote, selDefaultCenter), selRemoveObserver, uintptr(e.del))
+		objc.Send1(objc.Send(tv, selTextStorage), selSetDelegateEd, 0)
 		objc.Send1(tv, selSetDelegateEd, 0)
 		objc.Release(tv)
 		objc.Release(e.del)
@@ -471,6 +476,7 @@ func (e *Editor) Release() {
 	}
 	e.released = true
 	objc.Send1(objc.Send(clsNSNote, selDefaultCenter), selRemoveObserver, uintptr(e.del))
+	objc.Send1(objc.Send(e.tv, selTextStorage), selSetDelegateEd, 0)
 	objc.Send1(e.tv, selSetDelegateEd, 0)
 	edTVDef.Index().Set(e.tv, 0)
 	e.w.ReleaseHost(e.host)
@@ -700,13 +706,15 @@ func (e *Editor) wake() {
 	}
 }
 
-// copyText copies the text view's text into the buffer, rebuilds the map,
-// and reads the selection and the marked text.
+// copyText initializes the text snapshot, then reads selection and marked
+// text. Subsequent edits splice the snapshot from edStorageEdited.
 func (e *Editor) copyText() {
 	e.rev++
-	str := objc.Send(objc.Send(e.tv, selTextStorage), selString)
-	e.text = objc.AppendUTF8(e.text[:0], str)
-	e.m.build(e.text)
+	if len(e.m.cp) == 0 {
+		str := objc.Send(objc.Send(e.tv, selTextStorage), selString)
+		e.text = objc.AppendUTF8(e.text[:0], str)
+		e.m.build(e.text)
+	}
 	e.readSelection()
 	if e.marked = objc.SendBool(e.tv, selHasMarkedText); e.marked {
 		objc.F.Reset().Arg(uintptr(e.tv)).Arg(uintptr(selMarkedRange)).Call(objc.MsgSend)
@@ -746,6 +754,39 @@ func editorAt(x uintptr) *Editor {
 		return nil
 	}
 	return edTable[i]
+}
+
+// edStorageEdited receives the processed range in the new string and its
+// change in UTF-16 length. Attribute-only changes leave the snapshot alone.
+func edStorageEdited(c *ffi.CB) {
+	e := delegateOf(objc.ID(c.Int(0)))
+	if e == nil || c.Int(3)&2 == 0 {
+		return
+	} // NSTextStorageEditedCharacters
+	e.spliceText(objc.ID(c.Int(2)), int(c.Int(4)), int(c.Int(5)), int(c.Int(6)))
+}
+
+func (e *Editor) spliceText(storage objc.ID, loc, n, delta int) {
+	str := objc.Send(storage, selString)
+	oldN := n - delta
+	if len(e.m.cp) == 0 || loc < 0 || oldN < 0 || loc+oldN > e.m.n16 {
+		e.text = objc.AppendUTF8(e.text[:0], str)
+		e.m.build(e.text)
+		return
+	}
+	lo, hi := e.m.toByte(e.text, loc), e.m.toByte(e.text, loc+oldN)
+	// Size just the edited range, shift the suffix once, and convert directly
+	// into its final place. Reserve's text capacity also covers replacements:
+	// there is no second document-sized scratch buffer after a large paste.
+	newN := objc.UTF8RangeLen(str, loc, n)
+	size := len(e.text) - (hi - lo) + newN
+	e.text = slices.Grow(e.text, max(size-len(e.text), 0))
+	oldLen := len(e.text)
+	e.text = e.text[:max(oldLen, size)]
+	copy(e.text[lo+newN:], e.text[hi:oldLen])
+	objc.CopyUTF8Range(e.text[lo:lo+newN], str, loc, n)
+	e.text = e.text[:size]
+	e.m.rebuild(e.text, lo)
 }
 
 // edTextDidChange is the delegate's textDidChange:.

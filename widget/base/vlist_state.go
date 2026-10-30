@@ -103,7 +103,8 @@ const vlSettleFrames = 16
 // copied once in use. *VListState is the Enumerator a selection scope walks
 // the list with (IndexOf, First, Last, Next).
 type VListState struct {
-	f, bk vlBuf // the front buffer and the back buffer (vlist_job.go)
+	bkUsed int64 // last rebuild activity, Unix nanoseconds
+	f, bk  vlBuf // the front buffer and the back buffer (vlist_job.go)
 
 	est   float32 // the estimate for unmeasured items, in points
 	scale float32 // the display scale of the last frame (0 before the first)
@@ -168,7 +169,8 @@ const (
 
 // Reserve makes room for n items: edits within it, prepends and appends
 // included, allocate nothing, in either buffer (the back buffer of a long
-// edit is allocated the first time one happens), nor do the edits queued
+// edit is allocated the first time one happens, and again after it has
+// been idle for 30 seconds and released), nor do the edits queued
 // during a rebuild while they insert at most min(n, 32768) ids and number
 // at most 64.
 func (st *VListState) Reserve(n int) {
@@ -465,6 +467,11 @@ func (st *VListState) Reset(ids []uint64) {
 	st.job = vlJob{}
 	st.queue, st.qhead = st.queue[:0], 0
 	st.pool = st.pool[:0]
+	if st.f.n == 0 {
+		// There is no published order to protect. Reuse the reserved front
+		// storage as the destination instead of allocating a second buffer.
+		st.bk, st.f = st.f, vlBuf{}
+	}
 	st.startJob(vlOp{kind: opReset, n: len(ids)}, ids)
 	for i := range st.marks {
 		if st.markOn[i] {
@@ -574,3 +581,6 @@ func runIndex(b *vlBuf, id uint64, at, n int) int {
 	}
 	return -1
 }
+
+// BackCapacity reports the retained rebuild-buffer slots, for memory checkpoints.
+func (st *VListState) BackCapacity() int { return cap(st.bk.ids) }

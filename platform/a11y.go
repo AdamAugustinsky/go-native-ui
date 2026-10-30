@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"gonativeui/internal/uitypes"
 	"gonativeui/text"
 )
 
@@ -18,11 +19,12 @@ import (
 // gives the window an AXSource (SetAXSource); the window asks it for the tree
 // only once an assistive technology has asked the window about its content
 // (lazy activation: until then the bridge costs nothing), and from then on at
-// every frame (SyncAX), diffing the new tree with the last one to tell the
-// assistive technology what changed.
+// every frame (SyncAX) while queries continue, diffing the new tree with the
+// last one to tell the assistive technology what changed. After 30 seconds
+// without a query, exports stop until the next query. No timer polls it.
 //
 // This file is the part every OS shares: the tree the app hands over (AXTree,
-// a copy of ui.SemTree's layout, since platform is below ui), the element
+// records shared with ui through internal/uitypes), the element
 // table and its diff, and the mapping of roles to the OS's (macOS's names,
 // which the snapshot dump also uses). a11y_darwin.go is the NSAccessibility
 // side. Windows (UI Automation) and Linux (AT-SPI) have no bridge yet:
@@ -32,7 +34,7 @@ import (
 var ErrAXUnsupported = fmt.Errorf("platform: accessibility on %s: %w", runtime.GOOS, errors.ErrUnsupported)
 
 // AXRole is a node's role; the values are ui.Role's.
-type AXRole uint8
+type AXRole = uitypes.Role
 
 // The roles, in ui.Role's order.
 const (
@@ -78,7 +80,7 @@ const (
 )
 
 // AXState are a node's state bits; the values are ui.SemState's.
-type AXState uint16
+type AXState = uitypes.SemState
 
 // The state bits, in ui.SemState's order.
 const (
@@ -97,7 +99,7 @@ const (
 )
 
 // AXAction are the actions a node supports; the values are ui.SemAction's.
-type AXAction uint16
+type AXAction = uitypes.SemAction
 
 // The actions, in ui.SemAction's order.
 const (
@@ -113,7 +115,7 @@ const (
 )
 
 // AXTextKind says which text of a node has character geometry (ui.SemTextKind).
-type AXTextKind uint8
+type AXTextKind = uitypes.SemTextKind
 
 const (
 	// AXTextNone: no text geometry.
@@ -127,26 +129,7 @@ const (
 // AXNode is one node of the tree (ui.SemNode). It is pointer-free; Name and
 // Value are spans of AXTree.Bytes, and the tree is linked by indices, -1 for
 // none. Nodes[0] is the window.
-type AXNode struct {
-	// Key is the node's box key: the identity of its element across frames.
-	Key uint64
-	// Role is the node's role.
-	Role AXRole
-	// State is its state bits.
-	State AXState
-	// Actions are the actions it supports.
-	Actions AXAction
-	Bounds  [4]float32 // x0, y0, x1, y1 in window pixels
-	// Parent, FirstChild and NextSibling link the tree (-1: none).
-	Parent, FirstChild, NextSibling int32
-	Name, Value                     [2]uint32  // spans of AXTree.Bytes
-	Range                           [4]float64 // min, max, value, step
-	Pos                             [2]int32   // index in its list and the list's length (0: unknown)
-	TextSel                         [2]int32   // anchor and caret, bytes of the text (Text)
-	Level                           int32      // depth in an outline (1: a root row), a heading's level
-	Host                            uint32     // the HostID of the native view in the node (an AXRoleHost node, or one with a role of its own around it)
-	Text                            AXTextKind // which text has geometry
-}
+type AXNode = uitypes.SemNode
 
 // AXTree is the semantic tree the app hands to the window.
 type AXTree struct {
@@ -198,7 +181,8 @@ func (t *AXTree) Equal(u *AXTree) bool {
 // between frames.
 //
 // AXExport fills dst with the semantic tree of the last finished frame,
-// reusing its storage, and reports whether there is one.
+// reusing or borrowing storage, and reports whether a new tree is available.
+// Borrowed slices must preserve the previous publication until the next export.
 //
 // The text functions answer for the node with the given key and the text that
 // has geometry (AXNode.Text), in bytes and window pixels: the line an offset
@@ -215,6 +199,14 @@ type AXSource interface {
 	AXOffset(key uint64, x, y float32) (off int, ok bool)
 	AXVisible(key uint64) (from, to int, ok bool)
 	AXHelp(key uint64, dst []byte) []byte
+}
+
+// SetAXSourceActive tells an optional source listener whether the native bridge
+// is active. Backends call it on activation and deactivation, on the main thread.
+func SetAXSourceActive(src AXSource, active bool) {
+	if s, ok := src.(interface{ AXSetActive(bool) }); ok {
+		s.AXSetActive(active)
+	}
 }
 
 // An assistive technology's request for an action arrives as an Event of
@@ -268,21 +260,23 @@ type axEvent struct {
 // axCore is the element table of a window and its diff: platform-neutral, so
 // that it is tested on every OS.
 type axCore struct {
-	active bool
-	trees  [2]AXTree
-	cur    int // trees[cur] is the current tree, trees[1-cur] the previous one
-	slots  []axSlot
-	free   []int32
-	byKey  map[uint64]int32
-	stamp  uint32
-	diffs  int // diffs that found a change (tests)
-	events []axEvent
-	dead   []axEvent // scratch: the destroyed elements of a diff
-	last   []uint64  // scratch: per node, the key of its last child seen
-	focus  int32     // the slot of the focused node, -1 for none
-	syncs  int       // SyncAX calls that exported a tree (tests)
-	depth  []int32   // scratch: per node, its depth (the window's is 0)
-	ann    uint32    // the AnnounceSeq last posted
+	awaiting  bool // activation requested a frame before the first tree was available
+	active    bool
+	trees     [2]AXTree
+	cur       int // trees[cur] is the current tree, trees[1-cur] the previous one
+	slots     []axSlot
+	free      []int32
+	byKey     map[uint64]int32
+	stamp     uint32
+	diffs     int // diffs that found a change (tests)
+	events    []axEvent
+	dead      []axEvent // scratch: the destroyed elements of a diff
+	last      []uint64  // scratch: per node, the key of its last child seen
+	focus     int32     // the slot of the focused node, -1 for none
+	syncs     int       // SyncAX calls that exported a tree (tests)
+	nodeSlots []int32   // the current tree node to slot mapping, -1 for duplicates/window
+	depth     []int32   // scratch: per node, its depth (the window's is 0)
+	ann       uint32    // the AnnounceSeq last posted
 }
 
 func (c *axCore) tree() *AXTree { return &c.trees[c.cur] }
@@ -307,8 +301,8 @@ func (c *axCore) slotOf(i int32) int32 {
 	if i <= 0 || int(i) >= len(t.Nodes) {
 		return -1
 	}
-	if s, ok := c.byKey[t.Nodes[i].Key]; ok {
-		return s
+	if int(i) < len(c.nodeSlots) {
+		return c.nodeSlots[i]
 	}
 	return -1
 }
@@ -323,6 +317,7 @@ func (c *axCore) begin(export func(*AXTree) bool) {
 	}
 	c.sync(export)
 	c.events = c.events[:0]
+	c.awaiting = c.stamp == 0
 	c.ann = c.tree().AnnounceSeq // what the app said before anything listened is not repeated
 }
 
@@ -341,6 +336,10 @@ func (c *axCore) sync(export func(*AXTree) bool) {
 	}
 	c.cur = 1 - c.cur
 	c.diff(&c.trees[1-c.cur], c.tree())
+	if c.awaiting {
+		c.awaiting = false
+		c.events = append(c.events, axEvent{note: noteLayout, slot: -1})
+	}
 }
 
 // diff compares the trees and records the events, in order: created
@@ -359,6 +358,13 @@ func (c *axCore) diff(prev, cur *AXTree) {
 		c.depth = make([]int32, len(cur.Nodes), cap(cur.Nodes))
 	}
 	c.depth = c.depth[:len(cur.Nodes)]
+	if cap(c.nodeSlots) < len(cur.Nodes) {
+		c.nodeSlots = make([]int32, len(cur.Nodes), cap(cur.Nodes))
+	}
+	c.nodeSlots = c.nodeSlots[:len(cur.Nodes)]
+	for i := range c.nodeSlots {
+		c.nodeSlots[i] = -1
+	}
 	c.depth[0] = 0
 	rootLayout := false
 	focus := int32(-1)
@@ -384,6 +390,7 @@ func (c *axCore) diff(prev, cur *AXTree) {
 		}
 		if !ok {
 			s = c.alloc(n.Key)
+			c.nodeSlots[i] = s
 			sl := &c.slots[s]
 			sl.node, sl.stamp, sl.parent, sl.prevSib = int32(i), c.stamp, pkey, prevSib
 			if !first {
@@ -395,6 +402,7 @@ func (c *axCore) diff(prev, cur *AXTree) {
 			}
 			continue
 		}
+		c.nodeSlots[i] = s
 		sl := &c.slots[s]
 		var o *AXNode
 		if j := sl.node; j > 0 && int(j) < len(prev.Nodes) && prev.Nodes[j].Key == n.Key {
@@ -475,8 +483,8 @@ func (c *axCore) diff(prev, cur *AXTree) {
 	}
 	// The events, in tree order.
 	for i := 1; i < len(cur.Nodes); i++ {
-		s, ok := c.byKey[cur.Nodes[i].Key]
-		if !ok {
+		s := c.nodeSlots[i]
+		if s < 0 {
 			continue
 		}
 		if p := c.slots[s].pend &^ noteLayout; p != 0 && !first {
@@ -487,8 +495,8 @@ func (c *axCore) diff(prev, cur *AXTree) {
 		c.events = append(c.events, axEvent{note: noteLayout, slot: -1})
 	}
 	for i := 1; i < len(cur.Nodes); i++ {
-		s, ok := c.byKey[cur.Nodes[i].Key]
-		if !ok {
+		s := c.nodeSlots[i]
+		if s < 0 {
 			continue
 		}
 		sl := &c.slots[s]
@@ -617,18 +625,18 @@ func axChildren(t *AXTree, i int32, dst []int32) []int32 {
 }
 
 // axHit returns the deepest exposed node at window pixel (x, y), 0 for the
-// window itself: the children are tried from the last (drawn on top).
+// window itself: the last matching child is drawn on top.
 func axHit(t *AXTree, x, y float32) int32 {
-	var buf [64]int32
 	at := int32(0)
-	for {
-		kids := axChildren(t, at, buf[:0])
+	for at >= 0 && int(at) < len(t.Nodes) {
 		next := int32(-1)
-		for k := len(kids) - 1; k >= 0; k-- {
-			b := t.Nodes[kids[k]].Bounds
-			if x >= b[0] && x < b[2] && y >= b[1] && y < b[3] {
-				next = kids[k]
-				break
+		for ch := t.Nodes[at].FirstChild; ch >= 0 && int(ch) < len(t.Nodes); ch = t.Nodes[ch].NextSibling {
+			n := &t.Nodes[ch]
+			if at == 0 && n.State&AXModal != 0 {
+				next = -1
+			}
+			if inRect(n.Bounds, x, y) {
+				next = ch
 			}
 		}
 		if next < 0 {
@@ -636,6 +644,7 @@ func axHit(t *AXTree, x, y float32) int32 {
 		}
 		at = next
 	}
+	return 0
 }
 
 // axExposed reports whether node i is in the exposed tree (not beneath a

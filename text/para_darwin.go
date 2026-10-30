@@ -6,6 +6,8 @@ import (
 	"math"
 	"unicode/utf8"
 	"unsafe"
+
+	"gonativeui/internal/cf"
 )
 
 // Paragraph layout on macOS: CoreText's typesetter, the engine under AppKit's
@@ -74,10 +76,9 @@ func (s *System) ParaStats() ParaStats { return s.paras.stats() }
 // storage and the layout's scratch up front: the cache then evicts rather
 // than grow beyond the budget, and laying out paragraphs of up to
 // min(b.Text, 16 KiB) bytes allocates no Go memory, misses and evictions
-// included. Memory is the trade-off: the cache's reservation is about 27
-// bytes per glyph of the budget (1.7 MiB for DefaultParaBudget, which
-// ReserveRuns reserves when no budget is declared; 27.5 MiB at the limits),
-// and the scratch up to about 2 MiB more. Beyond the declared budget a miss
+// included. The reservation includes glyphs, text, lines and indexed caret
+// geometry, plus reused layout scratch. ReserveRuns reserves DefaultParaBudget
+// when no budget is declared. Beyond the declared budget a miss
 // may allocate: a paragraph longer than the scratch grows it once, and one
 // bigger than the whole budget is laid out in storage of its own, outside the
 // cache, released when it leaves use. Call it once at setup.
@@ -161,6 +162,11 @@ func (s *System) layoutCT(p *Para) {
 		}
 	}
 	mas := pl.mas
+	// Release exceptional UTF-16 text and attribute runs after the typesetter
+	// and its lines are gone. Small paragraphs keep the reusable native object.
+	if n16 > 8<<10 {
+		defer func() { s.release(pl.mas); pl.mas = 0 }()
+	}
 	s.fr.Call1(sy.cfAttrBeginEditing, mas)
 	cur := s.fr.Call1(sy.cfAttrGetLength, mas)
 	s.fr.Reset().Arg(mas).Arg(0).Arg(cur).Arg(str).Call(sy.cfAttrReplaceString)
@@ -260,9 +266,9 @@ func (s *System) ctLine(p *Para, ts uintptr, u0, cnt int, scale float32, rtl boo
 		ArgPtr(unsafe.Pointer(&pl.three[2])).Call(sy.ctLineGetTypographicBounds).F64(0)
 	tw := s.fr.Reset().Arg(line).Call(sy.ctLineGetTrailingWhitespaceWidth).F64(0)
 	runs := s.fr.Call1(sy.ctLineGetGlyphRuns, line)
-	n := int(s.fr.Call1(sy.cfArrayGetCount, runs))
+	n := cf.ArrayLen(s.fr, runs)
 	for i := 0; i < n; i++ {
-		s.appendParaRun(p, s.fr.Call2(sy.cfArrayGetValueAtIndex, runs, uintptr(i)), scale)
+		s.appendParaRun(p, cf.ArrayAt(s.fr, runs, i), scale)
 	}
 	s.release(line)
 	ln.G1 = uint32(len(pl.b.glyphs))

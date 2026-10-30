@@ -30,6 +30,8 @@ import (
 // no copy, gpu.Renderer.ImportPixelBuffer). Frame says when the next frame
 // is due, and the app asks for a frame then (ui.Context.WakeIn), so a playing
 // video costs frames at its own rate and a paused or hidden one costs none.
+// A paused frame is staged once into an owned YUV texture for other redraws;
+// Play releases the snapshot and resumes per-frame imports.
 //
 // The file is read on a goroutine: the track's size, turn and rate, and a
 // poster frame (AVAssetImageGenerator), shown until a frame plays. The end
@@ -47,6 +49,7 @@ type cmTime struct {
 }
 
 const (
+	pixFmt420f   = 0x34323066 // full-range biplanar 4:2:0
 	pixFmt420v   = 0x34323076 // kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
 	maxVideos    = 1024       // open at once
 	defaultFPS   = 30
@@ -107,11 +110,13 @@ var vav struct {
 	obsCls                                                     objc.ID
 	obsDef                                                     *objc.ClassDef
 
-	mediaVideo, endNote, pitch uintptr // NSStrings (pitch: AVAudioTimePitchAlgorithmSpectral)
-	pixFmtKey, metalKey, ioKey uintptr // CFStrings
-	zero                       cmTime  // kCMTimeZero
-	timeMake                   uintptr // CMTimeMakeWithSeconds
-	pbRelease, pbW, pbH        uintptr
+	mediaVideo, endNote, pitch                           uintptr // NSStrings (pitch: AVAudioTimePitchAlgorithmSpectral)
+	pixFmtKey, metalKey, ioKey                           uintptr // CFStrings
+	zero                                                 cmTime  // kCMTimeZero
+	timeMake                                             uintptr // CMTimeMakeWithSeconds
+	pbRelease, pbW, pbH                                  uintptr
+	pbLock, pbUnlock, pbBase, pbStride, pbFormat         uintptr
+	attachment, cfEqual, cfRelease, matrixKey, matrix601 uintptr
 
 	ring *platform.Ring // the end events
 }
@@ -170,6 +175,12 @@ func loadVideoAV() error {
 		vav.metalKey = val(cv, "kCVPixelBufferMetalCompatibilityKey")
 		vav.ioKey = val(cv, "kCVPixelBufferIOSurfacePropertiesKey")
 		vav.pbRelease, vav.pbW, vav.pbH = sym(cv, "CVPixelBufferRelease"), sym(cv, "CVPixelBufferGetWidth"), sym(cv, "CVPixelBufferGetHeight")
+		vav.pbLock, vav.pbUnlock = sym(cv, "CVPixelBufferLockBaseAddress"), sym(cv, "CVPixelBufferUnlockBaseAddress")
+		vav.pbBase, vav.pbStride = sym(cv, "CVPixelBufferGetBaseAddressOfPlane"), sym(cv, "CVPixelBufferGetBytesPerRowOfPlane")
+		vav.pbFormat = sym(cv, "CVPixelBufferGetPixelFormatType")
+		vav.attachment = sym(cv, "CVBufferCopyAttachment")
+		vav.matrixKey, vav.matrix601 = val(cv, "kCVImageBufferYCbCrMatrixKey"), val(cv, "kCVImageBufferYCbCrMatrix_ITU_R_601_4")
+		vav.cfEqual, vav.cfRelease = cf.Sym(cf.CoreFoundation(), "CFEqual"), cf.Sym(cf.CoreFoundation(), "CFRelease")
 		if p := sym(cm, "kCMTimeZero"); p != 0 {
 			vav.zero = *(*cmTime)(ffi.PtrFromC(p))
 		}
@@ -275,23 +286,31 @@ type Video struct {
 	turns  int
 	fps    float32
 	dur    time.Duration
-	poster []byte // premultiplied RGBA, until uploaded
+	poster []byte // premultiplied RGBA, until a playback frame takes over
 	posW   int
 	posH   int
 
-	ended   atomic.Bool // the end notification came
-	loop    atomic.Bool
-	closed  atomic.Bool
-	playing bool
-	atEnd   bool
-	muted   bool
-	volume  float32
-	rate    float32
-	pullTo  int64         // pull frames until then (platform.Now): a seek's frame while paused
-	seekTo  time.Duration // where the last seek went
-	cur     uintptr       // the current frame's CVPixelBuffer (retained)
-	r       *gpu.Renderer
-	posTex  gpu.TextureID
+	ended        atomic.Bool // the end notification came
+	loop         atomic.Bool
+	closed       atomic.Bool
+	playing      bool
+	atEnd        bool
+	muted        bool
+	volume       float32
+	rate         float32
+	pullTo       int64         // pull frames until then (platform.Now): a seek's frame while paused
+	seekTo       time.Duration // where the last seek went
+	cur          uintptr       // the current frame's CVPixelBuffer (retained)
+	r            *gpu.Renderer
+	posTex       gpu.TextureID
+	posEpoch     uint32
+	wake         func()
+	curW, curH   int           // stored dimensions, read only when a new buffer arrives
+	holdTex      gpu.TextureID // owned snapshot of a paused frame
+	holdW, holdH int
+	holdSpace    gpu.YUVSpace
+	holdEpoch    uint32
+	holdDirty    bool
 }
 
 // OpenVideo opens the video file at path for playing: paused at its start,
@@ -313,7 +332,10 @@ func OpenVideo(path string, o VideoOptions) (*Video, error) {
 	F := objc.F
 	pool := F.Call0(objc.PoolPush)
 	defer F.Call1(objc.PoolPop, pool)
-	v := &Video{id: nextID(), slot: slot, volume: o.Volume, rate: 1}
+	if o.Wake == nil {
+		o.Wake = platform.Wake
+	}
+	v := &Video{id: nextID(), slot: slot, volume: o.Volume, rate: 1, wake: o.Wake}
 	if v.volume <= 0 || v.volume > 1 {
 		v.volume = 1
 	}
@@ -392,7 +414,7 @@ func (v *Video) load(asset objc.ID, posterMax int) {
 	} else {
 		v.state.Store(uint32(VideoReady))
 	}
-	platform.Wake()
+	v.wake()
 }
 
 func (v *Video) loadTrack(s *loadScratch, send func(objc.ID, objc.SEL, ...uintptr) uintptr, asset objc.ID, posterMax int) error {
@@ -473,7 +495,7 @@ func cmDuration(t *cmTime) time.Duration {
 
 // Play plays the video from where it is (from its start once it has
 // ended), at its rate (SetRate). Called while it was not playing, it wakes
-// the app's windows (platform.Wake), so that a frame draws it and pulls its
+// its owning window (VideoOptions.Wake), so that a frame draws it and pulls its
 // frames even when Play came from outside a frame or an event.
 func (v *Video) Play() {
 	if v.closed.Load() {
@@ -484,7 +506,11 @@ func (v *Video) Play() {
 	}
 	objc.Send(v.player, selPlay) // at the player's defaultRate, v.rate
 	if !v.playing {
-		platform.Wake()
+		if v.holdTex != 0 {
+			v.r.FreeTexture(v.holdTex)
+			v.holdTex = 0
+		}
+		v.wake()
 	}
 	v.playing, v.pullTo = true, 0 // playing, it pulls anyway
 }
@@ -606,14 +632,21 @@ func (v *Video) frameRate() float32 {
 // video is paused or ended). While it plays it pulls the frame for now
 // first. Before a frame has played it is the poster, and before that
 // nothing (tex 0). Call it only while the video's box shows (Kit.ImageShown),
-// once per frame drawn; it allocates nothing once the poster is uploaded.
+// once per frame drawn. Uploading the poster and creating the first paused
+// snapshot may allocate; warmed frames allocate nothing.
 func (v *Video) Frame(r *gpu.Renderer, now int64) (tex gpu.TextureID, w, h int, next int64) {
 	if v.closed.Load() || r == nil {
 		return 0, 0, 0, 0
 	}
-	if v.r != r && v.posTex != 0 { // another renderer: the poster goes again
-		v.r.FreeTexture(v.posTex)
-		v.posTex = 0
+	if v.r != r {
+		if v.posTex != 0 {
+			v.r.FreeTexture(v.posTex)
+			v.posTex = 0
+		}
+		if v.holdTex != 0 {
+			v.r.FreeTexture(v.holdTex)
+			v.holdTex = 0
+		}
 	}
 	v.r = r
 	if v.State() != VideoReady {
@@ -625,23 +658,94 @@ func (v *Video) Frame(r *gpu.Renderer, now int64) (tex gpu.TextureID, w, h int, 
 		next = v.interval()
 	}
 	if v.cur != 0 {
-		if t, err := r.ImportPixelBuffer(v.cur, v.turns); err == nil {
-			w, h = int(objc.F.Call1(vav.pbW, v.cur)), int(objc.F.Call1(vav.pbH, v.cur))
-			if v.turns%2 == 1 {
-				w, h = h, w
+		w, h = v.curW, v.curH
+		if v.turns%2 == 1 {
+			w, h = h, w
+		}
+		if !v.playing && now >= v.pullTo {
+			if v.holdFrame(r) {
+				v.dropPoster()
+				return v.holdTex, w, h, next
 			}
+		}
+		if t, err := r.ImportPixelBuffer(v.cur, v.turns); err == nil {
+			v.dropPoster()
 			return t, w, h, next
 		}
 	}
-	if v.posTex == 0 && v.poster != nil {
-		v.posTex = r.NewTexture(gpu.TexRGBA8, v.posW, v.posH)
+	if v.poster != nil && (v.posTex == 0 || v.posEpoch != r.Epoch()) {
+		if v.posTex == 0 {
+			v.posTex = r.NewTexture(gpu.TexRGBA8, v.posW, v.posH)
+		}
 		r.Upload(v.posTex, 0, 0, v.posW, v.posH, v.poster, v.posW*4)
-		v.poster = nil // on the GPU now
+		v.posEpoch = r.Epoch()
 	}
 	if v.posTex != 0 {
 		return v.posTex, v.posW, v.posH, next
 	}
 	return 0, 0, 0, next
+}
+
+// Once a playback buffer can supply the picture, the initial poster is
+// redundant on both CPU and GPU. Until then it restores an emptied texture.
+func (v *Video) dropPoster() {
+	v.poster = nil
+	if v.posTex != 0 {
+		v.r.FreeTexture(v.posTex)
+		v.posTex = 0
+	}
+}
+
+// holdFrame stages a paused buffer once. Later redraws need no import or
+// Core Video call; an epoch change refills the same owned texture.
+func (v *Video) holdFrame(r *gpu.Renderer) bool {
+	if v.holdTex != 0 && !v.holdDirty && v.holdEpoch == r.Epoch() {
+		return true
+	}
+	F := objc.F
+	sp := gpu.BT709Video
+	switch uint32(F.Call1(vav.pbFormat, v.cur)) {
+	case pixFmt420v:
+	case pixFmt420f:
+		sp = gpu.BT709Full
+	default:
+		return false
+	}
+	if m := F.Call3(vav.attachment, v.cur, vav.matrixKey, 0); m != 0 {
+		if F.Call2(vav.cfEqual, m, vav.matrix601)&0xff != 0 {
+			sp -= gpu.BT709Video
+		}
+		F.Call1(vav.cfRelease, m)
+	}
+	if F.Call2(vav.pbLock, v.cur, 1) != 0 {
+		return false
+	}
+	defer F.Call2(vav.pbUnlock, v.cur, 1)
+	y, uv := F.Call2(vav.pbBase, v.cur, 0), F.Call2(vav.pbBase, v.cur, 1)
+	ys, uvs := int(F.Call2(vav.pbStride, v.cur, 0)), int(F.Call2(vav.pbStride, v.cur, 1))
+	w, h := v.curW, v.curH
+	if y == 0 || uv == 0 || w <= 0 || h <= 0 || ys < w || uvs < ((w+1)/2)*2 {
+		return false
+	}
+	if v.holdTex != 0 && (v.holdW != w || v.holdH != h || v.holdSpace != sp) {
+		r.FreeTexture(v.holdTex)
+		v.holdTex = 0
+	}
+	if v.holdTex == 0 {
+		tex, err := r.NewYUVTexture(gpu.YUVNV12, w, h, sp)
+		if err != nil {
+			return false
+		}
+		v.holdTex, v.holdW, v.holdH, v.holdSpace = tex, w, h, sp
+	}
+	im := gpu.YUVImage{
+		Y:       unsafe.Slice((*byte)(ffi.PtrFromC(y)), (h-1)*ys+w),
+		U:       unsafe.Slice((*byte)(ffi.PtrFromC(uv)), ((h+1)/2-1)*uvs+((w+1)/2)*2),
+		YStride: ys, UStride: uvs, Turns: v.turns,
+	}
+	r.StageYUV(v.holdTex, &im)
+	v.holdDirty, v.holdEpoch = false, r.Epoch()
+	return true
 }
 
 // pull takes the output's pixel buffer for host time now, if it has a new one.
@@ -662,6 +766,8 @@ func (v *Video) pull(now int64) {
 		heldBuffers.Add(1)
 	}
 	v.cur = pb
+	v.curW, v.curH = int(F.Call1(vav.pbW, pb)), int(F.Call1(vav.pbH, pb))
+	v.holdDirty = true
 	// A frame from before the seek can still come first: the seek's own is
 	// the one of the time it went to (the frame at or just before it; while
 	// playing, one of the few after it). Until it comes, a pause keeps
@@ -706,6 +812,10 @@ func (v *Video) Close() {
 	if v.posTex != 0 {
 		v.r.FreeTexture(v.posTex)
 		v.posTex = 0
+	}
+	if v.holdTex != 0 {
+		v.r.FreeTexture(v.holdTex)
+		v.holdTex = 0
 	}
 	v.poster, v.playing = nil, false
 	liveVideos.Add(-1)

@@ -2,10 +2,6 @@
 
 package platform
 
-import _ "unsafe" // go:linkname
+import "gonativeui/core"
 
-// nanotime is the runtime's monotonic clock: mach absolute time on darwin
-// (the CACurrentMediaTime base) and CLOCK_MONOTONIC on linux.
-//
-//go:linkname nanotime runtime.nanotime
-func nanotime() int64
+func nanotime() int64 { return core.Now() }

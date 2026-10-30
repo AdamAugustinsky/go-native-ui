@@ -28,6 +28,8 @@ import (
 	"reflect"
 	"sync"
 	"time"
+
+	"gonativeui/core"
 )
 
 // ErrCorrupt wraps the error Open returns for a file that is not valid JSON for
@@ -82,7 +84,7 @@ type Store[T any] struct {
 	armed  bool // the timer is running
 	err    error
 	last   []byte // the bytes on disk, to skip saves that change nothing
-	timer  *time.Timer
+	timer  *core.Timer
 
 	saveMu sync.Mutex // one save at a time, in the order they were asked for
 
@@ -122,7 +124,7 @@ func Open[T any](path string, defaults T, opt Options) (*Store[T], error) {
 		opt.Perm = 0o600
 	}
 	s := &Store[T]{path: path, opt: opt, v: clone(defaults), flat: !hasRefs(reflect.TypeFor[T]())}
-	s.timer = time.AfterFunc(time.Hour, s.fire)
+	s.timer = core.AfterFunc(time.Hour, s.fire)
 	s.timer.Stop()
 	data, err := readFile(path)
 	switch {

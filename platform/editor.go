@@ -426,6 +426,25 @@ func (m *u16map) build(b []byte) {
 	m.cp, m.n16 = cp, u
 }
 
+// rebuild reuses checkpoints before byte off, whose prefix did not change.
+func (m *u16map) rebuild(b []byte, off int) {
+	k := off / u16Block
+	p, u := blockStart(b, k), int(m.cp[k])
+	cp := m.cp[:k]
+	for p < len(b) {
+		for len(cp)*u16Block <= p {
+			cp = append(cp, uint32(u))
+		}
+		r, n := utf8.DecodeRune(b[p:])
+		u += units(r)
+		p += n
+	}
+	for len(cp)*u16Block <= len(b) {
+		cp = append(cp, uint32(u))
+	}
+	m.cp, m.n16 = cp, u
+}
+
 // units is a scalar's length in UTF-16 (an invalid byte is one unit, as
 // U+FFFD).
 func units(r rune) int {

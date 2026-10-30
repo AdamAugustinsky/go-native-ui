@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -224,4 +225,34 @@ func fnv32(s string) string {
 	h := fnv.New32a()
 	h.Write([]byte(s))
 	return fmt.Sprintf("%08x", h.Sum32())
+}
+
+func TestLoopWakeDoesNotInvalidateWindow(t *testing.T) {
+	if theWindow.open {
+		t.Skip("a window is open")
+	}
+	fd, _, errno := syscall.Syscall(syscall.SYS_EVENTFD2, 0, syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	defer syscall.Close(int(fd))
+	beforeFD := wakeFD.Swap(int32(fd))
+	defer wakeFD.Store(beforeFD)
+	loopWake.Store(false)
+	takeWake()
+	defer func() { loopWake.Store(false); takeWake() }()
+	w := &Window{efd: int(fd), q: newEventQueue()}
+	w.pfd[1].revents = pollIn
+	WakeLoop()
+	WakeLoop()
+	w.drainWake()
+	if len(w.q.ev) != 0 || loopWake.Load() {
+		t.Fatal("loop wake invalidated the window or remained pending")
+	}
+	WakeLoop()
+	Wake()
+	w.drainWake()
+	if len(w.q.ev) != 1 || w.q.ev[0].Kind != EvWake {
+		t.Fatal("a window wake was lost beside a loop wake")
+	}
 }

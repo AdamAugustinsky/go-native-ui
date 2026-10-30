@@ -1,13 +1,13 @@
 {
   "schema": 1,
   "file": "shaders.metallib",
-  "bytes": 32607,
-  "sha256": "079d0273715c915a7348cce0947dc2730549ba677bd95c7efc2c7515af69339f",
-  "source_sha256": "9f957fbb7e40e00f7b66dfe6adf666465db20f2f35cc6e390ab4096c9c774564",
+  "bytes": 32927,
+  "sha256": "6036ad02b4c81a591962f67c39d5a88072fca719ee90a989c10b1e69672b177c",
+  "source_sha256": "c9627820a2f4230f675584203ba61bd587faf40462e727ee6b825e3d45fe11be",
   "sources": [
     {
       "name": "quad",
-      "sha256": "95c0116c36e49cd26039d7f04825351f4b220ff05860e901b3489819afdae539"
+      "sha256": "96f18e586cc083aaa30eec8293c5584d8b43e26c6c433a07be4808f79261880d"
     },
     {
       "name": "backdrop",
@@ -18,7 +18,7 @@
   "sdk": "macosx 15.5",
   "target": "air64-apple-macos14.0",
   "std": "metal3.1",
-  "generated": "2026-10-30T00:33:24Z",
+  "generated": "2026-10-30T05:24:47Z",
   "generated_by": "ci",
-  "commit": "c54a2cf25a8cae54fbc38cf7e82efc166e169809"
+  "commit": "58ca07c968fa26526a6dade65469fa273e55594f"
 }

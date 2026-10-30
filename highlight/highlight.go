@@ -15,7 +15,7 @@
 // states across lines (a block comment, a heredoc, a template string), so a
 // line cannot be lexed on its own. It allocates (chroma's regexp engine works
 // on runes and makes a string per token), so run it on a worker, never in a
-// frame: rexui.CodeHighlighter does that and hands the tokens to the frame.
+// frame: rexui/mdview.MarkdownView does that and hands tokens to the frame.
 // Each rule is anchored and chroma bounds every match to 250 ms, so a
 // pathological input (an unterminated string, a 1 MB line) stays about linear
 // in its length.
@@ -105,7 +105,24 @@ func LangOf(name string) Lang {
 	if i := strings.IndexAny(name, " \t{"); i >= 0 {
 		name = name[:i]
 	}
-	name = strings.ToLower(name)
+	// All aliases are short ASCII words. Fold only the basename: paths may
+	// be arbitrarily long and do not need a temporary lowercase string.
+	name = path.Base(name)
+	var lower [16]byte
+	if len(name) > len(lower) {
+		name = path.Ext(name)
+	}
+	if len(name) > len(lower) {
+		return Plain
+	}
+	for i := range len(name) {
+		b := name[i]
+		if b >= 'A' && b <= 'Z' {
+			b += 'a' - 'A'
+		}
+		lower[i] = b
+	}
+	name = string(lower[:len(name)])
 	if l, ok := aliases[name]; ok {
 		return l
 	}

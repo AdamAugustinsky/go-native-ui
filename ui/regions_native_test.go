@@ -30,9 +30,9 @@ func TestTooltipRegions(t *testing.T) {
 	})
 	got := h.c.TooltipRegions(nil)
 	want := []TooltipRegion{
-		{[4]float32{10, 10, 110, 50}, uint64(h.c.KeyOf(a))},
-		{[4]float32{320, 200, 340, 240}, uint64(h.c.KeyOf(clipped))},
-		{[4]float32{380, 280, 400, 300}, uint64(h.c.KeyOf(edge))},
+		{Rect: [4]float32{10, 10, 110, 50}, Key: uint64(h.c.KeyOf(a))},
+		{Rect: [4]float32{320, 200, 340, 240}, Key: uint64(h.c.KeyOf(clipped))},
+		{Rect: [4]float32{380, 280, 400, 300}, Key: uint64(h.c.KeyOf(edge))},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("%d regions %+v, want %d", len(got), got, len(want))

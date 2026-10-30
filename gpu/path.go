@@ -270,6 +270,7 @@ type PathUploader interface {
 type PathMask struct {
 	up    PathUploader
 	tex   TextureID
+	key   uint64 // caller geometry key (MaskKey), 0: hash the path
 	sum   uint64
 	epoch uint32 // the uploader's Epoch when tex was filled
 	w, h  int
@@ -283,10 +284,26 @@ type PathMask struct {
 // device since (its Epoch changed), the texture is filled again from the
 // pixels kept.
 func (m *PathMask) Mask(u PathUploader, p *Path) (tex TextureID, w, h int) {
+	return m.mask(u, p, 0)
+}
+
+// MaskKey is Mask with a caller-owned geometry key: while key and u are
+// unchanged, it skips hashing p. The caller must change key whenever the
+// path changes; zero hashes the path as Mask does. Mask and Release forget
+// the key. Device recovery still uploads the retained pixels.
+func (m *PathMask) MaskKey(u PathUploader, p *Path, key uint64) (tex TextureID, w, h int) {
+	return m.mask(u, p, key)
+}
+
+func (m *PathMask) mask(u PathUploader, p *Path, key uint64) (tex TextureID, w, h int) {
 	if u == nil || p.Empty() {
 		return 0, 0, 0
 	}
-	sum := p.hash()
+	sum := m.sum
+	if key == 0 || key != m.key || m.up != u {
+		sum = p.hash()
+	}
+	m.key = key
 	if m.tex != 0 && m.up == u && m.sum == sum {
 		if ep, ok := u.(interface{ Epoch() uint32 }); ok && ep.Epoch() != m.epoch {
 			u.Upload(m.tex, 0, 0, m.w, m.h, m.pix, m.w)
@@ -306,7 +323,7 @@ func (m *PathMask) Mask(u PathUploader, p *Path) (tex TextureID, w, h int) {
 	m.r.fill(p, m.pix, w, h)
 	m.tex = u.NewTexture(TexR8, w, h)
 	u.Upload(m.tex, 0, 0, w, h, m.pix, w)
-	m.up, m.sum, m.w, m.h = u, sum, w, h
+	m.up, m.sum, m.w, m.h, m.key = u, sum, w, h, key
 	if ep, ok := u.(interface{ Epoch() uint32 }); ok {
 		m.epoch = ep.Epoch()
 	}
@@ -338,5 +355,5 @@ func (m *PathMask) Release() {
 	if f, ok := m.up.(interface{ FreeTexture(TextureID) }); ok && m.tex != 0 {
 		f.FreeTexture(m.tex)
 	}
-	m.tex, m.up, m.sum = 0, nil, 0
+	m.tex, m.up, m.sum, m.key = 0, nil, 0, 0
 }

@@ -1,6 +1,9 @@
 package platform
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 func TestTakePendingCopiesAndClears(t *testing.T) {
 	q := newEventQueue()
@@ -70,4 +73,29 @@ func TestWakeBeforeTheWindowStaysPending(t *testing.T) {
 	if !takeWake() {
 		t.Error("a Wake after the pending one was taken is pending again")
 	}
+}
+
+var benchQueue eventQueue
+
+func BenchmarkNewEventQueue(b *testing.B) {
+	for b.Loop() {
+		benchQueue = newEventQueue()
+	}
+}
+
+func TestPendingAllocatesOnlyWhenUsed(t *testing.T) {
+	q := newEventQueue()
+	q.push(Event{Kind: EvFocus})
+	if q.pend != nil {
+		t.Fatal("unused pending storage allocated")
+	}
+	q.takePending()
+	if n := testing.AllocsPerRun(100, func() { q.push(Event{Kind: EvFocus}); q.takePending() }); n != 0 {
+		t.Errorf("warmed pending: %v allocations", n)
+	}
+}
+
+func TestEventQueueFootprint(t *testing.T) {
+	q := newEventQueue()
+	t.Logf("Event: %d bytes; queue backing capacity: %d bytes", unsafe.Sizeof(Event{}), uintptr(cap(q.ev))*unsafe.Sizeof(Event{})+uintptr(cap(q.text)))
 }
