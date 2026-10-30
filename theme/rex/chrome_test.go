@@ -3,8 +3,10 @@ package rex
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
+	"gonativeui/gpu"
 	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -365,11 +367,11 @@ func TestThemeWithFieldRecoloursTheField(t *testing.T) {
 		want uint32
 	}{{0, 0xDDEEE4FF}, {1, 0x18201DFF}} {
 		own.Build(800, 600, 0.5, m.t)
-		if c := own.cells[own.ncells/2].c[0]; c != m.want {
+		if c := own.cells[own.ncells/2].Color[0]; c != m.want {
 			t.Errorf("mix %v: the recoloured field is %08X, want %08X", m.t, c, m.want)
 		}
 		stock.Build(800, 600, 0.5, m.t)
-		if c, rex := stock.cells[stock.ncells/2].c[0], rexLook.fieldAt(m.t, 0, 0, 0); c == m.want || rex == m.want {
+		if c, rex := stock.cells[stock.ncells/2].Color[0], rexLook.fieldAt(m.t, 0, 0, 0); c == m.want || rex == m.want {
 			t.Errorf("mix %v: Rex's own field took the recolouring", m.t)
 		}
 	}
@@ -388,5 +390,52 @@ func TestThemeWithFieldRecoloursTheField(t *testing.T) {
 	// the scrim over a backdrop: the one given, Rex's for the other mode
 	if sc := newLook(FieldColors{Scrim: [2]uint32{0xE6F2EA, 0}}).scrim; sc != [2]uint32{0xE6F2EA, scrimDark} || rexLook.scrim != [2]uint32{scrimLight, scrimDark} {
 		t.Errorf("scrims %06X, Rex's %06X", sc, rexLook.scrim)
+	}
+}
+
+// Replacing per-cell boxes keeps their snapped geometry, clip and opacity,
+// including fractional pane origins and dimensions during a live resize.
+func TestFillMeshMatchesCellBoxes(t *testing.T) {
+	g := newRig(t, 900, 560, 2)
+	r := Theme().Resolve(g.ts, 2, theme.Light)
+	ch := &chrome{}
+	var list gpu.DrawList
+	for _, rect := range [][4]float32{{10, 30, 410, 430}, {10.25, 30.75, 410.8, 430.1}, {10.6, 30.1, 410.2, 430.7}} {
+		for _, focus := range []float32{0, .4, .9} {
+			s := theme.Surface{Rect: rect, Focus: focus, Slot: 0}
+			build := func(mesh bool) {
+				g.c.Begin(&g.in, g.w, g.h, g.scale, 1.0/60)
+				ch.ensure(g.c, &r)
+				g.c.PushOpacity(.37)
+				theme.At(g.c, rect[0], rect[1], rect[2]-rect[0], rect[3]-rect[1])
+				g.c.Push(g.c.BoxKeyed(fl|ui.Clip, 1, nil))
+				kg := theme.KeyGen{Base: 2}
+				if mesh {
+					ch.drawFill(g.c, &r, s, &kg)
+				} else {
+					m := ch.meshes[0]
+					for _, cell := range m.cells[:m.n] {
+						theme.At(g.c, cell.r[0]-rect[0], cell.r[1]-rect[1], cell.r[2]-cell.r[0], cell.r[3]-cell.r[1])
+						g.c.NextBG4(theme.MixRGBA(cell.c[0], r.Pal.Surface|255, focus), theme.MixRGBA(cell.c[1], r.Pal.Surface|255, focus), theme.MixRGBA(cell.c[2], r.Pal.Surface|255, focus), theme.MixRGBA(cell.c[3], r.Pal.Surface|255, focus))
+						g.c.NextRadii(cell.radii[0], cell.radii[1], cell.radii[2], cell.radii[3])
+						g.c.BoxKeyed(fl|ui.DrawBackground, kg.Next(), nil)
+					}
+				}
+				g.c.Pop()
+				g.c.PopOpacity()
+				g.c.End(&list)
+			}
+			build(true)
+			got := slices.Clone(list.Quads)
+			build(false)
+			if len(got) != len(list.Quads) {
+				t.Fatalf("rect %v: %d mesh quads, %d cell quads", rect, len(got), len(list.Quads))
+			}
+			for i, q := range list.Quads {
+				if got[i] != q {
+					t.Fatalf("rect %v focus %v cell %d: mesh %+v, cells %+v", rect, focus, i, got[i], q)
+				}
+			}
+		}
 	}
 }

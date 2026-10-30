@@ -3,6 +3,7 @@ package rexui
 import (
 	"math"
 
+	"gonativeui/gpu"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -79,30 +80,26 @@ func untilNext(k *base.Kit, period int64, n int) int64 {
 	return step - k.Context().Input().Time%step
 }
 
-// stroke builds a straight line from (x0, y0) to (x1, y1) of width w with
-// round caps, in the opaque colour col, in the current parent's coordinates
-// (pixels): a chain of discs, because boxes are axis-aligned. col must be
-// opaque (overlapping discs of a translucent colour would show their
-// overlaps): ink gives a translucent colour composited over its backdrop.
-// The boxes' keys are KeyN(key, n), KeyN(key, n+1) … and the next free n is
-// returned.
+// stroke builds one round-capped segment in the current parent's pixel
+// coordinates. Its single SDF quad works at every angle without a texture.
+// It uses KeyN(key, n) and returns the next free n.
 func stroke(c *ui.Context, key ui.Key, n uint64, x0, y0, x1, y1, w float32, col uint32) uint64 {
-	dx, dy := float64(x1-x0), float64(y1-y0)
-	length := math.Hypot(dx, dy)
-	step := float64(max(w/4, 0.75))
-	segs := int(math.Ceil(length / step))
-	if segs < 1 {
-		segs = 1
+	if w <= 0 {
+		return n
 	}
-	for i := 0; i <= segs; i++ {
-		t := float64(i) / float64(segs)
-		theme.At(c, x0+float32(dx*t)-w/2, y0+float32(dy*t)-w/2, w, w)
-		c.NextBG(col)
-		c.NextRadius(w / 2)
-		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(key, n), nil)
-		n++
-	}
-	return n
+	r := w / 2
+	x, y := min(x0, x1)-r, min(y0, y1)-r
+	width, height := max(x0, x1)+r-x, max(y0, y1)+r-y
+	// The box is pixel-snapped by layout; keep the segment's fractional
+	// position in the quad so a rotating chevron moves continuously.
+	sx, sy := theme.Snap(x), theme.Snap(y)
+	theme.At(c, sx, sy, width, height)
+	c.Quad(base.Floating, ui.KeyN(key, n), gpu.Quad{
+		Rect:  [4]float32{x - sx, y - sy, x - sx + width, y - sy + height},
+		UV:    [4]float32{x0 - x, y0 - y, x1 - x, y1 - y},
+		Color: [4]uint32{col, col, col, col}, Radii: [4]float32{r}, Mode: gpu.ModeCapsule,
+	})
+	return n + 1
 }
 
 // Chevron is a chevron's centreline: the end of its first arm, its apex and

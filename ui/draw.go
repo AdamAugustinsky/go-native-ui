@@ -205,6 +205,7 @@ func (c *Context) End(list *gpu.DrawList) {
 	}
 	c.keepRich()
 	c.syncAtlas()
+	c.mesh.reset()
 }
 
 // maxOverflowRepaints is how many frames in a row that dropped glyphs (atlas
@@ -380,6 +381,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 	if b.fadeEnd > 0 {
 		c.emitFade = fadeOf(fade, [2]float32{r[2] - b.fadeEnd, r[2]})
 	}
+	c.emitMesh(l, id, cclip)
 	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
 		if c.boxes[ch].flags&floatingMask == 0 {
 			c.emit(l, ch, cclip)

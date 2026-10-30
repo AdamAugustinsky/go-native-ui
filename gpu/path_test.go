@@ -212,3 +212,40 @@ func TestPathMaskFillsAgainAfterARebuild(t *testing.T) {
 		t.Errorf("an unchanged mask allocates %v times, %d uploads", n, u.uploads)
 	}
 }
+
+func TestPathMaskGeometryKey(t *testing.T) {
+	var p Path
+	p.MoveTo(0, 0)
+	p.LineTo(10, 0)
+	p.LineTo(10, 12)
+	p.Close()
+	var m PathMask
+	u := &epochUp{}
+	tex, _, _ := m.MaskKey(u, &p, 1)
+	if n := testing.AllocsPerRun(100, func() { m.MaskKey(u, &p, 1) }); n != 0 || u.made != 1 || u.uploads != 1 {
+		t.Fatalf("cached mask: %v allocations, %d textures, %d uploads", n, u.made, u.uploads)
+	}
+	u.epoch++
+	if again, _, _ := m.MaskKey(u, &p, 1); again != tex || u.uploads != 2 {
+		t.Fatal("geometry key hid a device rebuild")
+	}
+	p.LineTo(20, 12)
+	if next, w, _ := m.MaskKey(u, &p, 2); next == tex || w != 20 || u.freed != 1 {
+		t.Fatal("new geometry did not replace the mask")
+	}
+	p.LineTo(30, 12)
+	m.Mask(u, &p)
+	if m.w != 30 || m.key != 0 {
+		t.Fatal("Mask did not rehash and forget the key")
+	}
+	v := &epochUp{}
+	m.MaskKey(v, &p, 2)
+	if v.made != 1 || v.uploads != 1 {
+		t.Fatal("new uploader reused the old texture")
+	}
+	m.Release()
+	m.MaskKey(v, &p, 2)
+	if v.made != 2 || v.uploads != 2 {
+		t.Fatal("Release kept the geometry key's texture")
+	}
+}

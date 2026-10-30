@@ -3,6 +3,7 @@ package rex
 import (
 	"math"
 
+	"gonativeui/gpu"
 	"gonativeui/theme"
 )
 
@@ -309,11 +310,6 @@ const (
 	maxBGCells = (maxNodesY - 1) * (maxNodesX - 1)
 )
 
-type bgCell struct {
-	r [4]float32
-	c [4]uint32 // TL, TR, BL, BR
-}
-
 // Field is the window background and what depends on its geometry: the node
 // grid of the background mesh and its cells (four-corner colour quads). It is
 // rebuilt when the window size, the scale or the light/dark mix changes
@@ -326,7 +322,7 @@ type Field struct {
 
 	nx, ny         int
 	nodesX, nodesY [maxNodesX]float32 // pixel positions of the mesh nodes
-	cells          [maxBGCells]bgCell
+	cells          [maxBGCells]gpu.Quad
 	ncells         int
 
 	look *look // its colours, nil: Rex's
@@ -418,9 +414,9 @@ func (f *Field) Build(w, h int, k, t float32) {
 			if i+2 == nn {
 				x1 = W
 			}
-			f.cells[f.ncells] = bgCell{
-				r: [4]float32{x0, y0, x1, y1},
-				c: [4]uint32{grid[j][i], grid[j][i+1], grid[j+1][i], grid[j+1][i+1]},
+			f.cells[f.ncells] = gpu.Quad{
+				Rect:  [4]float32{x0, y0, x1, y1},
+				Color: [4]uint32{grid[j][i], grid[j][i+1], grid[j+1][i], grid[j+1][i+1]},
 			}
 			f.ncells++
 		}
@@ -447,13 +443,17 @@ type meshCell struct {
 // 2·rad so that only they carry the rounded corners. The colours depend on
 // nothing but the rectangle and the window, so one mesh can serve any surface.
 type Mesh struct {
-	valid bool
-	rect  [4]float32
-	rad   float32
-	w, h  int
-	k, t  float32
-	n     int
-	cells [(maxMeshLines - 1) * (maxMeshLines - 1)]meshCell
+	valid     bool
+	rect      [4]float32
+	rad       float32
+	w, h      int
+	k, t      float32
+	n         int
+	cells     [(maxMeshLines - 1) * (maxMeshLines - 1)]meshCell
+	quads     [(maxMeshLines - 1) * (maxMeshLines - 1)]gpu.Quad
+	fillValid bool
+	focus     float32
+	color     uint32
 }
 
 // cut returns the grid lines between lo and hi: both ends, the corner arcs'
@@ -483,6 +483,7 @@ func (m *Mesh) Update(f *Field, r [4]float32, rad float32) {
 		return
 	}
 	m.valid, m.rect, m.rad, m.w, m.h, m.k, m.t = true, r, rad, f.w, f.h, f.k, f.t
+	m.fillValid = false
 	var xs, ys [maxMeshLines]float32
 	nxs := cut(&xs, r[0], r[2], rad, f.nodesX[:f.nx])
 	nys := cut(&ys, r[1], r[3], rad, f.nodesY[:f.ny])
@@ -516,4 +517,24 @@ func (m *Mesh) Update(f *Field, r [4]float32, rad float32) {
 			m.n++
 		}
 	}
+}
+
+// fillQuads caches the local, pixel-snapped fill and its focus blend.
+func (m *Mesh) fillQuads(focus float32, color uint32) []gpu.Quad {
+	if !m.fillValid || m.focus != focus || m.color != color {
+		m.fillValid, m.focus, m.color = true, focus, color
+		for i := 0; i < m.n; i++ {
+			cell := &m.cells[i]
+			q := gpu.Quad{Radii: cell.radii}
+			// Snap in window coordinates, as the old cell boxes did. Snapping
+			// the local offset first can shift a fractional pane's edge a pixel.
+			x, y := theme.Snap(m.rect[0]), theme.Snap(m.rect[1])
+			q.Rect = [4]float32{theme.Snap(cell.r[0]) - x, theme.Snap(cell.r[1]) - y, theme.Snap(cell.r[2]) - x, theme.Snap(cell.r[3]) - y}
+			for j, col := range cell.c {
+				q.Color[j] = theme.MixRGBA(col, color, focus)
+			}
+			m.quads[i] = q
+		}
+	}
+	return m.quads[:m.n]
 }

@@ -268,7 +268,7 @@ func TestDisclosureTurnsOnlyWhenShown(t *testing.T) {
 		// the chevron points down, as a settled open one does
 		var shapes []gpu.Quad
 		for _, q := range g.list.Quads {
-			if q.Mode == gpu.ModeShape && q.Color[0]&0xFF != 0 {
+			if q.Mode == gpu.ModeCapsule && q.Color[0]&0xFF != 0 {
 				shapes = append(shapes, q)
 			}
 		}
@@ -560,13 +560,13 @@ func TestSpinnerSteps(t *testing.T) {
 	g := motionRig(t, nil, 0)
 	g.k.ReduceMotion = false
 	period := int64(rexui.SpinnerLook.Period * 1e9)
-	// the colours of the spokes (discs of the spinners' sizes) at a time
+	// the colours of the spokes at a time
 	spin := func(at int64) []uint32 {
 		g.time = at - 16_666_667 // the rig's frame adds one frame
 		g.frame()
 		var out []uint32
 		for _, q := range g.list.Quads {
-			if q.Mode == gpu.ModeShape && q.Radii[0] > 0 && q.Rect[2]-q.Rect[0] == q.Rect[3]-q.Rect[1] && q.Rect[2]-q.Rect[0] < 12 {
+			if q.Mode == gpu.ModeCapsule {
 				out = append(out, q.Color[0])
 			}
 		}
@@ -670,5 +670,36 @@ func TestReadableGreenAndRed(t *testing.T) {
 		if got := mdview.CodeColor(highlight.Inserted, r.T); got != rexui.SuccessText.RGBA(r) {
 			t.Errorf("%v: an insertion is %08X, want SuccessText", m, got)
 		}
+	}
+}
+
+func TestStrokesUseOneQuadPerSegment(t *testing.T) {
+	open := false
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		rexui.Disclosure(g.k, "Details", &open, rexui.DisclosureOpts{})
+		rexui.Spinner(g.k, "Loading", rexui.SpinnerOpts{Still: true})
+	}))
+	count := func() int {
+		n := 0
+		for _, q := range g.list.Quads {
+			if q.Mode == gpu.ModeCapsule {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(); n != 10 {
+		t.Fatalf("%d stroke quads, want two chevron arms and eight spokes", n)
+	}
+	g.k.ReduceMotion = false
+	open = true
+	for range 20 {
+		g.frame()
+		if n := count(); n != 10 {
+			t.Fatalf("turning chevron has %d segments", n)
+		}
+	}
+	if n := testing.AllocsPerRun(50, func() { open = !open; g.frame() }); n != 0 {
+		t.Fatalf("turning strokes allocate %v times", n)
 	}
 }

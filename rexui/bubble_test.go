@@ -1,6 +1,7 @@
 package rexui_test
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
@@ -337,5 +338,45 @@ func TestBubbleCurledTail(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(20, f.frame); n != 0 {
 		t.Errorf("a frame with curled tails allocates %v times", n)
+	}
+}
+
+// tailUpload records only widget uploads, so a cached tail can be compared
+// with a fresh rasterization after switching sides or display scales.
+type tailUpload struct {
+	fakeui.Uploader
+	pixels  []byte
+	uploads int
+}
+
+func (u *tailUpload) Upload(_ gpu.TextureID, _, _, _, _ int, pixels []byte, _ int) {
+	u.uploads++
+	u.pixels = append(u.pixels[:0], pixels...)
+}
+
+func TestBubbleTailGeometryCache(t *testing.T) {
+	f := newFillRig(t)
+	var up, want tailUpload
+	f.c.SetWidgetUploader(&up)
+	var mask, fresh gpu.PathMask
+	var path gpu.Path
+	f.o.Tail, f.o.Curl = true, &mask
+	for _, v := range []struct {
+		scale float32
+		side  rexui.BubbleVariant
+	}{{2, rexui.BubbleOutgoing}, {2, rexui.BubbleIncoming}, {3, rexui.BubbleOutgoing}, {3, rexui.BubbleIncoming}, {2, rexui.BubbleOutgoing}} {
+		f.scale, f.o.Variant = v.scale, v.side
+		f.settle()
+		rexui.BubbleTailPath(&path, v.scale, v.side == rexui.BubbleIncoming)
+		fresh.Mask(&want, &path)
+		if !bytes.Equal(up.pixels, want.pixels) {
+			t.Fatalf("scale %v side %v: cached tail differs from a fresh path", v.scale, v.side)
+		}
+		uploads := up.uploads
+		f.o.Fill = 0x112233FF
+		f.frames(3)
+		if up.uploads != uploads {
+			t.Fatal("unchanged geometry or a colour change uploaded the tail again")
+		}
 	}
 }
