@@ -181,10 +181,12 @@ func (c *Context) End(list *gpu.DrawList) {
 		// are dropped (dropStaleGlyphs) instead of being submitted.
 		last := try >= emitTries-1
 		c.finalPass, c.passGen, c.glyphQuads = last, gen, c.glyphQuads[:0]
+		c.beginRegions()
 		c.emit(list, c.root, win)
 		for i := 0; i < c.nOvs; i++ { // the overlays above it, in build order
 			c.emit(list, c.ovs[i].id, win)
 		}
+		c.endRegions()
 		c.finalPass = false
 		// A full atlas resets mid-frame and invalidates the glyph entries
 		// used so far: draw the frame again against the fresh atlas.
@@ -302,7 +304,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 		return
 	}
 	r := b.rect
-	sized := r[2] > r[0] && r[3] > r[1]
+	visible := intersect(r, clip)
 
 	if b.flags&DrawShadow != 0 {
 		// Only the background's fully opaque interior hides the shadow.
@@ -349,7 +351,8 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 		}
 	}
 
-	if sized && !empty(intersect(r, clip)) {
+	if !empty(visible) {
+		c.collectRegions(id, visible)
 		bdrop := int(b.bdrop) - 1
 		if bdrop >= 0 && bdrop < c.bd.n { // the blur, its background the fallback (NextBackdrop)
 			q := gpu.Quad{Rect: r, Clip: clip, Radii: b.radii, FadeX: c.emitFade}

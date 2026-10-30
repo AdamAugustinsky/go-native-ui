@@ -1,6 +1,9 @@
 package ui
 
-import "gonativeui/platform"
+import "gonativeui/internal/uitypes"
+
+// SystemValues are the system colours and settings supplied by the app.
+type SystemValues = uitypes.SystemValues
 
 // Appearance is the system's light or dark mode and accent colour, as the app
 // hands them to the UI before each frame (platform.SystemAppearance; D32).
@@ -19,9 +22,9 @@ type appearance struct {
 	chromeDark     bool // the mode the app shows (SetChromeDark)
 	chromeDeclared bool // SetChromeDark was called
 
-	sv       platform.SystemValues // SetSystemValues
-	svSerial uint32                // the platform serial they were read at
-	svGen    uint32                // counts SetSystemValues calls
+	sv       SystemValues // SetSystemValues
+	svSerial uint32       // the platform serial they were read at
+	svGen    uint32       // counts SetSystemValues calls
 }
 
 // SetSystemAppearance gives the UI the system appearance for the next frame.
@@ -57,7 +60,7 @@ func (c *Context) ChromeDark() (dark, ok bool) { return c.ap.chromeDark, c.ap.ch
 // themes keep their own values, so an offscreen render never depends on the
 // machine and never reads AppKit from its thread. Tests and tools may give
 // one any values.
-func (c *Context) SetSystemValues(serial uint32, v *platform.SystemValues) {
+func (c *Context) SetSystemValues(serial uint32, v *SystemValues) {
 	c.ap.sv, c.ap.svSerial = *v, serial
 	c.ap.svGen++
 }
@@ -72,4 +75,4 @@ func (c *Context) SystemValuesSerial() (serial uint32, ok bool) {
 // SystemValues are what SetSystemValues last gave (zero, Known false, before
 // any call), and a generation that changes with every call. The pointer is to
 // the context's own copy: read it, do not keep it.
-func (c *Context) SystemValues() (v *platform.SystemValues, gen uint32) { return &c.ap.sv, c.ap.svGen }
+func (c *Context) SystemValues() (v *SystemValues, gen uint32) { return &c.ap.sv, c.ap.svGen }

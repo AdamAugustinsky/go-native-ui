@@ -465,3 +465,58 @@ func TestSemanticsSelectionFollowsTheValueAtTheByteBudget(t *testing.T) {
 		})
 	}
 }
+
+func TestSemanticActivationAndGeneration(t *testing.T) {
+	h := newHarness(t, 300, 200)
+	name := "first"
+	build := func(c *Context) {
+		c.NextRole(RoleButton)
+		c.NextSemName(name)
+		c.NextSize(Px(40), Px(20))
+		c.Box(Clickable, "button")
+	}
+	h.c.SetSemanticsActive(false)
+	h.frame(build)
+	if len(h.c.sems) != 0 || h.c.semA.Len() != 0 {
+		t.Fatal("inactive build recorded semantics")
+	}
+	if tree, gen := h.c.SemanticSnapshot(); tree != nil || gen != 0 {
+		t.Fatal("inactive snapshot")
+	}
+	h.c.SetSemanticsActive(true)
+	if tree, _ := h.c.SemanticSnapshot(); tree != nil {
+		t.Fatal("activation exported an inactive frame")
+	}
+	h.frame(build)
+	tree, g1 := h.c.SemanticSnapshot()
+	if tree == nil || len(tree.Nodes) != 2 || g1 == 0 {
+		t.Fatal("missing active frame")
+	}
+	h.frame(build)
+	if _, g := h.c.SemanticSnapshot(); g != g1 {
+		t.Fatal("unchanged tree changed generation")
+	}
+	name = "second"
+	h.frame(build)
+	current, g2 := h.c.SemanticSnapshot()
+	if g2 <= g1 || string(current.Text(current.Nodes[1].Name)) != "second" {
+		t.Fatal("name change was not published")
+	}
+	if string(tree.Text(tree.Nodes[1].Name)) != "first" {
+		t.Fatal("changed export overwrote the previous publication")
+	}
+	h.c.SetSemanticsActive(false)
+	h.frame(func(c *Context) { build(c); c.SetSemanticsActive(true); build(c) })
+	if len(h.c.sems) != 0 {
+		t.Fatal("activation in a build recorded a partial tree")
+	}
+	h.frame(build)
+	if tree, _ := h.c.SemanticSnapshot(); tree == nil {
+		t.Fatal("reactivation did not rebuild")
+	}
+	h.frame(build)
+	h.c.SemanticSnapshot()
+	if got := testing.AllocsPerRun(50, func() { h.frame(build); h.c.SemanticSnapshot() }); got != 0 {
+		t.Fatalf("warm semantic frame: %v allocations", got)
+	}
+}

@@ -48,7 +48,7 @@ import (
 )
 
 // Key identifies a box across frames. 0 is the nil key.
-type Key uint64
+type Key = uint64
 
 // ID names a box for the current frame: the index of its record in the box
 // pool. 0 is "no box". IDs are only meaningful between Begin and End of the

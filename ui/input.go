@@ -3,7 +3,7 @@ package ui
 import (
 	"unicode/utf8"
 
-	"gonativeui/platform"
+	"gonativeui/internal/uitypes"
 )
 
 // Mouse buttons (indices into the Input arrays).
@@ -619,7 +619,7 @@ func (in *Input) ClearFrame() {
 // 16 MiB), so that repeated supported pastes of any size reuse the storage the
 // first one grew and allocate nothing. The storage stays reserved after a
 // large paste; ReleasePaste gives it back.
-const MaxKeptPaste = platform.MaxPaste
+const MaxKeptPaste = uitypes.MaxPaste
 
 // ReservePaste makes room for a paste of up to n bytes (at most MaxKeptPaste)
 // now, so that not even the first one allocates.

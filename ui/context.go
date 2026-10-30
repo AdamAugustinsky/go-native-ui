@@ -257,10 +257,12 @@ type Context struct {
 
 	// semantics (semantics.go): the setters for the next box, and the records
 	// of this frame's boxes that have a role
-	semNext semNext
-	sems    []semRec
-	semA    core.Arena // the names and values of this frame's semantics
-	semX    semExtra   // announcements (semantics_a11y.go)
+	semTrack semTracking
+	regions  frameRegions
+	semNext  semNext
+	sems     []semRec
+	semA     core.Arena // the names and values of this frame's semantics
+	semX     semExtra   // announcements (semantics_a11y.go)
 
 	// interaction (see signal.go)
 	hotKey, scrollKey Key
@@ -573,6 +575,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 		c.bindStyles()
 	}
 	c.resetStyles()
+	c.semTrack.skip = c.semTrack.disabled
 	c.sems = c.sems[:0]
 	c.semA.Reset()
 	c.semNext = semNext{role: RoleWindow}
@@ -1004,12 +1007,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	c.nextAnchor, c.nextNudge = AnchorNone, [2]float32{}
 	b.lo, b.hi, b.self = c.nextLo, c.nextHi, c.nextSelf
 	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
-	if n := &c.semNext; n.role != RoleNone {
-		c.sems = append(c.sems, semRec{id: id, role: n.role, state: n.state, actions: n.actions, hasActions: n.hasActions,
-			name: n.name, value: n.value, rng: n.rng, hasRange: n.hasRange, pos: n.pos, hasPos: n.hasPos, level: n.level})
-		b.sem = int32(len(c.sems))
-	}
-	c.semNext = semNext{}
+	c.recordSemantics(id)
 	return id
 }
 

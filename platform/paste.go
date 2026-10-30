@@ -3,6 +3,8 @@ package platform
 import (
 	"errors"
 	"strings"
+
+	"gonativeui/internal/uitypes"
 )
 
 // The clipboard contract (phase 5, D28; images and files: phase 6, S6).
@@ -69,7 +71,7 @@ import (
 // Data the platform has to convert to PNG is read and converted within bounds
 // as well: a source over 8*MaxPaste bytes, or one that declares more than 32
 // million pixels, is refused without being decoded.
-const MaxPaste = 16 << 20
+const MaxPaste = uitypes.MaxPaste
 
 // maxClipSource is the largest image in another format (a TIFF, a DIB) that is
 // converted to PNG. The PNG that comes out is limited by MaxPaste.
