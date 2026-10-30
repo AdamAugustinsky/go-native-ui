@@ -110,7 +110,7 @@ func FuzzRangeRectsDifferential(f *testing.F) {
 				old := diffOldRunView(want)
 				for off := -1; off <= len(b)+1; off++ {
 					if x := got.CaretX(off); x != old.CaretX(off) {
-						t.Fatalf("%x line=%d off=%d indexed=%g old=%g", b, i, off, x, old.CaretX(off))
+						t.Fatalf("%x width=%g max=%d ell=%v backend=%T line=%d off=%d indexed=%g old=%g\nlines=%+v\nrun=%+v\nstops=%+v groups=%+v", b, p.Width, p.MaxLines, p.Ellipsis, lay, i, off, x, old.CaretX(off), v.Lines, want, got.carets.stops, got.carets.groups)
 					}
 				}
 			}
