@@ -134,11 +134,24 @@ type SimCheck func(*Sim) error
 // reading the previous layout may need two follow-up frames (ui's settle
 // contract). Findings may persist for at most two frames, and only while
 // another frame is already owed; static or nonconverging faults still fail.
-func SimAudit(s *Sim) error {
+func SimAudit(s *Sim) error { return simAudit(s, nil) }
+
+// SimAuditAllowing is SimAudit passing over the findings allowed accepts: an
+// app's documented exceptions (rexlook's widgettest allowances, say). Install
+// it in SimOptions.Checks in place of SimAudit.
+func SimAuditAllowing(allowed func(ui.Finding) bool) SimCheck {
+	return func(s *Sim) error { return simAudit(s, allowed) }
+}
+
+func simAudit(s *Sim, allowed func(ui.Finding) bool) error {
 	for _, v := range s.windows {
 		if !v.closed && v.frames > v.audited {
 			v.audited = v.frames
-			if f := v.a.UI.Audit(nil); len(f) > 0 {
+			f := v.a.UI.Audit(nil)
+			if allowed != nil {
+				f = slices.DeleteFunc(f, allowed)
+			}
+			if len(f) > 0 {
 				if v.a.more && v.auditPending < 2 {
 					v.auditPending++
 					continue
@@ -146,6 +159,23 @@ func SimAudit(s *Sim) error {
 				return fmt.Errorf("window %d layout: %s", v.id, f[0].String())
 			}
 			v.auditPending = 0
+		}
+	}
+	return nil
+}
+
+// SimInvariants checks each finished frame's ui invariants
+// (ui.Context.Verify: the tree's links, the keyed box cache, finite
+// rectangles, scroll offsets in their content, text-field carets and
+// selections; D-pending (ui-dst)).
+func SimInvariants(s *Sim) error {
+	for _, v := range s.windows {
+		if v.closed || v.frames <= v.verified {
+			continue
+		}
+		v.verified = v.frames
+		if err := v.a.UI.Verify(); err != nil {
+			return fmt.Errorf("window %d frame %d: %w", v.id, v.frames, err)
 		}
 	}
 	return nil

@@ -1314,3 +1314,27 @@ The theme setting is read from the portal, not from dconf's file: the file is a 
 **Cost in production:** `platform.Now` 11.20 → 11.58 ns (one atomic load), timers reuse their `time.Timer`, no allocations.
 
 **Not covered:** native AppKit delivery (activation, input methods, accessibility object identity, menus), real system sleep and driver resets, real watchers and network, arbitrary concurrent interleavings of worker goroutines (the barrier serializes them), and Windows and Linux at run time. Two isolated runs under default scheduling saw one unattributed 32 B or 112 B allocation on a warmed frame; neither recurred with one processor, and the cause (a runtime timer heap is the likely one) is not proven.
+
+## D-pending (ui-dst). A seeded simulated user, frame invariants, and assertions behind a build tag (2026-10-30)
+
+**Decision.** D89's simulator gets an input generator and per-frame invariants, in the manner of TigerBeetle's VOPR and TigerStyle and of Turso's deterministic testing of its SQLite rewrite: one u64 seed drives the run, a failure prints the seed and the command that replays it, and the same seed replays to the same trace hash.
+- **`app.SimUser`** sends one seeded action per step on the virtual 60 Hz clock: pointer moves, clicks (right, middle, double, triple), drags, wheel notches and trackpad gestures with phases and momentum, keys with modifiers and repeats, typed text in several scripts with combining marks, emoji sequences, controls and invalid UTF-8, press-and-hold replacements, compositions that commit, cancel or lose the window focus, ⌘C/⌘X/⌘V/⌘A/⌘Z with a seeded clipboard, window focus changes, resizes and scales from 1× to 3× (never below `Config.MinWidth`/`MinHeight`). It never sends `EvClose`, ⌘Q or ⌘W.
+- **`ui.Context.Verify`** checks a finished frame and allocates only for the error it returns: the tree's parent, child and sibling links; that the keyed box cache holds exactly the boxes built (keys, slots and pool agree); finite rectangles and sizes that are not inside out; every scroll offset inside `[0, content − view]`; a virtual list's first row inside its rows; and each text field built in the frame holding valid UTF-8 within `Max`, with caret and anchor on the start of a character and of a grapheme cluster. `app.SimInvariants` runs it after every step and is one of NewSim's default checks. `app.SimAuditAllowing` is `SimAudit` with an app's documented exceptions.
+- **`-tags gnuiassert`** compiles assertions in: `ui.Context.End` panics on a failed `Verify`, and `core` asserts arena spans inside the bytes in use (a span from before a reset no longer resolves silently through the capacity), reservations within a span's 32-bit range, a pool whose live and free slots add up and whose free list never grows, a table that never probes without an empty slot, and a ring with no more claimed than it holds. Without the tag, `core.Assertions` is a false constant and the checks compile away.
+- **Suites.** `TestSimUser` (`app/simtests/ui`: the scene fixture, Notes, the gallery, rexlook) and `TestPilotSimUser` (Pilot on synthetic folders) run seed 1 for 300 steps on every CI job. The scene replays twice to the same hash, and each UI target then checks D27's exact allocations on a warmed hover path. The macOS job runs `core`, `ui` and both suites again with `gnuiassert`. `GNUI_SIM_SEED`, `GNUI_SIM_SEEDS`, `GNUI_SIM_STEPS` and `GNUI_SIM_EXPLORE` select seeds, and `tools/simexplore.sh` explores random seeds.
+
+**Why not a focus invariant.** "Focus names a box that exists" does not hold by design: a focus on a key no box has is pending, for a field an opener builds next frame and for a virtual list's row scrolled out of view. The simulator found the one case that is a fault, an overlay orphaning the focus it took, and that case is fixed.
+
+**What it found.**
+- *Fixed, each with a regression:*
+  - A popup opened while nothing had focus kept the focus on its own, gone, boxes after closing (`TestPopupOpenedWithoutFocusLeavesNone`).
+  - rexui's tab close button drew its ✕ 2 pt off the centre of its circle at 2× (rexlook, seed 1).
+  - The layout audit read a capsule search field holding one character as an off-centre icon (Pilot, seed 1).
+- *Open:*
+  - Narrow-width layouts: Pilot's columns at its own minimum size, Notes' add bar, mdview's Copy button ([#44](https://github.com/AdamAugustinsky/go-native-ui/issues/44)).
+  - Layouts that take more than two frames to settle: Pilot's ⌘= zoom, the gallery's search field after a 1.5× resize ([#45](https://github.com/AdamAugustinsky/go-native-ui/issues/45)).
+- *Allowed, with reasons in the tests:* rexlook's documented icon overflow, the gallery's measured 0.5 pt disclosure nudge at 1×, and Pilot's narrow columns (#44).
+
+**Cost in production:** one pointer store per text field per frame (the buffers Verify reads, cleared in Begin); the assertions are compiled out.
+
+**Not covered:** concurrent worker interleavings (D89's barrier serializes them), native input methods and menus, hosts, and drag and drop from outside the window.

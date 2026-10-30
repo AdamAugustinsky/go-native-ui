@@ -304,6 +304,8 @@ type Context struct {
 
 	st settleState // the build's reads of the previous layout (settle.go)
 
+	vfy verifyState // what Verify keeps of the frame (verify.go)
+
 	shownWatch []shownWatch // WatchShown's boxes of this frame, checked after layout
 	// deadlines (deadline.go) are the named one-shot deadlines in force.
 	deadlines []deadline
@@ -557,6 +559,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.modalIdx = c.topModal()
 	c.claimed, c.cmdTaken, c.activated, c.altTaken = 0, 0, 0, false
 	c.fieldBuilt, c.pasteReq, c.pasteTag = false, false, 0
+	c.verifyBegin()
 	for i := 0; i < c.nCarry; i++ { // edit actions the previous frame could not give its field
 		c.in.PushEdit(c.carry[i])
 	}

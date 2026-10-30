@@ -178,6 +178,9 @@ func pilotSimMust(t testing.TB, err error) {
 	}
 }
 
+// pilotSimChecks replaces the simulator's default checks when not nil.
+var pilotSimChecks []app.SimCheck
+
 func newPilotSim(t testing.TB, seed uint64, n int, render ...bool) (*app.Sim, *simPilot) {
 	t.Helper()
 	// ReadMemStats is process-wide. Workers already run serially at the
@@ -192,7 +195,7 @@ func newPilotSim(t testing.TB, seed uint64, n int, render ...bool) (*app.Sim, *s
 	iconStyle = func() uint64 { return 0 }
 	baseline := runtime.NumGoroutine()
 	b := &simPilot{n: n}
-	s, err := app.NewSim(Config(), tw, th, 1, b, app.SimOptions{Seed: seed, Render: len(render) > 0 && render[0]})
+	s, err := app.NewSim(Config(), tw, th, 1, b, app.SimOptions{Seed: seed, Render: len(render) > 0 && render[0], Checks: pilotSimChecks})
 	pilotSimMust(t, err)
 	t.Cleanup(func() {
 		s.Close()

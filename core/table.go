@@ -52,6 +52,11 @@ func (t *Table) slot(k uint64) int { return int((k * 0x9E3779B97F4A7C15) >> t.sh
 
 // insert assumes there is room.
 func (t *Table) insert(k uint64, v uint32) {
+	if Assertions {
+		// An empty slot ends every probe run: without one the loops below
+		// would never end.
+		Assert(t.n < len(t.slots) && t.n <= t.limit, "table: insert without an empty slot")
+	}
 	mask := len(t.slots) - 1
 	i := t.slot(k)
 	for t.slots[i].val != 0 {
@@ -94,6 +99,9 @@ func (t *Table) Clear() {
 
 // Get returns the value stored for k.
 func (t *Table) Get(k uint64) (uint32, bool) {
+	if Assertions {
+		Assert(t.n <= t.limit && t.limit < len(t.slots), "table: no empty slot ends a probe")
+	}
 	mask := len(t.slots) - 1
 	for i := t.slot(k); t.slots[i].val != 0; i = (i + 1) & mask {
 		if t.slots[i].key == k {

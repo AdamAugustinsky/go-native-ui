@@ -432,7 +432,18 @@ func (c *Context) overlayFocus() {
 	for i := c.nOvPrev - 1; i >= 0; i-- {
 		p := &c.ovPrev[i]
 		b := &c.boxes[p.id]
-		if b.lastFrame == c.frame || p.kind == OverlayTooltip || b.savedFocus == 0 {
+		if b.lastFrame == c.frame || p.kind == OverlayTooltip {
+			continue
+		}
+		if b.savedFocus == 0 {
+			// It opened with nothing focused: the focus it took (its root or
+			// a box in it, all built last frame only) goes with it, rather
+			// than naming a box that no longer exists (D-pending (ui-dst)). A
+			// pending focus elsewhere stays.
+			if v, ok := c.table.Get(uint64(c.focusKey)); ok && c.focusKey != 0 && c.boxes[v].lastFrame != c.frame && int(c.boxes[v].ovl) == i+1 {
+				c.focusKey = 0
+				c.animating = true
+			}
 			continue
 		}
 		if !c.builtThisFrame(c.focusKey) {
