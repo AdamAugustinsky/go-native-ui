@@ -219,6 +219,8 @@ func FuzzImageOrientation(f *testing.F) {
 	f.Add([]byte{}, byte(0), byte(0))
 	for o := 1; o <= 8; o++ {
 		f.Add(withOrientation(encJPEG(f, quadrants(3, 5), 90), o), byte(3), byte(5))
+		meta := withOrientation([]byte{0xff, 0xd8, 0xff, 0xd9}, o)
+		f.Add(meta[12:len(meta)-2], byte(3), byte(5))
 	}
 	f.Add([]byte("II\x2a\x00\x08\x00\x00\x00\x00\x00"), byte(7), byte(9))
 	f.Fuzz(func(t *testing.T, b []byte, width, height byte) {
@@ -240,44 +242,49 @@ func FuzzImageOrientation(f *testing.F) {
 			}
 		}
 		before := bytes.Clone(base.Pix)
-		for o := 1; o <= 8; o++ {
-			m := Orient(base, o)
-			ow, oh := w, h
-			if o >= 5 {
-				ow, oh = h, w
-			}
-			if m.Bounds().Dx() != ow || m.Bounds().Dy() != oh {
-				t.Fatal("orientation dimensions")
-			}
-			inverse := o
-			if o == 6 {
-				inverse = 8
-			}
-			if o == 8 {
-				inverse = 6
-			}
-			back := Orient(m, inverse)
-			for y := 0; y < h; y++ {
-				for x := 0; x < w; x++ {
-					if back.At(back.Bounds().Min.X+x, back.Bounds().Min.Y+y) != base.At(x+2, y+3) {
-						t.Fatalf("orientation %d inverse differs", o)
+		rgba := image.NewRGBA(base.Rect)
+		draw.Draw(rgba, rgba.Rect, base, base.Rect.Min, draw.Src)
+		rgbaBefore := bytes.Clone(rgba.Pix)
+		for _, src := range []image.Image{base, rgba} {
+			for o := 1; o <= 8; o++ {
+				m := Orient(src, o)
+				ow, oh := w, h
+				if o >= 5 {
+					ow, oh = h, w
+				}
+				if m.Bounds().Dx() != ow || m.Bounds().Dy() != oh {
+					t.Fatal("orientation dimensions")
+				}
+				inverse := o
+				if o == 6 {
+					inverse = 8
+				}
+				if o == 8 {
+					inverse = 6
+				}
+				back := Orient(m, inverse)
+				for y := 0; y < h; y++ {
+					for x := 0; x < w; x++ {
+						if back.At(back.Bounds().Min.X+x, back.Bounds().Min.Y+y) != src.At(x+2, y+3) {
+							t.Fatalf("orientation %d inverse differs", o)
+						}
 					}
 				}
-			}
-			// Generic conversion cannot preserve hidden RGB of zero-alpha
-			// pixels; compare RGBA values, which describe visible colour.
-			generic := Orient(rgbaReference{base}, o)
-			for y := 0; y < oh; y++ {
-				for x := 0; x < ow; x++ {
-					a := color.NRGBAModel.Convert(m.At(m.Bounds().Min.X+x, m.Bounds().Min.Y+y)).(color.NRGBA)
-					c := color.NRGBAModel.Convert(generic.At(generic.Bounds().Min.X+x, generic.Bounds().Min.Y+y)).(color.NRGBA)
-					if a != c {
-						t.Fatalf("orientation %d generic differs", o)
+				// Compare the typed fast paths with the generic image path in
+				// the latter's NRGBA output model.
+				generic := Orient(rgbaReference{src}, o)
+				for y := 0; y < oh; y++ {
+					for x := 0; x < ow; x++ {
+						a := color.NRGBAModel.Convert(m.At(m.Bounds().Min.X+x, m.Bounds().Min.Y+y)).(color.NRGBA)
+						c := color.NRGBAModel.Convert(generic.At(generic.Bounds().Min.X+x, generic.Bounds().Min.Y+y)).(color.NRGBA)
+						if a != c {
+							t.Fatalf("orientation %d generic differs", o)
+						}
 					}
 				}
 			}
 		}
-		if !bytes.Equal(base.Pix, before) {
+		if !bytes.Equal(base.Pix, before) || !bytes.Equal(rgba.Pix, rgbaBefore) {
 			t.Fatal("Orient changed source")
 		}
 	})

@@ -19,6 +19,19 @@ func FuzzWebPDecoders(f *testing.F) {
 	for _, b := range [][]byte{nil, []byte("RIFF\x04\x00\x00\x00WEBP"), lossless, webpLossyAlpha, webpLossyAnim, webpAnimation(8, 8, 4, 30, 0), zeroPNG(3, 5), zeroJPEG(3, 5), zeroGIF(3, 5)} {
 		f.Add(b)
 	}
+	largePNG := zeroPNG(1, 1)
+	binary.BigEndian.PutUint32(largePNG[16:], 10241)
+	binary.BigEndian.PutUint32(largePNG[20:], 10240)
+	f.Add(fuzzPNGChecksums(largePNG))
+	largeGIF := zeroGIF(1, 1)
+	binary.LittleEndian.PutUint16(largeGIF[6:], 65535)
+	binary.LittleEndian.PutUint16(largeGIF[8:], 65535)
+	f.Add(largeGIF)
+	largeWebP := webpAnimation(1, 1, 1, 30, 0)
+	for i := 24; i < 30; i++ {
+		largeWebP[i] = 255
+	}
+	f.Add(largeWebP)
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 64<<10 {
 			t.Skip()
