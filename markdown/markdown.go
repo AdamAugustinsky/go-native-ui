@@ -420,6 +420,11 @@ func (c *conv) table(t *east.Table, at nest) {
 	for r := t.FirstChild(); r != nil; r = r.NextSibling() {
 		col := uint16(0)
 		for cell := r.FirstChild(); cell != nil; cell = cell.NextSibling() {
+			// Goldmark pads short rows with synthetic cells without a source
+			// position. They belong to this row, not the start of the document.
+			if cell.Lines().Len() == 0 {
+				cell.SetPos(r.Pos())
+			}
 			c.leaf(cell, Block{Kind: TableCell, Row: row, Col: col, Number: base}, at)
 			col++
 		}

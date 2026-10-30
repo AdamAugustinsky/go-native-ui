@@ -26,8 +26,14 @@ func (cb *CBLC) parseIndexSubTables(src []byte) error {
 		}
 		sizeSubtables := make([]BitmapSubtable, len(subtables.Subtables))
 		for j, subtable := range subtables.Subtables {
+			if subtable.FirstGlyph > subtable.LastGlyph {
+				return fmt.Errorf("invalid bitmap glyph range %d..%d", subtable.FirstGlyph, subtable.LastGlyph)
+			}
 			numGlyphs := int(subtable.LastGlyph) - int(subtable.FirstGlyph) + 1
 			subtableStart := start + int(subtable.additionalOffsetToIndexSubtable)
+			if subtableStart < start || subtableStart > len(src) {
+				return fmt.Errorf("bitmap subtable offset %d outside table of length %d", subtableStart, len(src))
+			}
 
 			sizeSubtables[j].FirstGlyph = subtable.FirstGlyph
 			sizeSubtables[j].LastGlyph = subtable.LastGlyph
