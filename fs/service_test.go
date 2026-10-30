@@ -737,7 +737,7 @@ func TestServiceContentDebounceDoesNotWakeUI(t *testing.T) {
 
 func TestServicePoolBoundsExceptionalListings(t *testing.T) {
 	s := &Service{slotOf: make(map[*Listing]int32)}
-	l, slot := s.getListingLocked()
+	l, slot := s.getListingLocked(0)
 	l.Entries = make([]Entry, 1_000_000)
 	l.Names = make([]byte, 16_000_000)
 	l.Order = make([]uint32, 1_000_000)
@@ -747,7 +747,7 @@ func TestServicePoolBoundsExceptionalListings(t *testing.T) {
 	}
 	// A repeatedly used large working set is learned, then reused without allocations.
 	for range 10 {
-		l, slot = s.getListingLocked()
+		l, slot = s.getListingLocked(0)
 		if cap(l.Entries) < 100_000 {
 			l.Entries = make([]Entry, 100_000)
 		} else {
@@ -755,11 +755,11 @@ func TestServicePoolBoundsExceptionalListings(t *testing.T) {
 		}
 		s.Release(l, s.lease[slot])
 	}
-	if n := testing.AllocsPerRun(20, func() { l, slot = s.getListingLocked(); l.Entries = l.Entries[:100_000]; s.Release(l, s.lease[slot]) }); n != 0 {
+	if n := testing.AllocsPerRun(20, func() { l, slot = s.getListingLocked(0); l.Entries = l.Entries[:100_000]; s.Release(l, s.lease[slot]) }); n != 0 {
 		t.Fatalf("warm large working set: %v allocs", n)
 	}
 	for range 12 {
-		l, slot = s.getListingLocked()
+		l, slot = s.getListingLocked(0)
 		l.Entries = append(l.Entries, Entry{})
 		s.Release(l, s.lease[slot])
 	}
@@ -809,7 +809,7 @@ func TestServicePoolIdleReclaimsLargeWorkingSet(t *testing.T) {
 	defer s.Close()
 	for range 8 {
 		s.mu.Lock()
-		l, slot := s.getListingLocked()
+		l, slot := s.getListingLocked(0)
 		if cap(l.Entries) < 400_000 {
 			l.Entries = make([]Entry, 400_000)
 		} else {

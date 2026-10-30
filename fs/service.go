@@ -439,15 +439,25 @@ func (s *Service) IgnoredReleases() uint64 {
 	return s.ignored
 }
 
-// getListingLocked takes a reset Listing from the pool and leases it.
+// getListingLocked takes a reset Listing from the pool and leases it: the
+// smallest that already holds want entries, else the largest, so a relist of
+// a big folder does not regrow small buffers while big ones sit free.
 // s.mu must be held.
-func (s *Service) getListingLocked() (*Listing, int32) {
+func (s *Service) getListingLocked(want int) (*Listing, int32) {
 	s.leaseSeq++
 	if s.leaseSeq == 0 {
 		s.leaseSeq = 1
 	}
 	if n := len(s.free); n > 0 {
-		slot := s.free[n-1]
+		best := n - 1
+		for i := range s.free {
+			b, c := cap(s.all[s.free[best]].Entries), cap(s.all[s.free[i]].Entries)
+			if c >= want && (b < want || c < b) || b < want && c > b {
+				best = i
+			}
+		}
+		slot := s.free[best]
+		s.free[best] = s.free[n-1]
 		s.free = s.free[:n-1]
 		s.busy[slot] = true
 		s.lease[slot] = s.leaseSeq
@@ -651,7 +661,11 @@ func (s *Service) worker(i int) {
 		path, key, desc, req := st.path, st.key, st.desc, st.req
 		s.seq++
 		startSeq := s.seq
-		l, slot := s.getListingLocked()
+		want := 0 // a relist expects about as many entries as the last listing
+		if st.latest >= 0 && st.latestPath == path {
+			want = len(s.all[st.latest].Entries)
+		}
+		l, slot := s.getListingLocked(want)
 		s.mu.Unlock()
 
 		// The directory's mtime before the listing begins, whatever the
