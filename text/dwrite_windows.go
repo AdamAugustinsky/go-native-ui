@@ -743,8 +743,8 @@ func (s *System) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	return e
 }
 
-// AtlasGeneration changes when the atlas is reset because it is full: every
-// page is then cleared and all GlyphEntries are stale.
+// AtlasGeneration changes when a full atlas page is recycled. Earlier
+// GlyphEntries may be stale; other pages keep their glyphs and pixels.
 func (s *System) AtlasGeneration() uint32 { return s.atlas.gen }
 
 func (s *System) setRun(fc *faceEnt, gid uint16) {
@@ -972,7 +972,8 @@ func (s *System) Dirty(p int) (x, y, w, h int, pixels []byte, stride int, ok boo
 	return s.atlas.dirtyRegion(p)
 }
 
-// ClearDirty marks page p as uploaded.
+// ClearDirty consumes the region returned by Dirty. Repeat Dirty and
+// ClearDirty until the page has no pending regions.
 func (s *System) ClearDirty(p int) { s.atlas.clearDirty(p) }
 
 // DirtyAll marks every atlas page changed in full, so the next Dirty of each

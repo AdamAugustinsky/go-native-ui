@@ -131,7 +131,11 @@ func (c *Context) syncAtlas() {
 	})
 	for p := 0; p < c.sh.Pages(); p++ {
 		t := c.pageTexture(p)
-		if x, y, w, h, pix, stride, ok := c.sh.Dirty(p); ok {
+		for {
+			x, y, w, h, pix, stride, ok := c.sh.Dirty(p)
+			if !ok {
+				break
+			}
 			uploaded := c.pageUploaded
 			if c.shared != nil {
 				uploaded = c.shared.uploaded

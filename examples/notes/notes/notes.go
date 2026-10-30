@@ -242,7 +242,7 @@ func (n *Notes) Init(a *app.App) error {
 	a.SetMenu(n.model) // the native menu bar on macOS
 	n.addIcons()
 	a.UI.Reserve(2048)
-	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
+	a.Text.ReserveRuns(8192, 128<<10, 512<<10)
 	return nil
 }
 
