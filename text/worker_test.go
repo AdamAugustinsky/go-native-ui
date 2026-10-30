@@ -313,3 +313,34 @@ func TestPrefetchScrollAllocatesNothing(t *testing.T) {
 		}
 	})
 }
+
+// Warm runs its function once on each worker and returns when all have; a
+// second Warm runs the new function; after Close it returns at once.
+func TestPrefetchWarmRunsOnEveryWorker(t *testing.T) {
+	p, err := NewPrefetcher(3, 8, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 1; round <= 2; round++ {
+		var n atomic.Int32
+		p.Warm(func(w *Shaper) {
+			var out ShapedRun
+			defer out.Close()
+			if !w.Shape(FontDesc{SizePt: 13, Scale: 2, Weight: 400}, []byte("Ωmega warm"), &out) {
+				t.Error("warm shape failed")
+			}
+			n.Add(1)
+		})
+		if n.Load() != 3 {
+			t.Fatalf("round %d: Warm ran on %d workers, want 3", round, n.Load())
+		}
+	}
+	p.Close()
+	done := make(chan struct{})
+	go func() { p.Warm(func(*Shaper) { t.Error("warm after Close ran") }); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Warm after Close blocked")
+	}
+}

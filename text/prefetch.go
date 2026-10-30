@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gonativeui/core"
@@ -62,6 +63,10 @@ type Prefetcher struct {
 	armed     bool
 	submitted time.Time // the last request
 	trim      uint32    // incremented when the workers should release their shapers
+
+	warm     func(*Shaper) // Warm's function, run by each worker on its shaper
+	warmGen  atomic.Uint32 // incremented by Warm
+	warmWait sync.WaitGroup
 }
 
 // NewPrefetcher starts workers (clamped to 1..8), each on its own OS thread,
@@ -288,6 +293,53 @@ func (p *Prefetcher) idle() {
 	}
 }
 
+// Warm has every worker run fn on its own shaper and waits until they have;
+// a worker that later remakes its shaper (after idling) runs fn again first.
+// fn shapes what the work will need (fonts, scripts), so that the plans and
+// faces a worker builds on first use are made now rather than during a
+// measured stretch. fn runs on the workers' threads and must not call the
+// Prefetcher. Not under a simulation (its workers run only when it steps).
+func (p *Prefetcher) Warm(fn func(*Shaper)) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.warm = fn
+	p.warmWait.Add(len(p.park))
+	p.warmGen.Add(1)
+	p.mu.Unlock()
+	for _, park := range p.park {
+		park.Unpark()
+	}
+	p.warmWait.Wait()
+}
+
+// warmed runs Warm's function on w if the worker has not run the latest one
+// (gen is the generation it ran), acknowledging it; it returns the new
+// generation.
+func (p *Prefetcher) warmed(w *Shaper, gen uint32) uint32 {
+	cur := p.warmGen.Load()
+	if cur == gen {
+		return gen
+	}
+	p.runWarm(w)
+	for ; gen != cur; gen++ {
+		p.warmWait.Done() // one Add per worker per Warm
+	}
+	return cur
+}
+
+// runWarm runs Warm's function, if any, on w.
+func (p *Prefetcher) runWarm(w *Shaper) {
+	p.mu.Lock()
+	fn := p.warm
+	p.mu.Unlock()
+	if fn != nil && w != nil {
+		fn(w)
+	}
+}
+
 // take claims a queued job, or returns -1 and the release count.
 func (p *Prefetcher) take() (int, uint32) {
 	p.mu.Lock()
@@ -325,8 +377,14 @@ func (p *Prefetcher) worker(index int, started chan<- error) {
 	if !p.park[index].StartSimWorker() {
 		return
 	}
-	var trimmed uint32
+	var trimmed, warmed uint32
+	defer func() { // a closed Prefetcher's Warm does not wait for this worker
+		for ; warmed != p.warmGen.Load(); warmed++ {
+			p.warmWait.Done()
+		}
+	}()
 	for {
+		warmed = p.warmed(w, warmed)
 		i, trim := p.take()
 		if i < 0 {
 			if trim != trimmed && w != nil {
@@ -343,6 +401,8 @@ func (p *Prefetcher) worker(index int, started chan<- error) {
 		if w == nil {
 			if w, err = NewShaper(); err != nil {
 				w = nil
+			} else {
+				p.runWarm(w) // a new shaper warms again
 			}
 		}
 		ok := w != nil && w.Shape(j.desc, j.name, &j.result)

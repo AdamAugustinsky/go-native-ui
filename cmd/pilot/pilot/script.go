@@ -3,6 +3,7 @@ package pilot
 import (
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"gonativeui/fs"
@@ -401,6 +402,9 @@ func (b *Bench) Build(c *ui.Context) {
 	if f := b.k.Theme().Font; b.s.synth != nil && f != b.primed {
 		b.primed = f
 		primeNames(b.a.Text, b.k.Theme())
+		if b.shapes != nil {
+			warmWorkers(b.shapes, b.a.Text, b.k.Theme())
+		}
 	}
 }
 
@@ -409,26 +413,8 @@ func (b *Bench) Build(c *ui.Context) {
 // style's, not one of the five), with every digit and character a row adds to
 // it.
 func primeNames(ts *text.System, r *theme.Resolved) {
-	var fonts [theme.NumTextStyles + 6]text.FontKey
-	n := 0
-	add := func(k text.FontKey) {
-		for _, f := range fonts[:n] {
-			if f == k {
-				return
-			}
-		}
-		fonts[n] = k
-		n++
-	}
-	f := r.Font
-	for _, k := range [...]text.FontKey{f.UI, f.UISemi, f.Small, f.Mono, f.MonoBold} {
-		add(k)
-	}
-	for i := range r.Styles {
-		add(r.Styles[i].Font)
-	}
 	var buf []byte
-	for _, k := range fonts[:n] {
+	for _, k := range rowFonts(r) {
 		for _, name := range synthNames {
 			buf = append(append(buf[:0], name...), "_0123456789.txt"...)
 			v := ts.Run(ts.Shape(k, buf))
@@ -439,6 +425,48 @@ func primeNames(ts *text.System, r *theme.Resolved) {
 			}
 		}
 	}
+}
+
+// rowFonts lists, once each, the fonts the rows may be drawn in.
+func rowFonts(r *theme.Resolved) []text.FontKey {
+	fonts := make([]text.FontKey, 0, theme.NumTextStyles+5)
+	add := func(k text.FontKey) {
+		if !slices.Contains(fonts, k) {
+			fonts = append(fonts, k)
+		}
+	}
+	f := r.Font
+	for _, k := range [...]text.FontKey{f.UI, f.UISemi, f.Small, f.Mono, f.MonoBold} {
+		add(k)
+	}
+	for i := range r.Styles {
+		add(r.Styles[i].Font)
+	}
+	return fonts
+}
+
+// warmWorkers has each name worker shape the synthetic names in the row
+// fonts, as primeNames does on the UI thread: a worker's first shape of a
+// script in a face builds the face and the shaper's plan (on the Go text
+// engine, CI saw a Greek name's plan on a worker in a measured window).
+func warmWorkers(p *text.Prefetcher, ts *text.System, r *theme.Resolved) {
+	var descs []text.FontDesc
+	for _, k := range rowFonts(r) {
+		if d, ok := ts.FontDescription(k); ok {
+			descs = append(descs, d)
+		}
+	}
+	p.Warm(func(w *text.Shaper) {
+		var out text.ShapedRun
+		defer out.Close()
+		var buf []byte
+		for _, d := range descs {
+			for _, name := range synthNames {
+				buf = append(append(buf[:0], name...), "_0123456789.txt"...)
+				w.Shape(d, buf, &out)
+			}
+		}
+	})
 }
 
 // UsePlatformClipboard makes the session copy to and paste from the system
