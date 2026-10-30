@@ -511,7 +511,14 @@ func runPilotSim(t *testing.T, seed uint64, hours time.Duration) uint64 {
 			pilotSimHide(t, s)
 			_, err = s.Idle(time.Minute, 0)
 			pilotSimMust(t, err)
-			floor, err := s.CheckMemory(app.SimMemory{HeapLive: baseline.HeapLive + 16<<20, RunGlyphs: text.MaxCachedGlyphs, RunText: text.MaxCachedTextBytes, Subsystems: map[string]int{"0/listing-pool": 8 << 20, "0/pane-0": 1 << 20, "0/pane-1": 1 << 20}})
+			// The fonts the names needed stay loaded. CoreText and DirectWrite
+			// keep them outside the Go heap; the Go text engine (Linux) parses
+			// them into it, and a CJK fallback alone is some 16 MiB of CFF.
+			slack := uint64(16 << 20)
+			if runtime.GOOS == "linux" {
+				slack += 24 << 20
+			}
+			floor, err := s.CheckMemory(app.SimMemory{HeapLive: baseline.HeapLive + slack, RunGlyphs: text.MaxCachedGlyphs, RunText: text.MaxCachedTextBytes, Subsystems: map[string]int{"0/listing-pool": 8 << 20, "0/pane-0": 1 << 20, "0/pane-1": 1 << 20}})
 			if err != nil {
 				t.Fatalf("%v\nbaseline heap %d, subsystems %v; now %v\nlargest in use:\n%s", err, baseline.HeapLive, baseline.Subsystems, floor.Subsystems, heapInUse(12))
 			}
