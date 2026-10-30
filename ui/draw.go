@@ -304,6 +304,7 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 		return
 	}
 	r := b.rect
+	sized := r[2] > r[0] && r[3] > r[1]
 	visible := intersect(r, clip)
 
 	if b.flags&DrawShadow != 0 {
