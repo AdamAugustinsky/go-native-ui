@@ -6,6 +6,9 @@ package text
 // It avoids building a RunView when a caller needs only the width.
 func (s *System) ShapeInfo(f FontKey, utf8 []byte) (RunRef, float32, uint32) {
 	r := s.Shape(f, utf8)
+	if r == overRunRef && s.runs.overOK {
+		return r, s.runs.overE.advance, s.runs.gen
+	}
 	if r == 0 || int(r) > len(s.runs.ents) {
 		return r, 0, s.runs.gen
 	}
