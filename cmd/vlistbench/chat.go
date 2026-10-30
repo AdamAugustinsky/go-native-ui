@@ -185,7 +185,7 @@ func (ch *chat) Init(a *app.App) error {
 	ch.a = a
 	a.UI.Reserve(4096)
 	a.Text.ReserveParas(text.ParaBudget{Paras: 4096, Glyphs: 1 << 18, Text: 1 << 18})
-	a.Text.ReserveRuns(8192, 128<<10, 512<<10)
+	a.Text.ReserveRuns(text.WorkingSetRuns, text.WorkingSetGlyphs, text.WorkingSetTextBytes)
 	return nil
 }
 

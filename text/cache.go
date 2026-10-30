@@ -62,6 +62,15 @@ const (
 	MaxCachedTextBytes = defaultMaxText
 )
 
+// An app's usual working set of runs, glyphs and source bytes: ReserveRuns
+// with them sets aside about 2.4 MiB, and the cache grows past them, rarely,
+// up to the MaxCached limits.
+const (
+	WorkingSetRuns      = 8192
+	WorkingSetGlyphs    = 128 << 10
+	WorkingSetTextBytes = 512 << 10
+)
+
 func newRunCache() *runCache {
 	return &runCache{
 		table:     make([]int32, 1024),

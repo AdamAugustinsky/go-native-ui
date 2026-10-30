@@ -28,6 +28,7 @@ import (
 	"gonativeui/platform"
 	"gonativeui/rexui"
 	"gonativeui/rexui/catalog"
+	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
@@ -259,7 +260,7 @@ func (g *Gallery) Init(a *app.App) error {
 	g.k.Materials = a.Win != nil && a.Win.HasMaterials()
 	a.SetMenu(g.model) // the native menu bar on macOS
 	a.UI.Reserve(8192)
-	a.Text.ReserveRuns(8192, 128<<10, 512<<10)
+	a.Text.ReserveRuns(text.WorkingSetRuns, text.WorkingSetGlyphs, text.WorkingSetTextBytes)
 	return nil
 }
 

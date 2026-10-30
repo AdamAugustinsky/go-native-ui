@@ -93,7 +93,7 @@ func newDoc() *doc {
 func (d *doc) Init(a *app.App) error {
 	d.k = widget.NewKit(a.UI, a.Text, rex.Theme())
 	a.UI.Reserve(256)
-	a.Text.ReserveRuns(8192, 128<<10, 512<<10)
+	a.Text.ReserveRuns(text.WorkingSetRuns, text.WorkingSetGlyphs, text.WorkingSetTextBytes)
 	return nil
 }
 

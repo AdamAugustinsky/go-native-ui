@@ -33,6 +33,7 @@ import (
 	"gonativeui/img"
 	"gonativeui/platform"
 	"gonativeui/rexui"
+	"gonativeui/text"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget"
@@ -230,7 +231,7 @@ func (pl *Pilot) Init(a *app.App) error {
 	pl.bk.SetMenu(m) // the shortcuts, and the zoom the model's commands do
 	a.SetMenu(m)     // the macOS menu bar
 	a.UI.Reserve(4096)
-	a.Text.ReserveRuns(8192, 128<<10, 512<<10)
+	a.Text.ReserveRuns(text.WorkingSetRuns, text.WorkingSetGlyphs, text.WorkingSetTextBytes)
 
 	deadline := time.NewTimer(pl.opt.Wait)
 	defer deadline.Stop()
