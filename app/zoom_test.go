@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"fmt"
 	"image"
 	"math"
 	"os"
@@ -533,8 +534,8 @@ func TestZoomKeepsAtMostFourFontSets(t *testing.T) {
 	fresh, _ := openZoomApp(t, 900, 600, 2, &zoomApp{m: newZoomApp(t).m, noList: true})
 	fresh.SetZoom(o.Zoom())
 	frames(fresh, 3)
-	if want := mustFrame(fresh).Pix; string(got) != string(want) {
-		t.Error("the window that went through 100 levels draws differently from a fresh one at the same zoom")
+	if want := mustFrame(fresh); string(got) != string(want.Pix) {
+		t.Errorf("the window that went through 100 levels draws differently from a fresh one at the same zoom: %s", pixelDiff(got, want.Pix, want.Stride))
 	}
 	if inkless(got) {
 		t.Error("nothing is drawn at the current zoom")
@@ -553,6 +554,18 @@ func slicesContain(l []float32, v float32) bool {
 func mustFrame(o *app.Offscreen) *image.RGBA {
 	img, _ := o.Frame()
 	return img
+}
+
+// pixelDiff describes where two frames of the same size differ.
+func pixelDiff(a, b []byte, stride int) string {
+	n, x0, y0, x1, y1 := 0, 1<<30, 1<<30, -1, -1
+	for i := 0; i+3 < len(a) && i+3 < len(b); i += 4 {
+		if a[i] != b[i] || a[i+1] != b[i+1] || a[i+2] != b[i+2] || a[i+3] != b[i+3] {
+			x, y := i%stride/4, i/stride
+			n, x0, y0, x1, y1 = n+1, min(x0, x), min(y0, y), max(x1, x), max(y1, y)
+		}
+	}
+	return fmt.Sprintf("%d pixels in x %d..%d, y %d..%d", n, x0, x1, y0, y1)
 }
 
 // inkless reports whether the frame is one colour.
