@@ -1,6 +1,7 @@
 package mdview
 
 import (
+	"hash/maphash"
 	"strconv"
 
 	"gonativeui/highlight"
@@ -14,33 +15,35 @@ import (
 
 // MarkdownView is the state Markdown and CodeBlock keep for a window: the
 // style tables (made again when the scale or the light/dark mix changes),
-// the code blocks' sideways scroll states, and the worker that highlights
-// code. Keep one per window, next to the transcript's model; the zero value
-// is ready. It belongs to the window's UI thread.
+// the code blocks' bounded sideways scroll states, and highlighting jobs.
+// Keep one per window, next to the transcript's model; the zero value is
+// ready. It belongs to the UI thread; call Close when the window closes.
 type MarkdownView struct {
-	made    bool
-	scale   float32
-	t       float32
-	size    float32
-	mono    text.FontKey
-	line    float32 // a code line's height in pixels
-	body    ui.RichStyles
-	heads   [3]ui.RichStyles
-	th      ui.RichStyles
-	code    ui.RichStyles
-	hl      highlighter
-	scroll  map[ui.Key]*base.ScrollState
-	spans   []ui.Span
-	num     []byte
-	scratch []byte
+	made        bool
+	scale       float32
+	t           float32
+	size        float32
+	mono        text.FontKey
+	line        float32 // a code line's height in pixels
+	body        ui.RichStyles
+	heads       [3]ui.RichStyles
+	th          ui.RichStyles
+	code        ui.RichStyles
+	hl          highlighter
+	scroll      map[ui.Key]*codeState
+	spans       []ui.Span
+	num         []byte
+	scratch     []byte
+	seed        maphash.Seed
+	layoutBytes int
 }
 
 // defaultView is the state of the calls that pass no MarkdownView.
 var defaultView MarkdownView
 
 // Tokens returns the highlighting of src in lang for the code block whose
-// key is key: nil until a worker goroutine has lexed it (it asks for frames
-// until then), and meanwhile the block's previous tokens cut to src, so a
+// key is key: nil until a shared worker has lexed it (completion wakes the
+// UI loop), and meanwhile the block's previous tokens cut to src, so a
 // block that streams in keeps its colours. Lexing never runs in the frame;
 // asking again for the same source finds it, without allocating.
 func (v *MarkdownView) Tokens(c *ui.Context, key ui.Key, lang highlight.Lang, src []byte) []highlight.Token {
@@ -48,20 +51,21 @@ func (v *MarkdownView) Tokens(c *ui.Context, key ui.Key, lang highlight.Lang, sr
 }
 
 // Pending is the number of sources being highlighted.
-func (v *MarkdownView) Pending() int { return int(v.hl.pending.Load()) }
+func (v *MarkdownView) Pending() int {
+	if v.hl.mail == nil {
+		return 0
+	}
+	return int(v.hl.mail.pending.Load())
+}
 
-// scrollState is the sideways scroll state of the code block key, made the
-// first time the block is built.
-func (v *MarkdownView) scrollState(key ui.Key) *base.ScrollState {
-	if v.scroll == nil {
-		v.scroll = map[ui.Key]*base.ScrollState{}
-	}
-	st := v.scroll[key]
-	if st == nil {
-		st = &base.ScrollState{}
-		v.scroll[key] = st
-	}
-	return st
+// Close cancels queued highlighting and releases the view's retained state.
+// Call it on the UI thread when its window closes. Repeated calls are safe;
+// a closed view does not submit more work.
+func (v *MarkdownView) Close() {
+	v.hl.close()
+	v.scroll = nil
+	v.layoutBytes = 0
+	v.spans, v.num, v.scratch = nil, nil, nil
 }
 
 // MarkdownRecipe is the look of rendered Markdown.

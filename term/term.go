@@ -102,8 +102,12 @@ type Options struct {
 
 // Terminal is one terminal's state. Close it to free the library's memory.
 type Terminal struct {
-	call *clib.Call
-	id   uintptr
+	rowsReset                 bool // iterator reset deferred until NextRow on a clean capture
+	renderClean               bool
+	mouseValid, mouseTracking bool
+	bottomValid, atBottom     bool
+	call                      *clib.Call
+	id                        uintptr
 
 	h, rs, rows, cells        uintptr // terminal, render state, row iterator, row cells
 	keyEnc, keyEv             uintptr
@@ -265,6 +269,7 @@ func onClipboard(id, w uintptr) {
 
 func onRenderHold(id uintptr, held bool) {
 	if t := lookup(id); t != nil {
+		t.changed()
 		t.held = held
 		if held {
 			t.heldAt = time.Now()
@@ -302,6 +307,10 @@ func fn(i int) clib.Func { return lib.fn[i] }
 
 // c starts a call.
 func (t *Terminal) c() *clib.Call { return t.call.Reset() }
+
+func (t *Terminal) changed() {
+	t.renderClean, t.mouseValid, t.bottomValid = false, false, false
+}
 
 // New makes a terminal with an empty screen. It returns an error wrapping
 // ErrUnavailable when libghostty-vt cannot be loaded.
@@ -421,6 +430,7 @@ func (t *Terminal) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	t.changed()
 	t.c().Uint(uint64(t.h)).Ptr(unsafe.Pointer(&p[0])).Uint(uint64(len(p))).Do(fn(ghosttyvt.TerminalVTWrite))
 	return len(p), nil
 }
@@ -428,6 +438,7 @@ func (t *Terminal) Write(p []byte) (int, error) {
 // Reset is a full reset (RIS): the screen, the modes and the scrollback.
 func (t *Terminal) Reset() {
 	if !t.closed {
+		t.changed()
 		t.c().Uint(uint64(t.h)).Do(fn(ghosttyvt.TerminalReset))
 	}
 }
@@ -441,6 +452,7 @@ func (t *Terminal) Resize(cols, rows, cellW, cellH int) error {
 	if cols <= 0 || rows <= 0 {
 		return errors.New("term: Resize: non-positive size")
 	}
+	t.changed()
 	cols, rows = min(cols, 0xFFFF), min(rows, 0xFFFF)
 	cellW, cellH = max(cellW, 1), max(cellH, 1)
 	r := t.c().Uint(uint64(t.h)).Uint16(uint16(cols)).Uint16(uint16(rows)).Uint32(uint32(cellW)).Uint32(uint32(cellH)).
@@ -465,6 +477,7 @@ func (t *Terminal) CellSize() (w, h int) { return t.cellW, t.cellH }
 // bound of that kind; lines 0: none kept). The library keeps whole pages
 // (about 400 KB each), so both bounds are approximate.
 func (t *Terminal) SetScrollback(lines, bytes int) error {
+	t.changed()
 	if t.closed {
 		return ErrClosed
 	}
@@ -580,8 +593,12 @@ func (t *Terminal) MouseTracking() bool {
 	if t.closed {
 		return false
 	}
-	t.flag = false
-	return t.get(dataMouseTracking, unsafe.Pointer(&t.flag)) == resSuccess && t.flag
+	if !t.mouseValid {
+		t.flag = false
+		t.mouseTracking = t.get(dataMouseTracking, unsafe.Pointer(&t.flag)) == resSuccess && t.flag
+		t.mouseValid = true
+	}
+	return t.mouseTracking
 }
 
 // Scrollbar is the viewport's place in the scrollable area, in rows.
@@ -605,15 +622,19 @@ func (t *Terminal) AtBottom() bool {
 	if t.closed {
 		return true
 	}
-	t.flag = true
-	t.get(dataViewportActive, unsafe.Pointer(&t.flag))
-	return t.flag
+	if !t.bottomValid {
+		t.flag = true
+		t.get(dataViewportActive, unsafe.Pointer(&t.flag))
+		t.atBottom, t.bottomValid = t.flag, true
+	}
+	return t.atBottom
 }
 
 func (t *Terminal) scrollViewport(tag int32, v int64) {
 	if t.closed {
 		return
 	}
+	t.changed()
 	t.scroll = ghScroll{tag: tag, value: v}
 	t.c().Uint(uint64(t.h)).Struct(unsafe.Pointer(&t.scroll), unsafe.Sizeof(t.scroll)).Do(fn(ghosttyvt.TerminalScrollViewport))
 }
@@ -674,6 +695,7 @@ func (t *Terminal) SetColors(c Colors) error {
 	if t.closed {
 		return ErrClosed
 	}
+	t.changed()
 	set := func(opt int32, v uint32) error {
 		t.rgb = ghRGB{uint8(v >> 16), uint8(v >> 8), uint8(v)}
 		return check("ghostty_terminal_set", t.c().Uint(uint64(t.h)).Int32(opt).Ptr(unsafe.Pointer(&t.rgb)).Do(fn(ghosttyvt.TerminalSet)).Int32())

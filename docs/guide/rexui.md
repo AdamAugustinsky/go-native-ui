@@ -253,6 +253,12 @@ one's variants, sizes and states, and how close it is to AppKit's.
 Markdown and code live in `rexui/mdview`, a package of their own: goldmark,
 chroma and its regexp engine add 1.0 to 1.2 MB to a program that links them,
 so an app that shows neither imports `rexui` alone and does not pay for them.
+Keep one `mdview.MarkdownView` per window and call its idempotent `Close`
+when that window closes. Highlighting uses two shared workers with bounded
+admission; completion wakes the UI loop. The view bounds its token, line
+index, alias and sideways scroll state caches. `CodeBlock` builds only the
+visible lines and keeps the full block height with spacers; source revisions
+refresh its cached line offsets and widest line.
 
 The tests that keep it honest are in the package: `TestRecipesMatchAppKit` checks
 the measurements against AppKit's committed numbers (under `UseAppKitControls`), and

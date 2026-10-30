@@ -1,33 +1,14 @@
 package widget
 
 import (
-	"gonativeui/theme"
-	"gonativeui/ui"
+	"gonativeui/rexui"
 )
 
-// dialogWidthPt is the width of a dialog panel that sets none.
-const dialogWidthPt = 380
-
-var dialogBase = ui.HashString(keyRoot, "dialog")
-
-// Dialog is an open modal dialog. See BeginDialog.
-type Dialog struct {
-	// Visible: the dialog is open; build its content only then.
-	Visible bool
-	// Cancelled: Escape closed the dialog this frame.
-	Cancelled bool
-
-	k       *Kit
-	open    *bool
-	okey    ui.Key // the overlay's key
-	opening bool
-	defSeen bool
-	onAct   bool // the focus is on an action built earlier
-	rowOpen bool
-}
+// Dialog is the Rex modal dialog, with the widget action API.
+type Dialog struct{ rexui.Dialog }
 
 // BeginDialog starts a modal dialog while *open is true: an in-window overlay
-// with a scrim over the window, and a panel centred on it with the title,
+// with a sheet below the titlebar, the title,
 // whatever content the app builds, and its actions:
 //
 //	d := k.BeginDialog("confirm", "Delete 3 files?", &v.askDelete)
@@ -57,129 +38,13 @@ type Dialog struct {
 // inside a dialog cancels the dialog too, unless the field is showing an
 // input-method composition, which Escape cancels instead.
 func (k *Kit) BeginDialog(label, title string, open *bool) Dialog {
-	d := Dialog{k: k, open: open}
-	if !*open {
-		return d
-	}
-	c := k.c
-	p, px := &k.r.Pal, &k.r.Px
-	_, ident := ui.SplitLabel(label)
-	okey := ui.HashString(c.ParentKey(), ident)
-	d.okey = okey
-	d.Visible = true
-	d.opening = !c.OverlayOpen(okey)
-	t := c.AnimateValueFrom(ui.KeyN(dialogBase, uint64(okey)+1), 0, 1, k.r.Motion.Fade)
-	c.PushOpacity(t)
-
-	w, h := c.Size()
-	c.NextSize(ui.Pct(1), ui.Pct(1))
-	c.NextBG(p.Scrim)
-	c.NextAxis(ui.AxisY)
-	c.NextFlags(ui.DrawBackground)
-	c.NextRole(ui.RoleDialog)
-	c.NextSemName(title)
-	c.BeginOverlay(okey, ui.OverlayModal, [4]float32{0, 0, float32(w), float32(h)}, ui.PlaceCenter)
-	// the panel is centred by spacers that share what it leaves
-	c.NextSize(ui.Pct(1), ui.Pct(1))
-	c.Box(0, "above")
-	c.NextSize(ui.Pct(1), ui.Children(1))
-	c.NextAxis(ui.AxisX)
-	row := c.Box(0, "row")
-	c.Push(row)
-	c.NextSize(ui.Pct(1), ui.Pct(1))
-	c.Box(0, "left")
-	k.popupSurface()
-	c.NextShadow(ui.Shadow{OffY: 8 * k.scale, Sigma: 24 * k.scale, Color: theme.WithAlpha(p.Shadow, 4)})
-	c.NextRadius(px.RadiusLarge)
-	c.NextPad(px.Pad * 2)
-	c.NextGap(px.Gap)
-	if nw, ok := k.PendingWidth(); ok && nw.Kind != ui.SizeAuto {
-		c.NextSize(nw, ui.Children(1))
-		k.ClearSize()
-	} else {
-		c.NextSize(k.Fixed(dialogWidthPt), ui.Children(1))
-	}
-	panel := c.Box(ui.DrawBackground|ui.DrawBorder|ui.DrawShadow, "panel")
-	c.Push(panel)
-	k.size(ui.TextSize(labelSlack), ui.TextSize(0))
-	c.NextFont(k.r.Font.UISemi)
-	c.NextTextColor(p.Text)
-	c.NextSemName(title)
-	c.NextRole(ui.RoleLabel)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.HashString(c.ParentKey(), "title"), strBytes(title))
-	return d
+	return Dialog{Dialog: rexui.BeginDialog(k.Kit, label, open, rexui.DialogOpts{Title: title})}
 }
 
-// BeginActions starts the row of the dialog's buttons, right-aligned below its
-// content. End it with EndActions.
-func (d *Dialog) BeginActions() {
-	k := d.k
-	k.NextGap(k.r.Px.GapSmall / k.scale)
-	k.BeginContainer(ui.AxisX, ui.CrossCenter, "actions", ui.Pct(1), ui.Children(1), 0)
-	k.Spacer()
-	d.rowOpen = true
-}
-
-// EndActions ends the row BeginActions started.
-func (d *Dialog) EndActions() {
-	if d.rowOpen {
-		d.k.EndContainer()
-		d.rowOpen = false
-	}
-}
-
-// Action builds one of the dialog's buttons and reports whether it was chosen;
-// choosing it closes the dialog. The first ButtonPrimary is the default action:
-// it has the focus when the dialog opens, and Enter chooses it unless the focus
-// is on another action or a text field. Build the default action after the
-// others (Cancel first, as dialogs usually are), so that Enter on a focused
-// Cancel is Cancel's.
+// Action builds a dialog action and closes the dialog when chosen.
 func (d *Dialog) Action(label string, kind ButtonKind) bool {
-	k := d.k
-	c := k.c
-	_, ident := ui.SplitLabel(label)
-	key := ui.HashString(c.ParentKey(), ident)
-	def := kind == ButtonPrimary && !d.defSeen
-	if def {
-		d.defSeen = true
-		if d.opening && !k.off() {
-			c.SetFocus(key)
-			c.SetFocusVisible(false)
-		}
-	}
-	if c.FocusKey() == key {
-		d.onAct = true
-	}
-	s := k.ButtonKind(label, kind)
-	chosen := s.Clicked
-	if def && !chosen && !k.off() && !d.onAct && !c.TextFieldFocused() && c.OverlayTopmost(d.okey) && c.TakeKey(ui.KeyEnter, 0) {
-		chosen = true
-	}
-	if chosen {
-		*d.open = false
-		c.RequestFrame()
-	}
-	return chosen
+	return d.Dialog.Action(label, kind.variant())
 }
 
 // EndDialog ends the dialog and applies Escape.
-func (k *Kit) EndDialog(d *Dialog) {
-	if !d.Visible {
-		return
-	}
-	c := k.c
-	d.EndActions()
-	if c.OverlayTopmost(d.okey) && c.TakeKey(ui.KeyEscape, 0) {
-		d.Cancelled = true
-		*d.open = false
-		c.RequestFrame()
-	}
-	c.Pop() // panel
-	c.NextSize(ui.Pct(1), ui.Pct(1))
-	c.Box(0, "right")
-	c.Pop() // row
-	c.NextSize(ui.Pct(1), ui.Pct(1))
-	c.Box(0, "below")
-	c.EndOverlay()
-	c.PopOpacity()
-}
+func (k *Kit) EndDialog(d *Dialog) { rexui.EndDialog(k.Kit, &d.Dialog) }

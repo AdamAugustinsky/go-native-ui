@@ -208,15 +208,22 @@ func (t *Terminal) Update() Dirty {
 		t.resetStyles()
 		full = true
 	}
+	if !full && t.renderClean {
+		t.rowY, t.rowsReset = 0, true
+		return Clean
+	}
 	t.c().Uint(uint64(t.rs)).Uint(uint64(t.h)).Do(fn(ghosttyvt.RenderStateUpdate))
 	t.i32 = 0
 	t.c().Uint(uint64(t.rs)).Int32(rsDirty).Ptr(unsafe.Pointer(&t.i32)).Do(fn(ghosttyvt.RenderStateGet))
 	d := Dirty(t.i32)
+	if d == Clean {
+		t.renderClean = true
+	}
 	t.handle = t.rows
 	t.c().Uint(uint64(t.rs)).Int32(rsRowIterator).Ptr(unsafe.Pointer(&t.handle)).Do(fn(ghosttyvt.RenderStateGet))
 	t.cursor = ghCursor{size: uint64(unsafe.Sizeof(ghCursor{}))}
 	t.c().Uint(uint64(t.rs)).Int32(rsCursor).Ptr(unsafe.Pointer(&t.cursor)).Do(fn(ghosttyvt.RenderStateGet))
-	t.rowY = 0
+	t.rowY, t.rowsReset = 0, false
 	if full {
 		return Full
 	}
@@ -228,6 +235,7 @@ func (t *Terminal) Update() Dirty {
 func (t *Terminal) CleanFrame() {
 	if !t.closed {
 		t.c().Uint(uint64(t.rs)).Do(fn(ghosttyvt.RenderStateClean))
+		t.renderClean = !t.held
 	}
 }
 
@@ -251,6 +259,11 @@ func (t *Terminal) Cursor() Cursor {
 // fills r's position, dirty flag and selection; it returns false after the
 // last row. Call DecodeRow for the cells.
 func (t *Terminal) NextRow(r *Row) bool {
+	if !t.closed && t.rowsReset {
+		t.handle = t.rows
+		t.c().Uint(uint64(t.rs)).Int32(rsRowIterator).Ptr(unsafe.Pointer(&t.handle)).Do(fn(ghosttyvt.RenderStateGet))
+		t.rowsReset = false
+	}
 	if t.closed || !t.c().Uint(uint64(t.rows)).Do(fn(ghosttyvt.RowIteratorNext)).Bool() {
 		return false
 	}

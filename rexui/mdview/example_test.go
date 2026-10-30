@@ -33,6 +33,7 @@ func Example() {
 	var doc markdown.Doc
 	p.Parse([]byte("# Release notes\n\nSee [the changelog](https://example.com/changes).\n\n```go\nfmt.Println(\"hi\")\n```\n")).CopyTo(&doc)
 	view := &mdview.MarkdownView{} // one per window
+	defer view.Close()
 	for range 3 {
 		c.Begin(&in, 600, 400, 1, 1.0/60)
 		k.Begin(c)

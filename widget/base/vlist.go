@@ -123,6 +123,7 @@ const vlRowH = float32(1.0 / 256)
 // settling, it requests the next frame (ui.Context.RequestFrame).
 func BeginVList(c *ui.Context, label string, st *VListState, o VListOpts) VList {
 	st.Sync(c.Frame())
+	st.keepBack(c)
 	_, ident := ui.SplitLabel(label)
 	okey := ui.HashString(c.ParentKey(), ident)
 	bkey := ui.KeyN(okey, 1)
