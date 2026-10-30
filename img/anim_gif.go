@@ -1,10 +1,8 @@
 package img
 
 import (
-	"compress/lzw"
 	"errors"
 	"image"
-	"io"
 	"unsafe"
 )
 
@@ -23,10 +21,8 @@ type gifAnim struct {
 	next     int // the frame the compositor is ready to draw
 	maxFrame int
 	indices  []byte
-	lzw      *lzw.Reader
-	blocks   gifBlocks
+	lzw      *gifLZW
 	palette  [256]uint32
-	extra    [1]byte
 }
 
 // gifFrame is one frame's blocks and the delay and disposal of its graphic
@@ -156,14 +152,13 @@ func (g *gifAnim) size() (w, h int) { return g.w, g.h }
 
 // retained bounds the file, canvas, disposal snapshot, indices and LZW tables.
 func (g *gifAnim) retained() int64 {
-	return int64(len(g.data)) + 8*int64(g.w)*int64(g.h) + int64(g.maxFrame) + int64(unsafe.Sizeof(lzw.Reader{}))
+	return int64(len(g.data)) + 8*int64(g.w)*int64(g.h) + int64(g.maxFrame) + int64(unsafe.Sizeof(gifLZW{}))
 }
 func (g *gifAnim) count() int { return len(g.frames) }
 
 // trim drops the canvases; frame makes them again, from the first frame.
 func (g *gifAnim) trim() int64 {
 	g.comp, g.indices, g.lzw, g.next = nil, nil, nil, 0
-	g.blocks = gifBlocks{}
 	return int64(len(g.data))
 }
 
@@ -180,7 +175,7 @@ func (g *gifAnim) frame(i int) (*image.RGBA, error) {
 	if g.comp == nil {
 		g.comp = newCompositor(g.w, g.h)
 		g.indices = make([]byte, g.maxFrame)
-		g.lzw = new(lzw.Reader)
+		g.lzw = new(gifLZW)
 	}
 	if i != g.next {
 		g.comp.reset()
@@ -215,68 +210,22 @@ func (g *gifAnim) draw(i int) error {
 	if len(pal) == 0 || len(data) == 0 || data[0] < 2 || data[0] > 8 {
 		return errGIF
 	}
-	g.blocks = gifBlocks{data: data[1:]}
-	g.lzw.Reset(&g.blocks, lzw.LSB, int(data[0]))
-	indices := g.indices[:fw*fh]
-	if _, err := io.ReadFull(g.lzw, indices); err != nil {
-		return err
-	}
-	if n, err := g.lzw.Read(g.extra[:]); n != 0 || err != io.EOF {
-		return errGIF
-	}
 	trans := -1
 	if f.hasGCE && f.gce[3]&1 != 0 {
 		trans = int(f.gce[6])
 	}
 	npal := len(pal) / 3
+	indices := g.indices[:fw*fh]
+	if err := g.lzw.decode(indices, data[1:], int(data[0]), max(npal, trans+1)); err != nil {
+		return err
+	}
 	clear(g.palette[:])
 	for i := 0; i < npal; i++ {
 		if i != trans {
 			g.palette[i] = uint32(pal[3*i]) | uint32(pal[3*i+1])<<8 | uint32(pal[3*i+2])<<16 | 0xff000000
 		}
 	}
-	if npal < 256 {
-		for _, v := range indices {
-			if int(v) >= npal && int(v) != trans {
-				return errGIF
-			}
-		}
-	}
-	g.comp.drawGIF(indices, image.Rect(x, y, x+fw, y+fh), &g.palette, f.disposal, b[9]&0x40 != 0)
+	g.comp.drawGIF(indices, image.Rect(x, y, x+fw, y+fh), &g.palette, f.disposal, b[9]&0x40 != 0, trans < 0)
 	g.next = i + 1
 	return nil
-}
-
-// gifBlocks presents GIF data sub-blocks as a byte stream to LZW.
-type gifBlocks struct {
-	data      []byte
-	pos, left int
-}
-
-func (b *gifBlocks) ReadByte() (byte, error) {
-	if b.left == 0 {
-		if b.pos >= len(b.data) || b.data[b.pos] == 0 {
-			return 0, io.EOF
-		}
-		b.left = int(b.data[b.pos])
-		b.pos++
-	}
-	if b.pos >= len(b.data) {
-		return 0, io.ErrUnexpectedEOF
-	}
-	v := b.data[b.pos]
-	b.pos++
-	b.left--
-	return v, nil
-}
-
-func (b *gifBlocks) Read(p []byte) (int, error) {
-	for i := range p {
-		v, err := b.ReadByte()
-		if err != nil {
-			return i, err
-		}
-		p[i] = v
-	}
-	return len(p), nil
 }
