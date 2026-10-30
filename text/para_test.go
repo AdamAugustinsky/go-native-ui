@@ -859,6 +859,8 @@ func TestParaCacheDefaultBudget(t *testing.T) {
 	}
 }
 
+var benchmarkLineAtResult int
+
 func BenchmarkParaLineAt(b *testing.B) {
 	for _, n := range []int{256, 4096} {
 		v := ParaView{Lines: make([]Line, n)}
@@ -870,15 +872,18 @@ func BenchmarkParaLineAt(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
 					y := float32((i%n)*20 + 10)
+					got := n - 1
 					if indexed {
-						_ = v.LineAt(y)
+						got = v.LineAt(y)
 					} else {
 						for j := 0; j < n-1; j++ {
 							if y < v.Lines[j].Top+v.Lines[j].Height {
+								got = j
 								break
 							}
 						}
 					}
+					benchmarkLineAtResult = got
 				}
 			})
 		}

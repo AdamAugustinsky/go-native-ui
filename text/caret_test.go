@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+var benchmarkCaretXResult float32
+
 func checkCaretIndex(t *testing.T, v RunView) {
 	t.Helper()
 	var c CaretIndex
@@ -68,7 +70,7 @@ func BenchmarkCaretIndex(b *testing.B) {
 		b.Run(strconv.Itoa(n)+" glyphs", func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_ = c.CaretX(n / 2)
+				benchmarkCaretXResult = c.CaretX(n / 2)
 			}
 		})
 	}
@@ -241,7 +243,7 @@ func BenchmarkCaretX(b *testing.B) {
 		b.Run(strconv.Itoa(n)+" glyphs", func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_ = v.CaretX(n / 2)
+				benchmarkCaretXResult = v.CaretX(n / 2)
 			}
 		})
 	}
