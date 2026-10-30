@@ -134,6 +134,7 @@ func (w *Window) AXActive() bool {
 func (b *axDarwin) expire(now int64) {
 	if b.core.active && now-b.lastQuery >= 30e9 {
 		b.core.active = false
+		SetAXSourceActive(b.src, false) // the app stops recording semantics
 	}
 }
 
@@ -162,6 +163,7 @@ func axActivate() *Window {
 	ax.expire(now)
 	ax.lastQuery = now
 	if !ax.core.active {
+		SetAXSourceActive(ax.src, true)
 		axSetup()
 		if ax.core.byKey == nil {
 			ax.core.begin(ax.src.AXExport)
@@ -176,6 +178,9 @@ func axActivate() *Window {
 
 // axReset forgets the elements of a window that went (or of another one).
 func axReset() {
+	if ax.core.active {
+		SetAXSourceActive(ax.src, false)
+	}
 	for i := range ax.core.slots {
 		if o := ax.core.slots[i].obj; o != 0 {
 			objc.Send(objc.ID(o), selReleaseObj)
