@@ -61,6 +61,7 @@ var sy struct {
 	cgBitmapContextCreate                                     uintptr
 	cgContextSetGrayFillColor                                 uintptr
 	cgContextScaleCTM                                         uintptr
+	cgContextSaveGState, cgContextRestoreGState               uintptr
 	cgSetBool                                                 [8]uintptr // (ctx, bool) setters, see ctxFlags
 	// constant CFStringRefs (values of the exported globals)
 	kFontAttribute, kTraitsAttribute, kWeightTrait, kFamilyAttribute uintptr
@@ -186,6 +187,7 @@ func loadSyms() error {
 		sy.cgBitmapContextCreate = sym(cg, "CGBitmapContextCreate")
 		sy.cgContextSetGrayFillColor = sym(cg, "CGContextSetGrayFillColor")
 		sy.cgContextScaleCTM = sym(cg, "CGContextScaleCTM")
+		sy.cgContextSaveGState, sy.cgContextRestoreGState = sym(cg, "CGContextSaveGState"), sym(cg, "CGContextRestoreGState")
 		for i, f := range ctxFlags {
 			sy.cgSetBool[i] = sym(cg, f.name)
 		}
@@ -245,7 +247,7 @@ type bitmap struct {
 	ctx, cs      uintptr
 	buf          []byte
 	w, h, stride int
-	scale        float64
+	scale        float64 // the CTM's scale; 1 with no state saved
 	smooth       uint8
 }
 
@@ -1018,17 +1020,26 @@ func (s *System) rasterize(face FaceID, gid uint16, sub, smooth uint8) GlyphEntr
 	// that region's bottom edge. The pen is given in the scaled user space.
 	s.pt[0] = (sx - float64(x0)) / sc
 	s.pt[1] = (float64(bm.h-h) - float64(y0)) / sc
+	if bm.scale != sc {
+		// The exact scale on the context's base state: scaling by the ratio
+		// to the last one would drift after many zoom levels, and a glyph
+		// would rasterize unlike in a context that only knew this scale.
+		if bm.scale != 1 {
+			s.fr.Call1(sy.cgContextRestoreGState, bm.ctx)
+		}
+		bm.scale, bm.smooth = 1, 255 // the restore reset the smoothing and fill
+		if sc != 1 {
+			s.fr.Call1(sy.cgContextSaveGState, bm.ctx)
+			s.fr.Reset().Arg(bm.ctx).ArgF64(sc).ArgF64(sc).Call(sy.cgContextScaleCTM)
+			bm.scale = sc
+		}
+	}
 	if !fc.color && bm.smooth != smooth {
 		// An alpha-only context: the bitmap is the coverage whatever the fill,
 		// and the fill's grey selects the smoothing level's stem dilation.
 		s.fr.Reset().Arg(bm.ctx).ArgBool(smooth > 0).Call(sy.cgSetBool[shouldSmooth])
 		s.fr.Reset().Arg(bm.ctx).ArgF64(smoothGray[smooth]).ArgF64(1).Call(sy.cgContextSetGrayFillColor)
 		bm.smooth = smooth
-	}
-	if bm.scale != sc {
-		ratio := sc / bm.scale
-		s.fr.Reset().Arg(bm.ctx).ArgF64(ratio).ArgF64(ratio).Call(sy.cgContextScaleCTM)
-		bm.scale = sc
 	}
 	s.fr.Reset().Arg(fc.font).ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.pt[0])).
 		Arg(1).Arg(bm.ctx).Call(sy.ctFontDrawGlyphs)
