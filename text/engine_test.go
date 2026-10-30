@@ -944,3 +944,49 @@ func TestEngineParaFit(t *testing.T) {
 	s, _ := newEngine(t)
 	checkParaFit(t, s, ui(s))
 }
+
+// A CBDT miss reuses the inflater, unfiltered pixels and scaled pixels after
+// warming, including when a different size uses the same bitmap font data.
+func TestColorGlyphMissReusesScratch(t *testing.T) {
+	path, gid := colorFontFile(t, 0)
+	s := newGoSystem(&fakeFinder{ui: fontRef{file: path}, mono: fontRef{file: path}})
+	defer s.Close()
+	f := s.Font(FontDesc{SizePt: 12, Scale: 1})
+	v := eShape(s, f, "A")
+	fc := &s.faces[v.Faces[0]]
+	if e := s.rasterizeColor(fc, gid); e.W == 0 {
+		t.Fatal("missing colour bitmap")
+	}
+	allocFree(t, "CBDT raster misses", func() func() {
+		return func() {
+			for i := 0; i < 20; i++ {
+				s.rasterizeColor(fc, gid)
+			}
+		}
+	})
+}
+
+// Atlas dimensions bound the bitmap, not its distance from the baseline.
+// A legal narrow strike at a large size can have bearings beyond int16.
+func TestColorGlyphPreservesWideBearings(t *testing.T) {
+	path, gid := colorFontFile(t, 0)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tabs := readTables(t, data)
+	tabs[tagCBLC], tabs[tagCBDT] = cbTables(gid, testPNG(1, 1), 1, 1, 0)
+	tabs[tagCBDT][6], tabs[tagCBDT][7] = 127, 127
+	if err := os.WriteFile(path, writeSfnt([]map[uint32][]byte{tabs}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := newGoSystem(&fakeFinder{ui: fontRef{file: path}, mono: fontRef{file: path}})
+	defer s.Close()
+	f := s.Font(FontDesc{SizePt: 21600, Scale: 1})
+	v := eShape(s, f, "A")
+	e := s.Glyph(v.Faces[0], gid, 0)
+	if e.W != 900 || e.H != 900 || e.BearingX != 114300 || e.BearingY != 114300 {
+		t.Fatalf("wide bearing changed: %+v", e)
+	}
+	t.Logf("%dx%d bitmap, bearings %v,%v", e.W, e.H, e.BearingX, e.BearingY)
+}

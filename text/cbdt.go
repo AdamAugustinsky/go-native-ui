@@ -4,11 +4,12 @@ package text
 
 import (
 	"bytes"
+	"compress/flate"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
+	"hash/adler32"
+	"hash/crc32"
 	"io"
 	"math"
 	"sort"
@@ -27,6 +28,8 @@ type cbdt struct {
 	dataLen int64
 	loc     tables.CBLC
 	scratch []byte
+	png     pngScratch
+	scaled  []byte
 }
 
 // openCBDT returns the colour bitmap reader of the font described by d, or
@@ -165,60 +168,333 @@ func parseCBImage(format uint16, buf []byte, big *tables.BigGlyphMetrics) (cbGly
 	return cbGlyph{}, fmt.Errorf("unsupported CBDT image format %d", format)
 }
 
-// pngPremultiplied decodes a PNG into premultiplied RGBA bytes (4 per pixel).
-func pngPremultiplied(data []byte) (pix []byte, w, h int, err error) {
-	// Check the declared size before decoding allocates it: a tiny PNG can
-	// claim enormous dimensions.
-	cfg, err := png.DecodeConfig(bytes.NewReader(data))
+// pngScratch decodes PNG glyphs into reusable storage. It supports every
+// standard PNG colour/depth combination and Adam7 passes. The inflater and
+// all pixel buffers are reused across misses; only a new high-water mark grows.
+type pngScratch struct {
+	idat, raw, pix []byte
+	rd             bytes.Reader
+	inflater       io.ReadCloser
+	palette        [256][4]byte
+	end            [1]byte
+}
+
+var errBitmapPNG = errors.New("invalid bitmap PNG")
+
+// pngPremultiplied is the unreserved form, used by the format probes.
+func pngPremultiplied(data []byte) ([]byte, int, int, error) {
+	var d pngScratch
+	return d.decode(data)
+}
+
+func (d *pngScratch) decode(data []byte) ([]byte, int, int, error) {
+	if len(data) < 8 || string(data[:8]) != "\x89PNG\r\n\x1a\n" {
+		return nil, 0, 0, errBitmapPNG
+	}
+	d.idat = d.idat[:0]
+	for i := range d.palette {
+		d.palette[i] = [4]byte{0, 0, 0, 255}
+	}
+	var w, h, depth, kind, interlace, colors int
+	var transparent [3]uint16
+	var hasTransparent, header, ended, idat, idatEnd, trns, plte bool
+	channels := 0
+	for off := 8; off < len(data); {
+		if len(data)-off < 12 {
+			return nil, 0, 0, errBitmapPNG
+		}
+		n := uint64(binary.BigEndian.Uint32(data[off:]))
+		if n > uint64(len(data)-off-12) {
+			return nil, 0, 0, errBitmapPNG
+		}
+		tag := string(data[off+4 : off+8])
+		body := data[off+8 : off+8+int(n)]
+		if crc32.ChecksumIEEE(data[off+4:off+8+int(n)]) != binary.BigEndian.Uint32(data[off+8+int(n):]) {
+			return nil, 0, 0, errBitmapPNG
+		}
+		off += int(n) + 12
+		if !header && tag != "IHDR" {
+			return nil, 0, 0, errBitmapPNG
+		}
+		if idat && tag != "IDAT" {
+			idatEnd = true
+		}
+		switch tag {
+		case "IHDR":
+			if header || len(body) != 13 {
+				return nil, 0, 0, errBitmapPNG
+			}
+			header = true
+			uw, uh := binary.BigEndian.Uint32(body), binary.BigEndian.Uint32(body[4:])
+			if uw == 0 || uh == 0 || uw > 4096 || uh > 4096 {
+				return nil, 0, 0, errBitmapPNG
+			}
+			w, h, depth, kind, interlace = int(uw), int(uh), int(body[8]), int(body[9]), int(body[12])
+			if body[10] != 0 || body[11] != 0 || interlace > 1 {
+				return nil, 0, 0, errBitmapPNG
+			}
+			switch kind {
+			case 0:
+				channels = 1
+			case 2:
+				channels = 3
+			case 3:
+				channels = 1
+			case 4:
+				channels = 2
+			case 6:
+				channels = 4
+			default:
+				return nil, 0, 0, errBitmapPNG
+			}
+			if depth != 8 && depth != 16 && !(depth == 1 || depth == 2 || depth == 4) {
+				return nil, 0, 0, errBitmapPNG
+			}
+			if (kind == 3 && depth == 16) || (kind != 0 && kind != 3 && depth < 8) {
+				return nil, 0, 0, errBitmapPNG
+			}
+		case "PLTE":
+			if plte || trns || idat || kind == 0 || kind == 4 || len(body) == 0 || len(body)%3 != 0 || len(body) > 768 {
+				return nil, 0, 0, errBitmapPNG
+			}
+			plte, colors = true, len(body)/3
+			if kind == 3 && colors > 1<<depth {
+				return nil, 0, 0, errBitmapPNG
+			}
+			for i := 0; i < colors; i++ {
+				copy(d.palette[i][:3], body[3*i:3*i+3])
+			}
+		case "tRNS":
+			if trns || idat {
+				return nil, 0, 0, errBitmapPNG
+			}
+			trns = true
+			switch kind {
+			case 3:
+				if !plte || len(body) > colors {
+					return nil, 0, 0, errBitmapPNG
+				}
+				for i, a := range body {
+					d.palette[i][3] = a
+				}
+			case 0:
+				if len(body) != 2 {
+					return nil, 0, 0, errBitmapPNG
+				}
+				transparent[0], hasTransparent = binary.BigEndian.Uint16(body), true
+			case 2:
+				if len(body) != 6 {
+					return nil, 0, 0, errBitmapPNG
+				}
+				for i := range transparent {
+					transparent[i] = binary.BigEndian.Uint16(body[2*i:])
+				}
+				hasTransparent = true
+			default:
+				return nil, 0, 0, errBitmapPNG
+			}
+		case "IDAT":
+			if idatEnd || (kind == 3 && !plte) {
+				return nil, 0, 0, errBitmapPNG
+			}
+			idat = true
+			d.idat = append(d.idat, body...)
+		case "IEND":
+			if !idat || len(body) != 0 {
+				return nil, 0, 0, errBitmapPNG
+			}
+			ended = true
+		default:
+			if data[off-int(n)-8]&32 == 0 {
+				return nil, 0, 0, errBitmapPNG
+			} // unknown critical chunk
+		}
+		if ended {
+			break
+		}
+	}
+	if !ended {
+		return nil, 0, 0, errBitmapPNG
+	}
+	// Adam7's (x0, y0, dx, dy), or one full-resolution pass.
+	passes := [7][4]int{{0, 0, 1, 1}}
+	npass := 1
+	if interlace != 0 {
+		passes = [7][4]int{{0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 4}, {1, 0, 2, 2}, {0, 1, 1, 2}}
+		npass = 7
+	}
+	total := 0
+	for _, p := range passes[:npass] {
+		pw, ph := max(0, (w-p[0]+p[2]-1)/p[2]), max(0, (h-p[1]+p[3]-1)/p[3])
+		if pw > 0 && ph > 0 {
+			total += (1 + (pw*channels*depth+7)/8) * ph
+		}
+	}
+	if cap(d.raw) < total {
+		d.raw = make([]byte, total)
+	}
+	raw := d.raw[:total]
+	// zlib.Reader.Reset creates a new Adler digest each time. Read its
+	// small PNG wrapper here and reuse flate directly instead.
+	if len(d.idat) < 6 || d.idat[0]&15 != 8 || d.idat[0]>>4 > 7 || binary.BigEndian.Uint16(d.idat)%31 != 0 || d.idat[1]&32 != 0 {
+		return nil, 0, 0, errBitmapPNG
+	}
+	d.rd.Reset(d.idat[2 : len(d.idat)-4])
+	var err error
+	if d.inflater == nil {
+		d.inflater = flate.NewReader(&d.rd)
+	} else {
+		err = d.inflater.(flate.Resetter).Reset(&d.rd, nil)
+	}
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 4096 || cfg.Height > 4096 {
-		return nil, 0, 0, errors.New("implausible bitmap size")
+	_, err = io.ReadFull(d.inflater, raw)
+	if err == nil {
+		n, endErr := d.inflater.Read(d.end[:])
+		if n != 0 || endErr != io.EOF {
+			err = errBitmapPNG
+		}
 	}
-	img, err := png.Decode(bytes.NewReader(data))
+	closeErr := d.inflater.Close()
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	b := img.Bounds()
-	w, h = b.Dx(), b.Dy()
-	if w <= 0 || h <= 0 || w > 4096 || h > 4096 {
-		return nil, 0, 0, errors.New("implausible bitmap size")
+	if closeErr != nil {
+		return nil, 0, 0, closeErr
 	}
-	pix = make([]byte, w*h*4)
-	switch m := img.(type) {
-	case *image.NRGBA:
-		for y := 0; y < h; y++ {
-			row := m.Pix[y*m.Stride : y*m.Stride+w*4]
-			out := pix[y*w*4:]
-			for x := 0; x < w; x++ {
-				r, g, bl, a := uint32(row[4*x]), uint32(row[4*x+1]), uint32(row[4*x+2]), uint32(row[4*x+3])
-				out[4*x] = byte((r*a + 127) / 255)
-				out[4*x+1] = byte((g*a + 127) / 255)
-				out[4*x+2] = byte((bl*a + 127) / 255)
-				out[4*x+3] = byte(a)
-			}
+	if d.rd.Len() != 0 || adler32.Checksum(raw) != binary.BigEndian.Uint32(d.idat[len(d.idat)-4:]) {
+		return nil, 0, 0, errBitmapPNG
+	}
+	if cap(d.pix) < w*h*4 {
+		d.pix = make([]byte, w*h*4)
+	}
+	pix := d.pix[:w*h*4]
+	bpp := max(1, (channels*depth+7)/8)
+	for _, p := range passes[:npass] {
+		pw, ph := max(0, (w-p[0]+p[2]-1)/p[2]), max(0, (h-p[1]+p[3]-1)/p[3])
+		if pw == 0 || ph == 0 {
+			continue
 		}
-	case *image.RGBA:
-		for y := 0; y < h; y++ {
-			copy(pix[y*w*4:(y+1)*w*4], m.Pix[y*m.Stride:y*m.Stride+w*4])
-		}
-	default:
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				c := color.RGBAModel.Convert(img.At(b.Min.X+x, b.Min.Y+y)).(color.RGBA)
-				o := (y*w + x) * 4
-				pix[o], pix[o+1], pix[o+2], pix[o+3] = c.R, c.G, c.B, c.A
+		stride := (pw*channels*depth + 7) / 8
+		var prev []byte
+		for y := 0; y < ph; y++ {
+			filter, row := raw[0], raw[1:stride+1]
+			if !unfilterPNG(row, prev, bpp, filter) {
+				return nil, 0, 0, errBitmapPNG
 			}
+			for x := 0; x < pw; x++ {
+				at := ((p[1]+y*p[3])*w + p[0] + x*p[2]) * 4
+				var r, g, b, a uint32
+				if kind == 3 {
+					index := pngSample(row, x, depth)
+					if int(index) >= colors {
+						return nil, 0, 0, errBitmapPNG
+					}
+					c := d.palette[index]
+					a = uint32(c[3])
+					// Paletted colours use color.NRGBA.RGBA's 16-bit conversion.
+					r, g, b = uint32(c[0])*257*a/255>>8, uint32(c[1])*257*a/255>>8, uint32(c[2])*257*a/255>>8
+				} else {
+					r = pngSample(row, x*channels, depth)
+					g, b, a = r, r, (1<<depth)-1
+					switch kind {
+					case 2, 6:
+						g, b = pngSample(row, x*channels+1, depth), pngSample(row, x*channels+2, depth)
+						if kind == 6 {
+							a = pngSample(row, x*channels+3, depth)
+						}
+					case 4:
+						a = pngSample(row, x*channels+1, depth)
+					}
+					if hasTransparent && r == uint32(transparent[0]) && (kind == 0 || (g == uint32(transparent[1]) && b == uint32(transparent[2]))) {
+						a = 0
+					}
+					switch depth {
+					case 16:
+						r, g, b, a = r*a/65535>>8, g*a/65535>>8, b*a/65535>>8, a>>8
+					case 8:
+						r, g, b = (r*a+127)/255, (g*a+127)/255, (b*a+127)/255
+					default:
+						r = r * 255 / ((1 << depth) - 1)
+						if a == 0 {
+							r = 0
+						} else {
+							a = 255
+						}
+						g, b = r, r
+					}
+				}
+				pix[at], pix[at+1], pix[at+2], pix[at+3] = byte(r), byte(g), byte(b), byte(a)
+			}
+			prev, raw = row, raw[stride+1:]
 		}
 	}
 	return pix, w, h, nil
 }
 
+func pngSample(row []byte, i, depth int) uint32 {
+	switch depth {
+	case 8:
+		return uint32(row[i])
+	case 16:
+		return uint32(binary.BigEndian.Uint16(row[2*i:]))
+	}
+	return uint32(row[i*depth/8]>>uint(8-depth-(i*depth&7))) & ((1 << depth) - 1)
+}
+
+func unfilterPNG(row, prev []byte, bpp int, filter byte) bool {
+	if filter > 4 {
+		return false
+	}
+	for x := range row {
+		var left, up, ul byte
+		if x >= bpp {
+			left = row[x-bpp]
+		}
+		if prev != nil {
+			up = prev[x]
+			if x >= bpp {
+				ul = prev[x-bpp]
+			}
+		}
+		switch filter {
+		case 1:
+			row[x] += left
+		case 2:
+			row[x] += up
+		case 3:
+			row[x] += byte((int(left) + int(up)) / 2)
+		case 4:
+			p := int(left) + int(up) - int(ul)
+			dl, du, dul := absPNG(p-int(left)), absPNG(p-int(up)), absPNG(p-int(ul))
+			switch {
+			case dl <= du && dl <= dul:
+				row[x] += left
+			case du <= dul:
+				row[x] += up
+			default:
+				row[x] += ul
+			}
+		}
+	}
+	return true
+}
+
+func absPNG(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 // scalePremultiplied resamples a premultiplied RGBA image to dw×dh by area
 // averaging (downscale) or bilinear interpolation (upscale).
-func scalePremultiplied(src []byte, sw, sh, dw, dh int) []byte {
-	dst := make([]byte, dw*dh*4)
+func scalePremultiplied(dst, src []byte, sw, sh, dw, dh int) []byte {
+	if cap(dst) < dw*dh*4 {
+		dst = make([]byte, dw*dh*4)
+	}
+	dst = dst[:dw*dh*4]
 	if dw == sw && dh == sh {
 		copy(dst, src)
 		return dst
