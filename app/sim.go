@@ -156,6 +156,11 @@ func (s *Sim) OpenWindow(cfg Config, w, h int, scale float32, b Builder) (id int
 // Window returns a window's App for assertions and scenario setup.
 func (s *Sim) Window(id int) *App { return s.windows[id].a }
 
+// FramePixels borrows the last rendered frame until the next render or Close.
+// It is nil before the first frame and when SimOptions.Render is false.
+// Callers comparing frames must copy the pixels before advancing again.
+func (s *Sim) FramePixels(id int) *image.RGBA { return s.windows[id].pixels }
+
 // Event dispatches a native-shaped event. data supplies text/preedit/paste/drop
 // bytes; TextRef is local to this event. Events at one instant batch naturally.
 func (s *Sim) Event(id int, e platform.Event, data ...[]byte) (err error) {

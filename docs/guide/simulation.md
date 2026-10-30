@@ -6,6 +6,8 @@ pump and surface. No visible window, key window, Accessibility permission or
 Screen Recording permission is needed. `SimOptions.Render` also renders the
 draw lists with the real offscreen renderer; the default builds them without
 the pixel readback. Both modes use the real glyph atlas.
+`FramePixels` borrows the latest rendered image; copy its pixels before
+advancing to compare actual pictures across cache eviction or memory trims.
 
 Create a builder as for `NewOffscreen`. Open more windows with
 `sim.OpenWindow(cfg, widthPixels, heightPixels, scale, builder)`. They share

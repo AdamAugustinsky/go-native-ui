@@ -15,10 +15,33 @@ import (
 )
 
 func TestSimUICachePressureWhileHidden(t *testing.T) {
-	s, b := smallScene(t)
+	b := &scene{ids: []uint64{1, 2, 3}}
+	s, err := app.NewSim(app.Config{}, 900, 700, 1, b, app.SimOptions{Seed: 1, Render: true})
+	must(t, err)
+	defer s.Close()
+	must(t, s.Advance(time.Second))
 	b.k.Focus(b.fieldKey)
 	b.field.SetSelection(0, 5)
 	wake(t, s, 12*time.Second)
+	b.burst = 6000
+	wake(t, s, 100*time.Millisecond)
+	peak, err := s.Memory()
+	must(t, err)
+	if peak.Boxes < 6000 || peak.Instances < 6000 {
+		t.Fatalf("rendered stress did not grow capacities: %+v", peak)
+	}
+	b.burst = 0
+	wake(t, s, 100*time.Millisecond)
+	pixels := slices.Clone(s.FramePixels(0).Pix)
+	// Every slot of the three-buffer GPU ring needs sixty calm uses.
+	for range 210 {
+		wake(t, s, 20*time.Millisecond)
+	}
+	floor, err := s.CheckMemory(app.SimMemory{Boxes: 2048, Instances: 8192})
+	must(t, err)
+	if floor.Boxes >= peak.Boxes || floor.Instances >= peak.Instances || !slices.Equal(pixels, s.FramePixels(0).Pix) {
+		t.Fatalf("trimming changed pixels or retained peak storage: peak=%+v floor=%+v", peak, floor)
+	}
 	before := tree(b.a.UI)
 	ts := b.a.Text
 	runGen, atlasGen := ts.RunGeneration(), ts.AtlasGeneration()
@@ -47,10 +70,13 @@ func TestSimUICachePressureWhileHidden(t *testing.T) {
 	quiet(t, s, 7*time.Hour)
 	show(t, s)
 	equalTrees(t, tree(b.a.UI), before)
+	if !slices.Equal(pixels, s.FramePixels(0).Pix) {
+		t.Fatal("run/atlas eviction changed returned pixels")
+	}
 	if !slices.Equal(b.field.Selected(), []byte("Draft")) {
 		t.Fatal("cache eviction lost selection")
 	}
-	_, err := s.CheckMemory(app.SimMemory{RunGlyphs: text.MaxCachedGlyphs, RunText: text.MaxCachedTextBytes})
+	_, err = s.CheckMemory(app.SimMemory{RunGlyphs: text.MaxCachedGlyphs, RunText: text.MaxCachedTextBytes})
 	must(t, err)
 	// Atlas UVs can change during eviction; once rebuilt, an unchanged
 	// return must once again have exactly the same draw list.
@@ -60,6 +86,7 @@ func TestSimUICachePressureWhileHidden(t *testing.T) {
 	quiet(t, s, time.Hour)
 	show(t, s)
 	t.Logf("run generations %d -> %d; atlas generations %d -> %d", runGen, ts.RunGeneration(), atlasGen, ts.AtlasGeneration())
+	t.Logf("pixel-identical trims: boxes %d -> %d, instances %d -> %d", peak.Boxes, floor.Boxes, peak.Instances, floor.Instances)
 }
 
 func TestSimUIExampleBuilders(t *testing.T) {
