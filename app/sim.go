@@ -68,6 +68,7 @@ type simWindow struct {
 	lastDraw, lastSem uint64
 	frames            int
 	audited           int
+	auditPending      int
 }
 
 // NewSim opens window zero. Further windows share its text system and GPU.

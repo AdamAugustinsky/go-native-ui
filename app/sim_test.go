@@ -436,6 +436,53 @@ func TestSimAllocationGateDetectsOneAllocation(t *testing.T) {
 	}
 }
 
+type simSettlingLayout struct {
+	frames, bad int
+	follow      bool
+}
+
+func (b *simSettlingLayout) Build(c *ui.Context) {
+	b.frames++
+	c.NextSize(ui.Px(50), ui.Px(50))
+	c.Open(0, "parent")
+	w := float32(40)
+	if b.frames <= b.bad {
+		w = 100
+	}
+	c.NextSize(ui.Px(w), ui.Px(40))
+	c.NextBG(0x123456ff)
+	c.Box(ui.DrawBackground, "child")
+	c.Close()
+	if b.follow {
+		c.RequestFrame()
+	}
+}
+
+func TestSimAuditBoundsLayoutSettling(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		bad          int
+		follow, fail bool
+	}{
+		{"settles", 2, true, false},
+		{"persistent", 3, true, true},
+		{"static", 1, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := NewSim(Config{}, 100, 100, 1, &simSettlingLayout{bad: tc.bad, follow: tc.follow}, SimOptions{})
+			simMust(t, err)
+			defer s.Close()
+			err = s.Advance(100 * time.Millisecond)
+			if (err != nil) != tc.fail {
+				t.Fatalf("failure=%v, want %v", err, tc.fail)
+			}
+			if err != nil && !strings.Contains(err.Error(), "layout: overflow") {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 type simPanic struct{}
 
 func (simPanic) Build(*ui.Context) { panic("planted simulation panic") }

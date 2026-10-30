@@ -68,7 +68,10 @@ Replay is comparable on the same host and font/OS environment; native text
 versions and external data can change the result.
 
 The default `SimCheck`s require a clean layout audit and a cause for every
-frame. Custom checks run after every step, and failures include the seed,
+frame. Layout may use the previous frame's rectangles: audit findings have
+at most two transitional frames to converge, only while a follow-up frame
+is already owed. A static or persistent finding fails. Custom checks run
+after every step, and failures include the seed,
 step, virtual time and recent trace. Use these checkpoints as well:
 
 - `CheckAllocations(true)` enables exact per-frame `runtime.ReadMemStats`
