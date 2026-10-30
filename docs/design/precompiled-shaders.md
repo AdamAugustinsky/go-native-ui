@@ -8,14 +8,6 @@ system's Metal compiler cache answers, but 87–119 ms (quad) and 44–47 ms
 ([measurements](../measurements/metallib-macos.md)). The renderer now loads
 a precompiled library and keeps the source as a supported fallback.
 
-The perf merge changes the quad source (texture tables, capsule segments and
-shadow early-out). The previously committed library is removed and the
-manifest marks it absent until CI regenerates it; the merge host has no Metal
-compiler. Runtime compilation uses the merged source. Run the metallib
-workflow on this branch, copy its tested artifact into `internal/metallib/lib/`
-and commit both files. The strict `-check` gate remains enabled and fails
-until that artifact is committed.
-
 ## The artifact
 
 `internal/metallib/lib/` holds two files:
