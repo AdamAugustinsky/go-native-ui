@@ -9,9 +9,13 @@ import (
 var simulation atomic.Pointer[SimClock]
 
 // Now returns monotonic nanoseconds, in the native event clock's timebase.
+// Under UseSynctestForTesting it follows time.Now.
 func Now() int64 {
 	if c := simulation.Load(); c != nil {
 		return c.now.Load()
+	}
+	if synctestMode.Load() != 0 {
+		return synctestNow()
 	}
 	return systemNanotime()
 }
