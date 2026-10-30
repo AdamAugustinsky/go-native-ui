@@ -269,6 +269,14 @@ func (c *Context) overlayInput() {
 		return
 	}
 	in := &c.in
+	if in.FocusLost || !in.Focused {
+		for i := 0; i < c.nOvPrev; i++ {
+			p := &c.ovPrev[i]
+			if p.kind == OverlayPopup && (p.opts.Dismiss == DismissMenu || p.opts.Dismiss == DismissTransient) {
+				c.dismiss(p.key)
+			}
+		}
+	}
 	pressed := false
 	for b := range in.Pressed {
 		pressed = pressed || in.Pressed[b]

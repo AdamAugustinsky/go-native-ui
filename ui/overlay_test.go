@@ -4,6 +4,29 @@ import (
 	"testing"
 )
 
+func TestPopupDismissalAfterHiddenFocusRoundTrip(t *testing.T) {
+	for _, kind := range []Dismissal{DismissMenu, DismissTransient, DismissSemitransient, DismissApplication} {
+		h := newHarness(t, 400, 300)
+		var sig OverlaySignal
+		build := func(c *Context) {
+			c.NextOverlay(OverlayOpts{Dismiss: kind})
+			sig = c.BeginOverlay(1, OverlayPopup, [4]float32{}, PlaceBelow)
+			c.Spacer(Px(100), Px(50))
+			c.EndOverlay()
+		}
+		h.frame(build)
+		h.in.FocusLost = true // blur and regain arrived without a frame between
+		h.frame(build)
+		want := kind == DismissMenu || kind == DismissTransient
+		if sig.Dismissed != want {
+			t.Fatalf("dismissal=%d: dismissed=%v, want %v", kind, sig.Dismissed, want)
+		}
+		if h.in.FocusLost {
+			t.Fatal("focus loss lasted more than one frame")
+		}
+	}
+}
+
 // ovRig is a window of 400×300 with a button at (20, 20) 80×24, a text field
 // at (20, 80), a popup the button opens and, on request, a nested popup, a
 // modal and a tooltip.

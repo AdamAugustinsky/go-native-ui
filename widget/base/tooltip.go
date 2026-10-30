@@ -30,6 +30,10 @@ func (k *Kit) TooltipDue(id ui.ID) (key ui.Key, due bool) {
 	}
 	key = c.KeyOf(id)
 	now := c.Input().Time
+	if c.Input().FocusLost || !c.Input().Focused {
+		k.tip.key = 0
+		return key, false
+	}
 	if !c.TooltipTarget(id) {
 		if k.tip.key == key {
 			k.tip.key = 0
