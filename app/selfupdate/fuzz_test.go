@@ -140,7 +140,7 @@ func fuzzSafeArchiveName(n string) bool {
 
 // Versions use decimal components of at most 18 digits. The independent
 // reference compares trimmed decimal strings, without integer conversion.
-// Four strings <=4 KiB each; 5 s and 16 MiB + 256*input bytes.
+// Four strings <=16 KiB combined; 5 s and 16 MiB + 256*input bytes.
 func FuzzUpdateVersions(f *testing.F) {
 	for _, v := range []string{"", "1", "1.2.0", "01.002", ".1", "1..2", "18446744073709551615", "1\x00", "-1", "1.é"} {
 		f.Add(v, "2", "1.2", "1")

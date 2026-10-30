@@ -35,6 +35,8 @@ func FuzzPasteDropPaths(f *testing.F) {
 		f.Add([]byte(s), uint16(4096))
 	}
 	f.Add(buildDropFiles([]string{`C:\Users\a b\é.txt`, "D:\\😀\\x"}), uint16(4096))
+	f.Add(dropFiles(false, "D:\\price\x80 caf\xe9.png"), uint16(4096))
+	f.Add(dropFiles(true, "a\xed\xa0\x80b"), uint16(2))
 	f.Fuzz(func(t *testing.T, data []byte, limit uint16) {
 		if len(data) > 64<<10 {
 			t.Skip()
@@ -103,6 +105,12 @@ func FuzzPasteDropPaths(f *testing.F) {
 // cap. Per case: 5 s and 32 MiB+24*maxClipPixels bytes allocated. Successful
 // PNG -> DIB -> PNG conversions preserve every RGBA pixel, not just size.
 func FuzzPasteImages(f *testing.F) {
+	// Existing DIB format fixtures seed palette, bottom-up and top-down
+	// decoding, beyond the V5 blocks made by the PNG round trip.
+	f.Add(dibOf(2, 2, 24, 0, nil, []byte{1, 2, 3, 4, 5, 6, 0, 0, 7, 8, 9, 10, 11, 12, 0, 0}))
+	f.Add(dibOf(1, -2, 32, 0, nil, []byte{3, 2, 1, 0, 6, 5, 4, 0}))
+	f.Add(dibOf(1, 1, 16, 0, nil, []byte{0x1f, 0, 0, 0}))
+	f.Add(dibOf(2, 1, 8, 0, make([]byte, 1024), []byte{1, 0, 0, 0}))
 	for _, wh := range [][2]int{{1, 1}, {5, 3}, {17, 9}} {
 		b, _ := testPNG(f, wh[0], wh[1])
 		f.Add(b)
