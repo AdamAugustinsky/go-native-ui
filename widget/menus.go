@@ -2,7 +2,7 @@ package widget
 
 import (
 	"gonativeui/icon"
-	"gonativeui/menu"
+	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
 	"gonativeui/widget/base"
@@ -21,8 +21,6 @@ import (
 // delivers the command as an edit action of that field. (A MenuButton is a
 // button and takes the focus when clicked, like any button.)
 
-const maxMenuDepth = base.MaxMenuDepth
-
 var popBase = base.PopupKeyBase
 
 // contextMenu builds the open context menu, at the end of the frame.
@@ -30,25 +28,6 @@ func (k *Kit) contextMenu() {
 	if k.pop.Kind == base.PopupContext && k.Menu() != nil {
 		k.menuPanel(0, k.pop.Menu, k.pop.At, ui.PlaceBelow)
 	}
-}
-
-// itemTitle is the text of a menu item.
-func (k *Kit) itemTitle(it menu.Item) (title string, cmd menu.Command) {
-	m := k.Menu()
-	switch it.Kind {
-	case menu.ItemSubmenu:
-		title = it.Title
-		if title == "" {
-			title = m.Menus()[it.Submenu].Title
-		}
-	case menu.ItemCommand:
-		cmd, _ = m.Command(it.Command)
-		title = cmd.Title
-		if title == "" {
-			title = menu.RoleTitle(cmd.Role)
-		}
-	}
-	return title, cmd
 }
 
 // popupSurface sets the style of the next box to the raised surface of a
@@ -138,139 +117,9 @@ func (k *Kit) optionRow(o optionRow) ui.ID {
 	return id
 }
 
-// menuPanel builds the popup of menu mi of the model at nesting level level,
-// placed against anchor, and the submenu open from it. It reports nothing: a
-// choice goes to the model, a dismissal updates the popup state.
+// menuPanel shares Rex's drawn-menu implementation.
 func (k *Kit) menuPanel(level, mi int, anchor [4]float32, place ui.Placement) {
-	c := k.c
-	m := k.Menu()
-	px := &k.r.Px
-	mn := &m.Menus()[mi]
-	if level >= maxMenuDepth {
-		return
-	}
-
-	// the widths: the widest title and the widest shortcut
-	iconW := theme.Snap(px.IconSize)
-	var lw, sw float32
-	hasSub := false
-	for _, it := range mn.Items {
-		t, cmd := k.itemTitle(it)
-		lw = max(lw, k.textW(k.r.Font.UI, t))
-		if it.Kind == menu.ItemCommand {
-			k.scratch = cmd.Shortcut.AppendLabel(k.scratch[:0])
-			sw = max(sw, k.textWB(k.r.Font.UI, k.scratch))
-		}
-		hasSub = hasSub || it.Kind == menu.ItemSubmenu
-	}
-	lw = theme.Snap(lw + labelSlack) // snapping must not leave the widest title narrower than its text
-	sw = theme.Snap(sw)
-	rowW := 2*px.Pad + iconW + lw
-	if sw > 0 {
-		rowW += sw + 2*px.Gap
-	}
-	if hasSub {
-		rowW += iconW
-	}
-	rowW = theme.Snap(rowW)
-	pad := theme.Snap(px.GapSmall)
-
-	okey := ui.KeyN(popBase, uint64(level*64+mi+1))
-	k.popupSurface()
-	c.NextPadding(pad, pad, pad, pad)
-	c.NextSize(ui.Px(rowW+2*pad), ui.Children(1))
-	c.NextRole(ui.RoleMenu)
-	c.NextSemName(mn.Title)
-	os := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
-	if os.Dismissed {
-		if level == 0 {
-			k.pop.Reset()
-		} else {
-			k.pop.Hi[level-1] = -1
-		}
-	}
-	n := len(mn.Items)
-	var nv base.PopupNav
-	for i, it := range mn.Items {
-		if it.Kind == menu.ItemSeparator {
-			c.NextSize(ui.Pct(1), ui.Px(2*pad))
-			sep := c.Box(0, "sep")
-			c.Push(sep)
-			theme.At(c, px.Pad, pad-px.BorderW/2, rowW-2*px.Pad, px.BorderW)
-			c.NextBG(k.r.Pal.Line)
-			c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(okey, uint64(1000+i)), nil)
-			c.Pop()
-			continue
-		}
-		title, cmd := k.itemTitle(it)
-		key := ui.KeyN(okey, uint64(i+1))
-		o := optionRow{key: key, label: strBytes(title), w: rowW, lw: lw, sw: sw, iconW: iconW,
-			role: ui.RoleMenuItem, pos: i, n: n}
-		if it.Kind == menu.ItemCommand {
-			k.scratch = cmd.Shortcut.AppendLabel(k.scratch[:0])
-			o.shortcut = k.scratch
-			o.checked = m.Checked(cmd.ID)
-			o.disabled = !m.Enabled(cmd.ID)
-			if o.checked {
-				o.role = ui.RoleMenuItemCheckbox
-			}
-		} else {
-			o.sub = true
-		}
-		o.disabled = o.disabled || k.off()
-		row := k.optionRow(o)
-		if !o.disabled {
-			nv.Arrive(c, key)
-			s := c.Signal(row)
-			if s.Hovering && k.MouseMoved() {
-				c.SetFocus(key)
-				c.SetFocusVisible(false)
-				if it.Kind == menu.ItemSubmenu {
-					k.OpenSubmenu(level, i, key)
-				} else if k.pop.Hi[level] >= 0 {
-					k.pop.Hi[level] = -1
-				}
-			}
-			focused := c.Focused(row)
-			switch {
-			case s.Clicked || s.Activated:
-				if it.Kind == menu.ItemSubmenu {
-					k.OpenSubmenu(level, i, key)
-				} else {
-					k.ChooseCommand(cmd.ID)
-				}
-			case focused && it.Kind == menu.ItemSubmenu && c.TakeKey(ui.KeyRight, 0):
-				k.OpenSubmenu(level, i, key)
-			case focused && level > 0 && c.TakeKey(ui.KeyLeft, 0):
-				c.SetFocus(k.pop.Row[level-1])
-				c.SetFocusVisible(true)
-				k.pop.Hi[level-1] = -1
-			case focused && level == 0 && k.pop.Kind == base.PopupMenu && c.TakeKey(ui.KeyLeft, 0):
-				k.StepMenuBar(-1)
-			case focused && level == 0 && k.pop.Kind == base.PopupMenu && it.Kind != menu.ItemSubmenu && c.TakeKey(ui.KeyRight, 0):
-				k.StepMenuBar(1)
-			}
-			nv.At(c, key, focused)
-		}
-		if it.Kind == menu.ItemSubmenu && k.pop.Hi[level] == int32(i) {
-			c.Push(row)
-			k.menuPanel(level+1, it.Submenu, c.Rect(row), ui.PlaceRight)
-			c.Pop()
-		}
-	}
-	nv.End(c)
-	c.EndOverlay()
-}
-
-// openSub opens the submenu of item i at level.
-func (k *Kit) openSub(level, i int, row ui.Key) {
-	if k.pop.Hi[level] != int32(i) {
-		for l := level + 1; l < maxMenuDepth; l++ {
-			k.pop.Hi[l] = -1
-		}
-		k.pop.Hi[level], k.pop.Row[level] = int32(i), row
-		k.c.RequestFrame()
-	}
+	rexui.DrawMenu(k.Kit, mi, anchor, place)
 }
 
 // MenuBar builds the menu bar of the model's Bar menus: a row of titles that

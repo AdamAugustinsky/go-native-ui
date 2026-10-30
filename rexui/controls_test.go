@@ -161,6 +161,13 @@ func TestStepperRepeatsWhileHeld(t *testing.T) {
 
 	pressAt(g, ux, uy)
 	g.frames(frames(rc.RepeatDelay*1000) - 3)
+	if g.c.Animating() {
+		t.Error("an unchanged held stepper keeps display-rate frames active")
+	}
+	if wake := g.c.WakeAfter(); wake <= 0 || wake > int64(rc.RepeatDelay*1e9) {
+		t.Errorf("next repeat wake is %d", wake)
+	}
+
 	if v != 1 {
 		t.Fatalf("held for just under the delay: %v steps, want 1", v)
 	}

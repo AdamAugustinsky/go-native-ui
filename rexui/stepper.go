@@ -100,9 +100,9 @@ func Stepper(k *base.Kit, label string, v *float32, lo, hi, step float32, o Step
 		su, sd := c.PeekSignal(upKey), c.PeekSignal(downKey)
 		switch {
 		case su.Pressed || su.Dragging && su.Hovering:
-			n = repeats(c, rc, ui.KeyN(p.Key, 15), holdMs(c, ui.KeyN(p.Key, 13)))
+			n = repeats(c, rc, ui.KeyN(p.Key, 15), float32(k.HeldMillis(ui.KeyN(p.Key, 13))))
 		case sd.Pressed || sd.Dragging && sd.Hovering:
-			n = -repeats(c, rc, ui.KeyN(p.Key, 15), holdMs(c, ui.KeyN(p.Key, 13)))
+			n = -repeats(c, rc, ui.KeyN(p.Key, 15), float32(k.HeldMillis(ui.KeyN(p.Key, 13))))
 		}
 		if c.FocusKey() == p.Key {
 			for c.TakeKey(ui.KeyUp, 0) {
@@ -177,22 +177,6 @@ func Stepper(k *base.Kit, label string, v *float32, lo, hi, step float32, o Step
 	return sig
 }
 
-// clockMod is the period of holdMs's clock in milliseconds: the largest that a
-// float32 holds exactly.
-const clockMod = 1 << 24
-
-// holdMs is how long, in milliseconds, the button that this is called for each
-// frame of has been held, 0 in the frame it went down. It keeps the time of the
-// first call in ui's animated values: a value that is asked for and never
-// moves (rate 0) stays where it started, and is dropped in the first frame it
-// is not asked for, so that the next hold starts afresh. Asking also keeps
-// frames coming while it is held, which the repeats need.
-func holdMs(c *ui.Context, key ui.Key) float32 {
-	now := c.Input().Time / 1e6 & (clockMod - 1)
-	t0 := c.AnimateValueFrom(key, float32(now), float32(now)+1, 0)
-	return float32((now - int64(t0)) & (clockMod - 1))
-}
-
 // repeats is how many steps a half held for e milliseconds is due in this
 // frame: one when it went down, one more after the delay and then one per
 // interval, less those already made in this hold, which it keeps under key
@@ -205,6 +189,11 @@ func repeats(c *ui.Context, rc *StepperRecipe, key ui.Key, e float32) int {
 	if e >= delay {
 		n += 1 + int((e-delay)/every)
 	}
+	next := delay
+	if e >= delay {
+		next = delay + float32(n-1)*every
+	}
+	c.WakeIn(max(int64((next-e)*1e6), 1))
 	made := int(c.KeepValue(key, 0, float32(n)))
 	return max(n-made, 0)
 }

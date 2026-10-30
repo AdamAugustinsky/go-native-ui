@@ -672,6 +672,9 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 		flags = ui.Disabled
 	}
 	row := c.BoxKeyed(flags, rkey, nil)
+	if rr := c.Rect(row); rr[3] > rr[1] && c.ShownRect(row) == [4]float32{} {
+		return pressed, false, h
+	}
 	c.Push(row)
 	rr := c.Rect(row)
 	w := rr[2] - rr[0]
@@ -808,6 +811,9 @@ func sidebarHeader(k *base.Kit, key ui.Key, it *SidebarItem, rc *SidebarRecipe, 
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(it.Title)
 	hb := c.BoxKeyed(ui.Hoverable|ui.HotAnimation, hkey, nil)
+	if rr := c.Rect(hb); rr[3] > rr[1] && c.ShownRect(hb) == [4]float32{} {
+		return h, false
+	}
 	c.Push(hb)
 	rr := c.Rect(hb)
 	w := rr[2] - rr[0]

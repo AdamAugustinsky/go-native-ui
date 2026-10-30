@@ -6,6 +6,7 @@ import (
 
 	"gonativeui/menu"
 	"gonativeui/rexui"
+	"gonativeui/theme"
 	"gonativeui/ui"
 )
 
@@ -145,10 +146,16 @@ func TestMenuKeyboardNavigationSubmenuAndEscape(t *testing.T) {
 
 func TestMenuClickOutsideClosesAndIsConsumed(t *testing.T) {
 	g, v := newShell(t)
+	g.build = func(k *Kit) {
+		v.build(k)
+		theme.At(k.c, 300, 300, 100, 30)
+		if k.c.Signal(k.c.Box(ui.Clickable|ui.DrawText|ui.FloatingX|ui.FloatingY, "Behind")).Clicked {
+			v.dlg = true
+		}
+	}
+	g.frames(2)
 	g.clickOn(ui.RoleMenuItem, "File")
-	cb := g.must(ui.RoleButton, "Delete…")
-	x, y := centre(cb)
-	g.click(x, y) // outside the menu, on a button
+	g.click(350, 315) // outside the menu, on the backing button
 	if g.k.MenuOpen() {
 		t.Fatal("a press outside did not close the menu")
 	}
