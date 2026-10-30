@@ -302,8 +302,30 @@ const (
 	curlCorner   = 5
 )
 
-// curlPath is the scratch the tails are built in (main thread).
-var curlPath gpu.Path
+// curlPaths keeps both sides at a few scales across windows (main thread).
+// It owns geometry only; each caller still owns and releases its mask.
+var curlPaths [8]struct {
+	key  uint64
+	path gpu.Path
+}
+var nextCurlPath int
+
+func cachedCurlPath(scale float32, left bool) (*gpu.Path, uint64) {
+	key := uint64(math.Float32bits(scale))<<2 | 1
+	if left {
+		key |= 2
+	}
+	for i := range curlPaths {
+		if curlPaths[i].key == key {
+			return &curlPaths[i].path, key
+		}
+	}
+	entry := &curlPaths[nextCurlPath]
+	nextCurlPath = (nextCurlPath + 1) % len(curlPaths)
+	BubbleTailPath(&entry.path, scale, left)
+	entry.key = key
+	return &entry.path, key
+}
 
 // BubbleTailPath builds into p Messages' curled tail of a bubble at scale
 // (pixels per point), for the bubble's bottom right corner (left: its bottom
@@ -356,11 +378,13 @@ func bubbleCurl(k *base.Kit, b *Bubble, fill uint32) {
 		return
 	}
 	left := b.opts.Variant != BubbleOutgoing
-	BubbleTailPath(&curlPath, sc, left)
-	tw, th := c.NextPath(b.opts.Curl, &curlPath)
-	if tw == 0 {
+	p, geometry := cachedCurlPath(sc, left)
+	tex, pw, ph := b.opts.Curl.MaskKey(c.Uploader(), p, geometry)
+	if tex == 0 {
 		return
 	}
+	tw, th := float32(pw), float32(ph)
+	c.NextImage(tex, [4]float32{0, 0, tw, th}, gpu.ModeMaskR8)
 	x := w - pt(sc, curlOverlap)
 	if left {
 		x = pt(sc, curlOverlap) - tw
