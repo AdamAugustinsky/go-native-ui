@@ -318,3 +318,18 @@ func (m *cursorMap) pointerShape(curX, curY float32, curOK bool, lastX, lastY fl
 	}
 	return m.at(lastX, lastY)
 }
+
+// regionRefresh coalesces native registrations while scrolling under a still
+// pointer. A move, scroll end or unchanged frame flushes the current maps.
+type regionRefresh struct {
+	scrolling, changed        bool
+	cursorDirty, tooltipDirty bool
+}
+
+func (r *regionRefresh) scroll(phase, momentum ScrollPhase) {
+	p := phase
+	if momentum != PhaseNone {
+		p = momentum
+	}
+	r.scrolling = p != PhaseEnded && p != PhaseCancelled && p != PhaseStationary
+}

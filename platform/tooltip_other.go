@@ -11,3 +11,6 @@ func (w *Window) SetTooltipRegions([]TooltipRegion) {}
 
 // SetTooltipText does nothing here: tooltips are drawn by the widgets.
 func (w *Window) SetTooltipText(func(key uint64, dst []byte) []byte) {}
+
+// FinishRegionFrame does nothing where native rects do not need registration.
+func (w *Window) FinishRegionFrame() {}

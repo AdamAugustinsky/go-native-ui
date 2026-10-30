@@ -24,6 +24,7 @@ func (a *App) syncRegions() {
 	a.Win.SetDragRegions(drags)
 
 	a.syncTooltips(a.Win)
+	a.Win.FinishRegionFrame()
 }
 
 // tooltipTarget is the part of platform.Window that syncTooltips drives.

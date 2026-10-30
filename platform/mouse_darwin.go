@@ -88,6 +88,7 @@ func (w *Window) pointerEvent(ev objc.ID, typ uintptr, t int64) (consumed bool) 
 			e.Clicks = uint8(min(max(int(objc.Send(ev, selClickCount)), 0), 255))
 		}
 	}
+	w.flushRegionRects()
 	w.pointerIn = true
 	if typ == 5 && w.hostMove(e.X, e.Y, t) {
 		return false // over a host (host_darwin.go)
@@ -143,6 +144,10 @@ func (w *Window) scrollEvent(ev objc.ID, t int64) {
 	e := scrollEventOf(ev, w.scale, t)
 	e.X, e.Y = w.locate(ev)
 	e.Flags |= FlagPos
+	w.aux.rects.scroll(e.Phase, e.Momentum)
+	if !w.aux.rects.scrolling {
+		w.flushRegionRects()
+	}
 	w.q.push(e)
 	if !w.hosts.bubbling {
 		w.hosts.queuedScroll = ev // for this delivery (host_darwin.go)
@@ -260,8 +265,11 @@ func diagonalCursor(cls objc.ID, corner uintptr, private string) objc.ID {
 // believes is current, which left the arrow unrestorable. See addCursorRects
 // for how overlapping regions are resolved.
 func (w *Window) SetCursorRegions(r []CursorRegion) {
-	if w.curs.setRegions(r) && w.curs.override == CursorArrow {
-		w.rebuildCursorRects()
+	if w.curs.setRegions(r) {
+		w.aux.rects.changed, w.aux.rects.cursorDirty = true, true
+		if w.curs.override == CursorArrow && !w.aux.rects.scrolling {
+			w.rebuildCursorRects()
+		}
 	}
 }
 
@@ -277,6 +285,7 @@ func (w *Window) SetCursorOverride(c Cursor) {
 }
 
 func (w *Window) rebuildCursorRects() {
+	w.aux.rects.cursorDirty = false
 	objc.Send(w.view, selDiscardCursorRects)
 	objc.Send(w.view, selResetCursorRects)
 	objc.Send1(w.win, selInvalidateCursors, uintptr(w.view)) // AppKit re-evaluates the rects at the pointer now
