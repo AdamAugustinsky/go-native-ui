@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	"unicode"
@@ -23,6 +24,9 @@ import (
 // Per case: 5 s and 32 MiB + 4096*input bytes in Go allocations; output slabs
 // are bounded below as well. The native shaper's allocator is not Go's heap.
 func FuzzFileNamePipeline(f *testing.F) {
+	// A truncated sequence can share its first byte with a valid rune. The
+	// reference must compare the remaining bytes, not the token lengths.
+	f.Add([]byte{0, 0, 0xeb, 0xbd}, []byte("0"), false)
 	for _, s := range []string{"", "file10\x00File2\x00é\x00É", "a\xed\xa0\x80\x00a\xed\xb0\x80\x00a�", "\xff\x00\xfe\x00\xc0\x80", "a\u0301\x00👩🏽‍💻\x00עברית", "a0001\x00a1\x00a01"} {
 		f.Add([]byte(s), []byte("a"), false)
 	}
@@ -106,7 +110,7 @@ func FuzzFileNamePipeline(f *testing.F) {
 				}
 				return 1
 			}
-			c := refNatural(string(names[a]), string(names[b]))
+			c := fuzzNaturalBytes(string(names[a]), string(names[b]))
 			if c == 0 {
 				c = cmpInt(int(a), int(b))
 			}
@@ -156,6 +160,64 @@ func FuzzFileNamePipeline(f *testing.F) {
 			}
 		}
 	})
+}
+
+// Fold the source independently, then compare digit runs numerically and
+// everything else byte by byte. Rune-token comparisons are insufficient for
+// malformed UTF-8: EB BD sorts after EB B7 AB, although the first EB token
+// alone is a prefix of the valid rune's three-byte token.
+func fuzzNaturalBytes(a, b string) int {
+	fold := func(s string) string {
+		var out strings.Builder
+		for len(s) > 0 {
+			r, n := utf8.DecodeRuneInString(s)
+			if r == utf8.RuneError && n == 1 {
+				out.WriteByte(s[0])
+			} else {
+				out.WriteRune(unicode.ToLower(r))
+			}
+			s = s[n:]
+		}
+		return out.String()
+	}
+	digit := func(c byte) bool { return c >= '0' && c <= '9' }
+	x, y := fold(a), fold(b)
+	for len(x) > 0 && len(y) > 0 {
+		xd, yd := digit(x[0]), digit(y[0])
+		if xd && yd {
+			i, j := 0, 0
+			for i < len(x) && digit(x[i]) {
+				i++
+			}
+			for j < len(y) && digit(y[j]) {
+				j++
+			}
+			xv, yv := strings.TrimLeft(x[:i], "0"), strings.TrimLeft(y[:j], "0")
+			if c := cmpInt(len(xv), len(yv)); c != 0 {
+				return c
+			}
+			if c := strings.Compare(xv, yv); c != 0 {
+				return c
+			}
+			x, y = x[i:], y[j:]
+			continue
+		}
+		xc, yc := x[0], y[0]
+		if xd {
+			xc = '0'
+		}
+		if yd {
+			yc = '0'
+		}
+		if xc != yc {
+			return cmpInt(int(xc), int(yc))
+		}
+		x, y = x[1:], y[1:]
+	}
+	if c := cmpInt(len(x), len(y)); c != 0 {
+		return c
+	}
+	return strings.Compare(a, b)
 }
 
 // Invalid bytes are distinct tokens; valid runes fold individually. This
