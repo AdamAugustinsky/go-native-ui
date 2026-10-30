@@ -113,3 +113,16 @@ RichText links, prefetching, image decoding and a large synthetic directory.
 It exercises burst input, seconds-to-hours idle, hide/show, focus, appearance
 and resize while hidden, expired AX activation, device rebuilding, retained
 memory, allocation gates, exact return frames, worker cleanup and replay.
+
+The UI scenario suite in `app/simtests/ui` adds a million-row list with an
+independent edit model, growing Markdown, composition/selection, expired AX
+queries, fresh-build semantics, overlays, held input, cache eviction and
+first-return input during box compaction. The Notes and Gallery builders
+also cross hidden scale changes. Its default is one 24-hour seed replayed
+twice; the focused lifecycle cases run once.
+
+```sh
+CGO_ENABLED=0 go test -short ./app/simtests/ui -count=1
+GNUI_SIM_SEEDS=200 GNUI_SIM_HOURS=24 CGO_ENABLED=0 go test -short ./app/simtests/ui -count=1 -timeout=45m
+GNUI_SIM_SEED=42 CGO_ENABLED=0 go test -short ./app/simtests/ui -run TestSimUILongReturn -count=1 -v
+```
