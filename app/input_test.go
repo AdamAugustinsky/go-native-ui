@@ -323,6 +323,19 @@ func TestFocusGainedIsAnEdge(t *testing.T) {
 	}
 }
 
+func TestFocusLossSurvivesRegainBeforeBuild(t *testing.T) {
+	tr := newTranslator()
+	tr.event(ev(platform.EvFocus, nil), nil)
+	tr.event(ev(platform.EvFocus, func(e *platform.Event) { e.Flags = platform.FlagDown }), nil)
+	if !tr.in.Focused || !tr.in.FocusLost {
+		t.Fatal("focus round trip lost the blur edge")
+	}
+	tr.endFrame()
+	if tr.in.FocusLost {
+		t.Fatal("blur edge survived its frame")
+	}
+}
+
 // The character some platforms send along with a Tab key is not text: a lone
 // "\t" that directly follows the key press is dropped. Text that holds a tab
 // (an input-method commit) or a "\t" that follows anything else stays.

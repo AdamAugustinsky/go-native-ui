@@ -6,6 +6,8 @@ pump and surface. No visible window, key window, Accessibility permission or
 Screen Recording permission is needed. `SimOptions.Render` also renders the
 draw lists with the real offscreen renderer; the default builds them without
 the pixel readback. Both modes use the real glyph atlas.
+`FramePixels` borrows the latest rendered image; copy its pixels before
+advancing to compare actual pictures across cache eviction or memory trims.
 
 Create a builder as for `NewOffscreen`. Open more windows with
 `sim.OpenWindow(cfg, widthPixels, heightPixels, scale, builder)`. They share
@@ -42,7 +44,11 @@ and worker order; it does not invent input or random worker schedules.
 for owned workers, delivers their coalesced wakes and draws only when the
 pacer says to draw. An idle hour without a deadline is one clock jump.
 
-The clock is **process-wide and test-only**. Run simulations serially, on the
+The clock is **process-wide and test-only**. The simulator also runs with
+`GOMAXPROCS=1` from construction through close, restoring the previous value.
+This keeps runtime timer heaps on the warmed P instead of letting scheduler
+initialization on another P contaminate exact frame allocation counts.
+Run simulations serially, on the
 creating goroutine; no `t.Parallel`, native event pump, live service from a
 previous run, or unrelated goroutine may share one. Construct services in
 the builder's `Init` after the clock is installed. The fs listing/control
@@ -68,7 +74,10 @@ Replay is comparable on the same host and font/OS environment; native text
 versions and external data can change the result.
 
 The default `SimCheck`s require a clean layout audit and a cause for every
-frame. Custom checks run after every step, and failures include the seed,
+frame. Layout may use the previous frame's rectangles: audit findings have
+at most two transitional frames to converge, only while a follow-up frame
+is already owed. A static or persistent finding fails. Custom checks run
+after every step, and failures include the seed,
 step, virtual time and recent trace. Use these checkpoints as well:
 
 - `CheckAllocations(true)` enables exact per-frame `runtime.ReadMemStats`
@@ -110,3 +119,16 @@ RichText links, prefetching, image decoding and a large synthetic directory.
 It exercises burst input, seconds-to-hours idle, hide/show, focus, appearance
 and resize while hidden, expired AX activation, device rebuilding, retained
 memory, allocation gates, exact return frames, worker cleanup and replay.
+
+The UI scenario suite in `app/simtests/ui` adds a million-row list with an
+independent edit model, growing Markdown, composition/selection, expired AX
+queries, fresh-build semantics, overlays, held input, cache eviction and
+first-return input during box compaction. The Notes and Gallery builders
+also cross hidden scale changes. Its default is one 24-hour seed replayed
+twice; the focused lifecycle cases run once.
+
+```sh
+CGO_ENABLED=0 go test -short ./app/simtests/ui -count=1
+GNUI_SIM_SEEDS=200 GNUI_SIM_HOURS=24 CGO_ENABLED=0 go test -short ./app/simtests/ui -count=1 -timeout=45m
+GNUI_SIM_SEED=42 CGO_ENABLED=0 go test -short ./app/simtests/ui -run TestSimUILongReturn -count=1 -v
+```

@@ -581,6 +581,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		c.NextBG(col)
 		c.NextPad(0)
 		c.NextRadius(0)
+		c.NextAuditExempt(AuditCovered.Mask()) // the caret intentionally covers the text
 		c.Box(DrawBackground|FloatingX|FloatingY, "caret")
 	}
 	c.Pop()

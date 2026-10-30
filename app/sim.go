@@ -30,7 +30,8 @@ type SimOptions struct {
 
 // Sim runs one application's windows through the real translator, turn,
 // timeout, pacer, build and frame arming logic. Only the surface and OS pump
-// are replaced. The creating goroutine is OS-thread-locked until Close.
+// are replaced. The creating goroutine is OS-thread-locked until Close;
+// GOMAXPROCS is one for the simulation and restored on Close.
 //
 // Event queues input at the current virtual time. Advance runs to its target,
 // jumping straight across idle intervals. Close builders' services before
@@ -47,6 +48,7 @@ type Sim struct {
 	clipboard  []byte
 	appearance ui.Appearance
 	allocs     bool
+	procs      int
 	stats      [2]runtime.MemStats
 }
 
@@ -68,6 +70,7 @@ type simWindow struct {
 	lastDraw, lastSem uint64
 	frames            int
 	audited           int
+	auditPending      int
 }
 
 // NewSim opens window zero. Further windows share its text system and GPU.
@@ -84,6 +87,7 @@ func NewSim(cfg Config, w, h int, scale float32, b Builder, opts SimOptions) (s 
 	}
 	runtime.LockOSThread()
 	s = &Sim{clock: c, opts: opts, shared: &appObject{}, appearance: ui.Appearance{Known: true}, trace: make([]SimRecord, 0, 256)}
+	s.procs = runtime.GOMAXPROCS(1)
 	if s.opts.Tick == 0 {
 		s.opts.Tick = time.Second / 60
 	}
@@ -151,6 +155,11 @@ func (s *Sim) OpenWindow(cfg Config, w, h int, scale float32, b Builder) (id int
 
 // Window returns a window's App for assertions and scenario setup.
 func (s *Sim) Window(id int) *App { return s.windows[id].a }
+
+// FramePixels borrows the last rendered frame until the next render or Close.
+// It is nil before the first frame and when SimOptions.Render is false.
+// Callers comparing frames must copy the pixels before advancing again.
+func (s *Sim) FramePixels(id int) *image.RGBA { return s.windows[id].pixels }
 
 // Event dispatches a native-shaped event. data supplies text/preedit/paste/drop
 // bytes; TextRef is local to this event. Events at one instant batch naturally.
@@ -454,6 +463,7 @@ func (s *Sim) Close() {
 		return
 	}
 	s.closed = true
+	defer runtime.GOMAXPROCS(s.procs)
 	defer runtime.UnlockOSThread()
 	defer s.clock.Restore()
 	for _, v := range s.windows {

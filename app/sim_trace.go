@@ -130,14 +130,22 @@ func (s *Sim) FrameHash(id int) (draw, sem uint64) { v := s.windows[id]; return 
 // measurements are explicit checkpoints (Memory and CheckAllocations).
 type SimCheck func(*Sim) error
 
-// SimAudit checks the real layout audit of each finished window.
+// SimAudit checks the real layout audit of each finished window. A builder
+// reading the previous layout may need two follow-up frames (ui's settle
+// contract). Findings may persist for at most two frames, and only while
+// another frame is already owed; static or nonconverging faults still fail.
 func SimAudit(s *Sim) error {
 	for _, v := range s.windows {
 		if !v.closed && v.frames > v.audited {
+			v.audited = v.frames
 			if f := v.a.UI.Audit(nil); len(f) > 0 {
+				if v.a.more && v.auditPending < 2 {
+					v.auditPending++
+					continue
+				}
 				return fmt.Errorf("window %d layout: %s", v.id, f[0].String())
 			}
-			v.audited = v.frames
+			v.auditPending = 0
 		}
 	}
 	return nil
