@@ -241,7 +241,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	}
 	if c.semNext.role == RoleNone {
 		c.semNext.role = RoleLabel
-		c.semNext.name = c.semA.AppendBytes(body)
+		c.NextSemNameBytes(body)
 	}
 	id := c.newBox(flags, key)
 	b := &c.boxes[id]

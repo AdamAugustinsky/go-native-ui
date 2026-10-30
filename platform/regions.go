@@ -1,26 +1,21 @@
 package platform
 
-import "slices"
+import (
+	"cmp"
+	"slices"
+
+	"gonativeui/internal/uitypes"
+)
 
 // CursorRegion is a rectangle of the window content (x0, y0, x1, y1 in
 // physical pixels, origin top left) in which the pointer shows Cursor.
-type CursorRegion struct {
-	// Rect is x0, y0, x1, y1 in physical pixels.
-	Rect [4]float32
-	// Cursor is the shape shown inside Rect.
-	Cursor Cursor
-}
+type CursorRegion = uitypes.CursorRegion
 
 // DragRegion is a rectangle of the window's drag map (pixels, origin top
 // left). Block false is an area where pressing the left button moves the
 // window (a custom titlebar); Block true is a rectangle above it that keeps
 // its presses for the app (a tab, a button).
-type DragRegion struct {
-	// Rect is x0, y0, x1, y1 in physical pixels.
-	Rect [4]float32
-	// Block true makes the rectangle keep its presses; false makes it a window-drag area.
-	Block bool
-}
+type DragRegion = uitypes.DragRegion
 
 // copyRegions copies src into dst's storage. Storage that is too small is
 // replaced by one twice the size: a copy made by append is exactly as large
@@ -46,7 +41,8 @@ type cursorMap struct {
 	regs     []CursorRegion
 	override Cursor
 	flat     []CursorRegion // flatten's output, reused
-	holes    [][4]float32   // rectangles left out of every region: hosted native views, which have their own cursors
+	sweep    rectSweep
+	holes    [][4]float32 // rectangles left out of every region: hosted native views, which have their own cursors
 }
 
 // setHoles sets the rectangles flatten leaves out of the regions (copied) and
@@ -114,85 +110,197 @@ func (m *dragMap) at(x, y float32) bool {
 	return false
 }
 
-// maxFlat bounds the pieces flatten produces.
+// maxFlat is the minimum piece budget; a longer input gets one slot per region.
 const maxFlat = 512
 
-// flatten returns the regions as rectangles that do not overlap, with the same
-// cursor at every point: each region keeps only what no later (higher) region
-// covers. AppKit's behaviour for overlapping cursor rects of one view is not
-// specified, so none are handed to it. Empty results are dropped; if the pieces
-// would exceed maxFlat the remaining regions are added whole, except that no
-// piece is ever left over a hole: one that would have to be split is dropped.
-// The result is owned by the map and valid until the next call.
+// flatten returns disjoint pieces with the topmost cursor at each point,
+// excluding hosted views. On overflow lower pieces are dropped, never left
+// overlapping. The output and sweep storage are reused.
 func (m *cursorMap) flatten() []CursorRegion {
-	m.flat = m.flat[:0]
-	for i, r := range m.regs {
-		start := len(m.flat)
-		m.flat = append(m.flat, r)
-		for _, hi := range m.regs[i+1:] {
-			m.cut(start, r.Cursor, hi.Rect, false)
-		}
-		for _, h := range m.holes {
-			m.cut(start, r.Cursor, h, true)
+	m.flat = flattenRects(&m.sweep, m.flat, m.regs, m.holes, max(maxFlat, len(m.regs)),
+		func(r CursorRegion) ([4]float32, Cursor) { return r.Rect, r.Cursor },
+		func(r [4]float32, v Cursor) CursorRegion { return CursorRegion{Rect: r, Cursor: v} })
+	return m.flat
+}
+
+// rectSweep indexes rectangles by their top edge. Subtree maxima skip all
+// rectangles ending above a query or below it in draw order. Querying each
+// region visits only intersecting y intervals (and the search paths), instead
+// of every later region. Storage is O(n), including heavily overlapping input.
+type rectSweep struct {
+	order     []sweepRect
+	maxY      []float32
+	maxZ      []int
+	cur, next [][4]float32
+}
+
+type sweepRect struct {
+	rect [4]float32
+	z    int
+}
+
+func validRect(r [4]float32) bool { return r[0] < r[2] && r[1] < r[3] }
+
+// flattenRects is shared by cursors and tooltips. It sorts and indexes in
+// O(n log n), then visits overlapping y intervals and their search paths.
+// Exact subtraction visits surviving pieces, bounded by limit. Higher regions
+// are kept first when the output budget is exhausted.
+func flattenRects[R any, V ~uint8 | ~uint64](s *rectSweep, dst, src []R, holes [][4]float32, limit int,
+	get func(R) ([4]float32, V), put func([4]float32, V) R) []R {
+	s.order = s.order[:0]
+	for i, r := range src {
+		rect, _ := get(r)
+		if validRect(rect) {
+			s.order = append(s.order, sweepRect{rect, i})
 		}
 	}
-	// Drop what was covered completely.
-	out := m.flat[:0]
-	for _, r := range m.flat {
-		if r.Rect[0] < r.Rect[2] && r.Rect[1] < r.Rect[3] {
-			out = append(out, r)
+	for i, r := range holes {
+		if validRect(r) {
+			s.order = append(s.order, sweepRect{r, len(src) + i})
 		}
 	}
-	m.flat = out
+	slices.SortFunc(s.order, func(a, b sweepRect) int { return cmp.Compare(a.rect[1], b.rect[1]) })
+	n := len(s.order)
+	dst = dst[:0]
+	if n == 0 {
+		return dst
+	}
+	// The common scrolling-list case has no y overlap. Its sorted rows need
+	// neither an interval index nor subtraction, and only neighbours can merge.
+	separated := true
+	bottom := s.order[0].rect[3]
+	for _, r := range s.order[1:] {
+		if r.rect[1] < bottom {
+			separated = false
+			break
+		}
+		bottom = r.rect[3]
+	}
+	if separated {
+		for _, item := range s.order {
+			if item.z >= len(src) {
+				continue
+			}
+			r, v := get(src[item.z])
+			if len(dst) > 0 {
+				prev, pv := get(dst[len(dst)-1])
+				if pv == v && prev[0] == r[0] && prev[2] == r[2] && prev[3] == r[1] {
+					prev[3] = r[3]
+					dst[len(dst)-1] = put(prev, v)
+					continue
+				}
+			}
+			if len(dst) < limit {
+				dst = append(dst, put(r, v))
+			}
+		}
+		return dst
+	}
+	size := 4 * n
+	if cap(s.maxY) < size {
+		s.maxY = make([]float32, size, 4*cap(s.order))
+		s.maxZ = make([]int, size, 4*cap(s.order))
+	}
+	s.maxY, s.maxZ = s.maxY[:size], s.maxZ[:size]
+	s.index(1, 0, n)
+	for i := len(src) - 1; i >= 0 && len(dst) < limit; i-- {
+		r, v := get(src[i])
+		if !validRect(r) {
+			continue
+		}
+		s.cur = append(s.cur[:0], r)
+		s.cutAbove(1, 0, n, i, r, limit-len(dst))
+		for _, p := range s.cur {
+			dst = append(dst, put(p, v))
+		}
+	}
+	// Equal values and x extents are adjacent; vertically touching pieces can
+	// share one AppKit rectangle. All pieces were already disjoint.
+	slices.SortFunc(dst, func(a, b R) int {
+		ar, av := get(a)
+		br, bv := get(b)
+		if c := cmp.Compare(av, bv); c != 0 {
+			return c
+		}
+		for _, axis := range [4]int{0, 2, 1, 3} {
+			if c := cmp.Compare(ar[axis], br[axis]); c != 0 {
+				return c
+			}
+		}
+		return 0
+	})
+	out := dst[:0]
+	for _, p := range dst {
+		r, v := get(p)
+		if len(out) > 0 {
+			prev, pv := get(out[len(out)-1])
+			if v == pv && prev[0] == r[0] && prev[2] == r[2] && prev[3] == r[1] {
+				prev[3] = r[3]
+				out[len(out)-1] = put(prev, v)
+				continue
+			}
+		}
+		out = append(out, p)
+	}
 	return out
 }
 
-// cut removes rectangle cut from the pieces flat[start:] (of one region, with
-// cursor c): each piece it overlaps is replaced by what is left of it above,
-// below, left and right of cut. Past maxFlat pieces it stops, leaving the
-// rest overlapping cut, unless the cut is mandatory (a hole): then a piece
-// that overlaps it is dropped.
-func (m *cursorMap) cut(start int, c Cursor, cut [4]float32, mandatory bool) {
-	for p := start; p < len(m.flat); p++ {
-		piece := m.flat[p].Rect
-		if !overlaps(piece, cut) {
-			continue
-		}
-		if len(m.flat) >= maxFlat {
-			if !mandatory {
-				break
-			}
-			m.flat[p].Rect = [4]float32{} // no room to split it
-			continue
-		}
-		var keep [4][4]float32
-		n := 0
-		if piece[1] < cut[1] { // above
-			keep[n] = [4]float32{piece[0], piece[1], piece[2], cut[1]}
-			n++
-		}
-		if piece[3] > cut[3] { // below
-			keep[n] = [4]float32{piece[0], cut[3], piece[2], piece[3]}
-			n++
-		}
-		y0, y1 := max(piece[1], cut[1]), min(piece[3], cut[3])
-		if piece[0] < cut[0] { // left of the cut, between its top and bottom
-			keep[n] = [4]float32{piece[0], y0, cut[0], y1}
-			n++
-		}
-		if piece[2] > cut[2] { // right
-			keep[n] = [4]float32{cut[2], y0, piece[2], y1}
-			n++
-		}
-		if n == 0 {
-			m.flat[p].Rect = [4]float32{} // fully covered
-			continue
-		}
-		m.flat[p].Rect = keep[0]
-		for _, k := range keep[1:n] {
-			m.flat = append(m.flat, CursorRegion{Rect: k, Cursor: c})
+func (s *rectSweep) index(node, lo, hi int) {
+	if hi-lo == 1 {
+		s.maxY[node], s.maxZ[node] = s.order[lo].rect[3], s.order[lo].z
+		return
+	}
+	mid := (lo + hi) / 2
+	s.index(2*node, lo, mid)
+	s.index(2*node+1, mid, hi)
+	s.maxY[node] = max(s.maxY[2*node], s.maxY[2*node+1])
+	s.maxZ[node] = max(s.maxZ[2*node], s.maxZ[2*node+1])
+}
+
+func (s *rectSweep) cutAbove(node, lo, hi, z int, r [4]float32, limit int) {
+	if len(s.cur) == 0 || s.maxZ[node] <= z || s.maxY[node] <= r[1] || s.order[lo].rect[1] >= r[3] {
+		return
+	}
+	if hi-lo > 1 {
+		mid := (lo + hi) / 2
+		s.cutAbove(2*node, lo, mid, z, r, limit)
+		s.cutAbove(2*node+1, mid, hi, z, r, limit)
+		return
+	}
+	cut := s.order[lo].rect
+	if !overlaps(r, cut) {
+		return
+	}
+	s.next = s.next[:0]
+	for _, p := range s.cur {
+		s.next = appendCut(s.next, p, cut)
+		if len(s.next) >= limit {
+			s.next = s.next[:limit]
+			break
 		}
 	}
+	s.cur, s.next = s.next, s.cur
+}
+
+// appendCut appends the up to four pieces of p outside cut.
+func appendCut(dst [][4]float32, p, cut [4]float32) [][4]float32 {
+	if !overlaps(p, cut) {
+		return append(dst, p)
+	}
+	if p[1] < cut[1] {
+		dst = append(dst, [4]float32{p[0], p[1], p[2], cut[1]})
+	}
+	if p[3] > cut[3] {
+		dst = append(dst, [4]float32{p[0], cut[3], p[2], p[3]})
+	}
+	y0, y1 := max(p[1], cut[1]), min(p[3], cut[3])
+	if p[0] < cut[0] {
+		dst = append(dst, [4]float32{p[0], y0, cut[0], y1})
+	}
+	if p[2] > cut[2] {
+		dst = append(dst, [4]float32{cut[2], y0, p[2], y1})
+	}
+	return dst
 }
 
 func overlaps(a, b [4]float32) bool {

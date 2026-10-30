@@ -153,14 +153,6 @@ type App struct {
 	zoom   float32 // the app zoom, 0 = 1 (zoom.go)
 	tbZoom float32 // the zoom the window's titlebar metrics were last set for, 0 = 1 (zoom.go)
 
-	// Cursor regions and the titlebar drag map handed to the window after
-	// every frame (regions.go); the buffers are reused.
-	curUI     []ui.CursorRegion
-	curPlat   []platform.CursorRegion
-	dragUI    []ui.DragRegion
-	dragPl    []platform.DragRegion
-	tipUI     []ui.TooltipRegion // native tooltip regions (regions.go), reused
-	tipPl     []platform.TooltipRegion
 	dlg       []platform.DialogResult // dialog results not taken yet (dialogs.go)
 	dlgQ      []pendingDialog         // dialogs queued for the end of the frame
 	dlgShown  []shownDialog           // dialogs on screen

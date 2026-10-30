@@ -106,6 +106,8 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 	_ "unsafe" // go:linkname
+
+	"gonativeui/internal/uitypes"
 )
 
 func init() { runtime.LockOSThread() }
@@ -289,7 +291,7 @@ const (
 )
 
 // Cursor is a pointer shape.
-type Cursor uint8
+type Cursor = uitypes.Cursor
 
 const (
 	CursorArrow      Cursor = iota // the default arrow

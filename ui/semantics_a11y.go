@@ -25,6 +25,9 @@ type semExtra struct {
 // better announced by a SemLive node, whose new name or value is read when it
 // changes.
 func (c *Context) Announce(text string) {
+	if c.semTrack.skip {
+		return
+	}
 	c.semX.annFrame, c.semX.announce, c.semX.polite = c.frame, c.semA.AppendString(text), false
 	c.semX.seq++
 }

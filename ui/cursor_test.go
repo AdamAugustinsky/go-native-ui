@@ -33,10 +33,10 @@ func TestCursorRegions(t *testing.T) {
 	})
 	regs = h.c.CursorRegions(regs)
 	want := []CursorRegion{
-		{[4]float32{10, 10, 110, 50}, CursorPointer},
-		{[4]float32{50, 20, 150, 60}, CursorResizeEW},
-		{[4]float32{320, 200, 340, 240}, CursorText},
-		{[4]float32{380, 280, 400, 300}, CursorPointer},
+		{Rect: [4]float32{10, 10, 110, 50}, Cursor: CursorPointer},
+		{Rect: [4]float32{50, 20, 150, 60}, Cursor: CursorResizeEW},
+		{Rect: [4]float32{320, 200, 340, 240}, Cursor: CursorText},
+		{Rect: [4]float32{380, 280, 400, 300}, Cursor: CursorPointer},
 	}
 	if len(regs) != len(want) {
 		t.Fatalf("%d regions %+v, want %d", len(regs), regs, len(want))
@@ -131,9 +131,9 @@ func TestDragRegions(t *testing.T) {
 	// bar (drag), tab, btn (blocks); the page lies outside the band's union... it overlaps
 	// only below y=46, so it intersects the band's rectangle by 0 rows: left out.
 	want := []DragRegion{
-		{[4]float32{0, 0, 400, 46}, false},
-		{[4]float32{100, 8, 200, 38}, true},
-		{[4]float32{300, 8, 330, 38}, true},
+		{Rect: [4]float32{0, 0, 400, 46}, Block: false},
+		{Rect: [4]float32{100, 8, 200, 38}, Block: true},
+		{Rect: [4]float32{300, 8, 330, 38}, Block: true},
 	}
 	if len(regs) != len(want) {
 		t.Fatalf("%+v", regs)

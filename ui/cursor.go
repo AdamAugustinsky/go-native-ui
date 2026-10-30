@@ -1,8 +1,9 @@
 package ui
 
-// Cursor is a pointer shape. The values mirror platform.Cursor, which the app
-// package converts to.
-type Cursor uint8
+import "gonativeui/internal/uitypes"
+
+// Cursor is a pointer shape shared with the platform bridge.
+type Cursor = uitypes.Cursor
 
 const (
 	CursorArrow      Cursor = iota // the default arrow: a box with it marks no region
@@ -18,86 +19,97 @@ const (
 
 // CursorRegion is a screen rectangle (x0, y0, x1, y1 in pixels, origin top
 // left) in which the pointer shows Cursor.
-type CursorRegion struct {
-	// Rect is x0, y0, x1, y1 in pixels.
-	Rect [4]float32
-	// Cursor is the shape shown inside Rect.
-	Cursor Cursor
-}
+type CursorRegion = uitypes.CursorRegion
 
 // DragRegion is a rectangle of the window's drag map. Rects with Block false
 // are WindowDrag areas; Block true is a box that takes input and sits above
 // them. The topmost (last) rectangle containing a point decides: a point is
 // in the titlebar drag area when that rectangle is not a Block.
-type DragRegion struct {
-	// Rect is x0, y0, x1, y1 in pixels.
-	Rect [4]float32
-	// Block true makes the rectangle keep its presses; false makes it a window-drag area.
-	Block bool
+type DragRegion = uitypes.DragRegion
+
+// frameRegions are collected by emit, using the same order and clips as drawing.
+type frameRegions struct {
+	cursors []CursorRegion
+	drags   []DragRegion
+
+	modal, popup int
+	collecting   bool
 }
 
-// regionWalk is the state of one pass over the finished tree.
-type regionWalk struct {
-	cursors    []CursorRegion
-	drags      []DragRegion
-	wantCursor bool
-	wantDrag   bool
+// FramePointerRegions borrows the last finished frame's cursor and drag maps.
+// The slices are read-only and valid until the next End.
+func (c *Context) FramePointerRegions() ([]CursorRegion, []DragRegion) {
+	return c.regions.cursors, c.regions.drags
 }
 
-// CursorRegions appends to dst the boxes of the last finished frame (after
-// End) that have a cursor other than the arrow, as pixel rectangles clipped by
-// their ancestors' clip rectangles and the window, in draw order: where
-// regions overlap, the last one is the topmost. Empty rectangles are left out.
-// It allocates nothing when dst has room, and visits no box when the frame
-// has no cursor boxes.
+// CursorRegions copies the last finished frame's cursor map into dst's storage.
+// Regions are clipped by their ancestors and the window, in draw order.
 func (c *Context) CursorRegions(dst []CursorRegion) []CursorRegion {
-	cr, _ := c.regions(dst, nil, true, false)
-	return cr
+	return append(dst[:0], c.regions.cursors...)
 }
 
-// DragRegions appends to dst the window drag map of the last finished frame
-// (after End), in draw order: the WindowDrag boxes (Block false) and, after
-// or between them, the boxes that take input (Clickable, Hoverable or
-// Focusable) and overlap a WindowDrag area (Block true), all clipped like
-// CursorRegions. A press at a point is a window drag when the last rectangle
-// containing the point is not a Block; buttons and tabs drawn over a titlebar
-// are therefore excluded without any subtraction. It returns dst empty when no
-// box has WindowDrag.
+// DragRegions copies the last finished frame's window drag map into dst's
+// storage. The last matching rectangle decides whether a press moves the window.
 func (c *Context) DragRegions(dst []DragRegion) []DragRegion {
-	_, dr := c.regions(nil, dst, false, true)
-	return dr
+	return append(dst[:0], c.regions.drags...)
 }
 
-// PointerRegions is CursorRegions and DragRegions in one pass over the boxes
-// (both are wanted after every frame).
+// PointerRegions copies both finished maps into the caller's storage.
+// FramePointerRegions borrows them without a copy.
 func (c *Context) PointerRegions(cursors []CursorRegion, drags []DragRegion) ([]CursorRegion, []DragRegion) {
-	return c.regions(cursors, drags, true, true)
+	return c.CursorRegions(cursors), c.DragRegions(drags)
 }
 
-func (c *Context) regions(cursors []CursorRegion, drags []DragRegion, wantCursor, wantDrag bool) ([]CursorRegion, []DragRegion) {
-	w := regionWalk{cursors: cursors[:0], drags: drags[:0], wantCursor: wantCursor && c.nCursorBoxes > 0, wantDrag: wantDrag && c.nDragBoxes > 0}
-	if c.root == 0 || !(w.wantCursor || w.wantDrag) {
-		return w.cursors, w.drags
-	}
-	win := [4]float32{0, 0, float32(c.w), float32(c.h)}
-	m := -1 // the topmost modal hides everything beneath it
+func (c *Context) beginRegions() {
+	r := &c.regions
+	r.cursors, r.drags = r.cursors[:0], r.drags[:0]
+	r.modal, r.popup = -1, -1
 	for i := 0; i < c.nOvs; i++ {
-		if c.ovs[i].kind == OverlayModal {
-			m = i
-		}
-	}
-	if m < 0 {
-		c.walkRegions(c.root, win, &w)
-	}
-	for i := max(m, 0); i < c.nOvs; i++ {
 		if c.ovs[i].kind != OverlayTooltip {
-			c.walkRegions(c.ovs[i].id, win, &w)
+			r.popup = i
+		}
+		if c.ovs[i].kind == OverlayModal {
+			r.modal = i
 		}
 	}
-	if w.wantDrag {
-		w.drags = trimBlocks(w.drags)
+	c.beginTooltips()
+	r.collecting = c.nCursorBoxes > 0 || c.nDragBoxes > 0 || c.nt.collecting
+}
+
+func (c *Context) endRegions() {
+	c.regions.collecting = false
+	c.regions.drags = trimBlocks(c.regions.drags)
+}
+
+func (c *Context) collectRegions(id ID, r [4]float32) {
+	w := &c.regions
+	if !w.collecting {
+		return
 	}
-	return w.cursors, w.drags
+	b := &c.boxes[id]
+	ov := int(b.ovl) - 1
+	if ov >= w.popup {
+		c.collectTooltips(id, r)
+	}
+	if ov < w.modal || ov >= 0 && c.ovs[ov].kind == OverlayTooltip {
+		return
+	}
+	if c.nCursorBoxes > 0 {
+		if b.cursor != CursorArrow {
+			w.cursors = append(w.cursors, CursorRegion{Rect: r, Cursor: b.cursor})
+		}
+		if b.rich != 0 {
+			w.cursors = c.richCursors(w.cursors, b, r)
+		}
+	}
+	if c.nDragBoxes > 0 {
+		switch {
+		case b.flags&WindowDrag != 0:
+			w.drags = append(w.drags, DragRegion{Rect: r})
+		case b.flags&hitMask != 0:
+			w.drags = append(w.drags, DragRegion{Rect: r, Block: true})
+		}
+	}
 }
 
 // ActiveCursor is the cursor of the box that holds the left mouse button (a
@@ -141,47 +153,4 @@ func trimBlocks(d []DragRegion) []DragRegion {
 		}
 	}
 	return out
-}
-
-// walkRegions visits the tree in draw order (a box, then its children, the
-// floating ones after the others, as emit does) with the clip rectangle.
-func (c *Context) walkRegions(id ID, clip [4]float32, w *regionWalk) {
-	b := &c.boxes[id]
-	if b.hid { // hidden by a flow: no regions for it or its descendants
-		return
-	}
-	r := intersect(b.rect, clip)
-	if !empty(r) {
-		if w.wantCursor && b.cursor != CursorArrow {
-			w.cursors = append(w.cursors, CursorRegion{Rect: r, Cursor: b.cursor})
-		}
-		if w.wantCursor && b.rich != 0 {
-			w.cursors = c.richCursors(w.cursors, b, intersect(clip, b.rect))
-		}
-		if w.wantDrag {
-			switch {
-			case b.flags&WindowDrag != 0:
-				w.drags = append(w.drags, DragRegion{Rect: r})
-			case b.flags&hitMask != 0:
-				w.drags = append(w.drags, DragRegion{Rect: r, Block: true})
-			}
-		}
-	}
-	cclip := clip
-	if b.flags&Clip != 0 {
-		cclip = intersect(clip, b.rect)
-		if empty(cclip) {
-			return
-		}
-	}
-	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
-		if c.boxes[ch].flags&floatingMask == 0 {
-			c.walkRegions(ch, cclip, w)
-		}
-	}
-	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
-		if c.boxes[ch].flags&floatingMask != 0 {
-			c.walkRegions(ch, cclip, w)
-		}
-	}
 }

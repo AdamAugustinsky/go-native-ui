@@ -7,7 +7,7 @@ import (
 
 func TestTooltipMapDiff(t *testing.T) {
 	var m tooltipMap
-	a := []TooltipRegion{{[4]float32{0, 0, 10, 10}, 1}, {[4]float32{20, 0, 30, 10}, 2}}
+	a := []TooltipRegion{{Rect: [4]float32{0, 0, 10, 10}, Key: 1}, {Rect: [4]float32{20, 0, 30, 10}, Key: 2}}
 	if !m.set(a) {
 		t.Error("the first list is a change")
 	}
@@ -34,7 +34,7 @@ func TestTooltipMapDiff(t *testing.T) {
 	}
 	big := make([]TooltipRegion, MaxTooltipRegions+10)
 	for i := range big {
-		big[i] = TooltipRegion{[4]float32{float32(i), 0, float32(i) + 1, 1}, uint64(i + 1)}
+		big[i] = TooltipRegion{Rect: [4]float32{float32(i), 0, float32(i) + 1, 1}, Key: uint64(i + 1)}
 	}
 	m.set(big)
 	if len(m.regs) != MaxTooltipRegions {
@@ -47,14 +47,14 @@ func TestTooltipMapDiff(t *testing.T) {
 // containing the point is the only one).
 func TestTooltipFlatten(t *testing.T) {
 	regs := []TooltipRegion{
-		{[4]float32{0, 0, 100, 100}, 1},
-		{[4]float32{20, 20, 60, 60}, 2},  // inside 1, above it
-		{[4]float32{50, 40, 140, 80}, 3}, // overlaps 1 and 2, above both
-		{[4]float32{40, 30, 120, 70}, 0}, // no key: ignored, and it hides nothing beneath it
-		{[4]float32{300, 0, 300, 10}, 4}, // empty: ignored
-		{[4]float32{0, 90, 100, 110}, 5}, // overlaps the bottom of 1
-		{[4]float32{10, 10, 20, 20}, 6},  // inside 1, above it
-		{[4]float32{10, 10, 20, 20}, 7},  // exactly over 6: 6 is hidden
+		{Rect: [4]float32{0, 0, 100, 100}, Key: 1},
+		{Rect: [4]float32{20, 20, 60, 60}, Key: 2},  // inside 1, above it
+		{Rect: [4]float32{50, 40, 140, 80}, Key: 3}, // overlaps 1 and 2, above both
+		{Rect: [4]float32{40, 30, 120, 70}, Key: 0}, // no key: ignored, and it hides nothing beneath it
+		{Rect: [4]float32{300, 0, 300, 10}, Key: 4}, // empty: ignored
+		{Rect: [4]float32{0, 90, 100, 110}, Key: 5}, // overlaps the bottom of 1
+		{Rect: [4]float32{10, 10, 20, 20}, Key: 6},  // inside 1, above it
+		{Rect: [4]float32{10, 10, 20, 20}, Key: 7},  // exactly over 6: 6 is hidden
 	}
 	var m tooltipMap
 	m.set(regs)

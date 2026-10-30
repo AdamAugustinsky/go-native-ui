@@ -118,9 +118,8 @@ func TestAXActionReachesTheBox(t *testing.T) {
 	}
 }
 
-// With the bridge active, every frame exports and converts the tree (what
-// SyncAX asks the source for): it allocates nothing once warm. The source
-// refuses during a build.
+// Active semantic frames allocate nothing once warm. Unchanged generations
+// skip publication, and the source refuses during a build.
 func TestAXExportAllocatesNothing(t *testing.T) {
 	b := &tiny{}
 	o, err := NewOffscreen(Config{}, 400, 300, 2, b)
@@ -132,8 +131,8 @@ func TestAXExportAllocatesNothing(t *testing.T) {
 	var tree platform.AXTree
 	step := func() {
 		o.Frame()
-		if !o.ax.AXExport(&tree) {
-			t.Fatal("no export after a frame")
+		if !o.ax.AXExport(&tree) && len(tree.Nodes) == 0 {
+			t.Fatal("no first export after a frame")
 		}
 	}
 	for range 50 {
@@ -141,6 +140,9 @@ func TestAXExportAllocatesNothing(t *testing.T) {
 	}
 	if len(tree.Nodes) == 0 {
 		t.Fatal("empty tree")
+	}
+	if o.ax.AXExport(&tree) {
+		t.Error("unchanged generation was exported again")
 	}
 	o.ax.building = true
 	if o.ax.AXExport(&tree) {

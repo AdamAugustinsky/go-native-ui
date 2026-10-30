@@ -48,7 +48,7 @@ func TestNativeTooltips(t *testing.T) {
 			r.asked = append(r.asked, key)
 			return append(dst, texts[key]...)
 		})
-		regs := []TooltipRegion{{[4]float32{20, 20, 220, 120}, 1}, {[4]float32{400, 40, 600, 100}, 2}}
+		regs := []TooltipRegion{{Rect: [4]float32{20, 20, 220, 120}, Key: 1}, {Rect: [4]float32{400, 40, 600, 100}, Key: 2}}
 		step := func() { r.applies = append(r.applies, w.aux.tipApplies) }
 		w.SetTooltipRegions(nil) // nothing registered, nothing to apply
 		step()
