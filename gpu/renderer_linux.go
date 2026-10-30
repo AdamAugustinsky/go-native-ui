@@ -52,9 +52,6 @@ var ErrNoDevice = errors.New("gpu: no EGL display with an OpenGL 3.3 core (or ES
 // ringSlots is the number of instance buffers used in rotation.
 const ringSlots = 3
 
-// initialQuads is the starting instance capacity of every ring slot.
-const initialQuads = 4096
-
 // GL constants (Khronos gl.h / glcorearb.h).
 const (
 	glArrayBuffer         = 0x8892
@@ -238,6 +235,7 @@ func glString(p uintptr) string {
 }
 
 type ringSlot struct {
+	demand instanceDemand
 	buf    uint32
 	quads  int     // capacity in quads
 	sync   uintptr // GLsync fenced after the slot's last frame; 0 = none pending
@@ -289,7 +287,9 @@ var (
 // frame and the thread's current context, so call them from the one locked
 // thread that owns the context (see above).
 type Renderer struct {
-	lossState // DeviceLost, Epoch: see devloss.go
+	batches   []textureBatch
+	drawBase  uintptr // core 4.2; zero keeps the GL 3.3 / GLES fallback
+	lossState         // DeviceLost, Epoch: see devloss.go
 
 	dpy, ctx     uintptr
 	ownsCtx      bool    // NewOffscreenRenderer: created here, destroyed by Destroy
@@ -366,10 +366,14 @@ func (r *Renderer) build() error {
 	}
 	ver := glString(fr.Call1(glx.getString, glVersionEnum))
 	r.es = strings.HasPrefix(ver, "OpenGL ES")
+	r.drawBase = 0
 	if !r.es {
 		var maj, min int
 		if _, err := fmt.Sscanf(ver, "%d.%d", &maj, &min); err != nil || maj < 3 || (maj == 3 && min < 3) {
 			return fmt.Errorf("gpu: OpenGL 3.3 required, have %q", ver)
+		}
+		if maj > 4 || maj == 4 && min >= 2 {
+			r.drawBase = getProc("glDrawArraysInstancedBaseInstance")
 		}
 	}
 	for fr.Call0(glx.getError) != glNoError { // drain errors of earlier users
@@ -400,8 +404,10 @@ func (r *Renderer) build() error {
 	}
 	fr.Call1(glx.useProgram, uintptr(r.prog))
 	r.locView = r.uniform("uViewport")
-	if loc := r.uniform("uTex"); loc >= 0 {
-		fr.Call2(glx.uniform1i, uintptr(loc), 0)
+	for slot := range runTextures {
+		if loc := r.uniform(fmt.Sprintf("uTex[%d]", slot)); loc >= 0 {
+			fr.Call2(glx.uniform1i, uintptr(loc), uintptr(slot))
+		}
 	}
 
 	fr.Call2(glx.genVertexArrays, 1, uintptr(unsafe.Pointer(&gls.u32[0])))
@@ -415,9 +421,8 @@ func (r *Renderer) build() error {
 	for i := range r.slots {
 		s := &r.slots[i]
 		fr.Call2(glx.genBuffers, 1, uintptr(unsafe.Pointer(&gls.u32[0])))
-		s.buf, s.quads = gls.u32[0], max(s.quads, initialQuads)
+		s.buf, s.quads = gls.u32[0], 0
 		fr.Call2(glx.bindBuffer, glArrayBuffer, uintptr(s.buf))
-		fr.Call4(glx.bufferData, glArrayBuffer, uintptr(s.quads*quadSize), 0, glStreamDraw)
 	}
 	// The texture a quad naming a freed texture samples: one transparent texel.
 	r.empty = r.newGLTexture(TexRGBA8, 1, 1)
@@ -732,9 +737,11 @@ func (r *Renderer) subImage(x, y, w, h int, format uintptr, p unsafe.Pointer) {
 // uploadInstances copies quads, list's, into slot s: orphan the old storage,
 // map the new, copy (the backdrops as shapes: backdropsAsShapes), unmap.
 func (r *Renderer) uploadInstances(s *ringSlot, quads []Quad, list *DrawList) {
-	for s.quads < len(quads) {
-		s.quads *= 2
+	next := s.demand.capacity(s.quads, len(quads))
+	if len(quads) == 0 && next == s.quads {
+		return
 	}
+	s.quads = next
 	fr.Call2(glx.bindBuffer, glArrayBuffer, uintptr(s.buf))
 	fr.Call4(glx.bufferData, glArrayBuffer, uintptr(s.quads*quadSize), 0, glStreamDraw)
 	if len(quads) == 0 {
@@ -747,12 +754,14 @@ func (r *Renderer) uploadInstances(s *ringSlot, quads []Quad, list *DrawList) {
 		dst := unsafe.Slice((*Quad)(ffi.PtrFromC(p)), len(quads))
 		copy(dst, quads)
 		backdropsAsShapes(dst, list)
+		r.batches = textureBatches(r.batches, dst)
 		fr.Call1(glx.unmapBuffer, glArrayBuffer)
 		return
 	}
 	// Mapping failed (should not happen): upload from a heap staging copy.
 	r.stage = append(r.stage[:0], quads...)
 	backdropsAsShapes(r.stage, list)
+	r.batches = textureBatches(r.batches, r.stage)
 	fr.Reset().Arg32(glArrayBuffer).Arg(0).Arg(uintptr(n)).ArgPtr(unsafe.Pointer(&r.stage[0])).Call(glx.bufferSubData)
 }
 
@@ -774,7 +783,7 @@ func (r *Renderer) Stage(t TextureID, x, y, w, h int, pixels []byte, stride int)
 // viewport, framebuffer binding) and leaves the default framebuffer bound.
 //
 // Encode allocates nothing on the Go heap once the renderer and list are
-// warm. It grows the ring slot only if the list is larger than any before.
+// warm. Instance capacity follows demand with hysteresis (capacity.go).
 func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]float32, list *DrawList) {
 	r.draws = 0
 	if width <= 0 || height <= 0 {
@@ -802,12 +811,12 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	fr.Reset().Arg32(1).Arg32(1).Arg32(1).Arg32(1).Call(glx.colorMask)
 	fr.Reset().ArgF32(clear[0]).ArgF32(clear[1]).ArgF32(clear[2]).ArgF32(clear[3]).Call(glf.clearColor)
 	fr.Call1(glf.clear, glColorBufferBit)
+	r.uploadInstances(s, quads, list)
 	if len(quads) == 0 {
 		fr.Call2(glx.bindFramebuffer, glFramebuffer, 0)
 		return
 	}
 
-	r.uploadInstances(s, quads, list)
 	fr.Call1(glx.useProgram, uintptr(r.prog))
 	fr.Call1(glx.bindVertexArray, uintptr(r.vao))
 	fr.Reset().Arg32(uint32(r.locView)).ArgF32(float32(width)).ArgF32(float32(height)).Call(glx.uniform2f)
@@ -816,29 +825,21 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	fr.Reset().Arg32(glOne).Arg32(glOneMinusSrcAlpha).Arg32(glOne).Arg32(glOneMinusSrcAlpha).Call(glx.blendFuncSeparate)
 	fr.Call1(glx.activeTexture, glTexture0)
 
-	// Shape quads don't read the bound texture, so they join whatever run is
-	// open; only a texture quad with a different texture ends it.
-	bound := TextureID(0)
-	fr.Call2(glx.bindTexture, glTexture2D, uintptr(r.tex[0]))
-	runStart := 0
-	for i := range quads {
-		q := &quads[i]
-		if q.Mode == ModeShape || q.Mode == ModeBackdrop || q.Tex == bound {
-			continue
-		}
-		if i > runStart {
-			r.draw(s, runStart, i-runStart)
-		}
-		runStart = i
-		bound = q.Tex
-		name := r.empty // a freed or unknown id draws nothing
-		if k, ok := r.ids.lookup(bound); ok {
-			name = r.tex[k]
-		}
-		fr.Call2(glx.bindTexture, glTexture2D, uintptr(name))
+	if r.drawBase != 0 {
+		r.pointInstances(0)
 	}
-	if len(quads) > runStart {
-		r.draw(s, runStart, len(quads)-runStart)
+	for _, b := range r.batches {
+		for slot := range runTextures {
+			name := r.empty
+			if slot < b.n {
+				if k, ok := r.ids.lookup(b.textures[slot]); ok {
+					name = r.tex[k]
+				}
+			}
+			fr.Call1(glx.activeTexture, uintptr(glTexture0+slot))
+			fr.Call2(glx.bindTexture, glTexture2D, uintptr(name))
+		}
+		r.draw(s, b.first, b.count)
 	}
 	fr.Call2(glx.bindFramebuffer, glFramebuffer, 0)
 }
@@ -847,10 +848,9 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 // does not yet, and draws their fallback colour.
 func (r *Renderer) Backdrops() bool { return false }
 
-// draw issues one instanced triangle-strip draw of count quads starting at
-// instance first: the attributes are pointed at record `first` of the bound
-// instance buffer (no base-instance draw in OpenGL 3.3).
-func (r *Renderer) draw(s *ringSlot, first, count int) {
+// pointInstances points the attributes at record first of the bound buffer.
+// GL 3.3 / GLES need this per batch; GL 4.2 needs it only once per pass.
+func (r *Renderer) pointInstances(first int) {
 	base := uintptr(first) * quadSize
 	for i := range attribs {
 		a := &attribs[i]
@@ -861,7 +861,16 @@ func (r *Renderer) draw(s *ringSlot, first, count int) {
 			fr.Arg32(0).Arg32(quadSize).Arg(base + a.off).Call(glx.vertexAttribPointer)
 		}
 	}
-	fr.Reset().Arg32(glTriangleStrip).Arg32(0).Arg32(4).Arg32(uint32(count)).Call(glx.drawArraysInstanced)
+}
+
+// draw issues one instanced triangle strip per quad, preserving GL 3.3.
+func (r *Renderer) draw(s *ringSlot, first, count int) {
+	if r.drawBase != 0 {
+		fr.Reset().Arg32(glTriangleStrip).Arg32(0).Arg32(4).Arg32(uint32(count)).Arg32(uint32(first)).Call(r.drawBase)
+	} else {
+		r.pointInstances(first)
+		fr.Reset().Arg32(glTriangleStrip).Arg32(0).Arg32(4).Arg32(uint32(count)).Call(glx.drawArraysInstanced)
+	}
 	r.draws++
 	r.totalDraw++
 }

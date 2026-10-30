@@ -23,8 +23,8 @@ import (
 // The two textures are the reduced region and the blur's intermediate,
 // allocated for the largest region seen (one column and one row more: the
 // last pass replicates the edge there, so the bilinear composite never
-// samples past the region) and reallocated only when a region outgrows them
-// or the target's size changes. Nothing is allocated on the Go heap per
+// samples past the region), in size classes shared across targets. They
+// shrink after sustained low demand. Nothing is allocated on the Go heap per
 // frame. The pipelines are compiled with the first frame that has a backdrop.
 
 const backdropMSL = `
@@ -166,7 +166,8 @@ type backdropKit struct {
 	down, blur     objc.ID // pipelines
 	tex            [2]objc.ID
 	tw, th         int // the textures' size
-	forW, forH     int // the target size they were sized for
+	peakW, peakH   int // largest demand during calm frames
+	calm           int
 	rpd, color0    objc.ID
 	load, loadCol0 objc.ID // the main pass resumed: load, store
 }
@@ -238,8 +239,9 @@ func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, in
 		}
 		b, ok := list.backdropOf(q)
 		x0, y0, x1, y1, inside := backdropRegion(q, w, h)
-		if !canRead || !ok || !inside || (b.Base&0xFF != 0 && backdropOverNothing(list.Quads, i)) {
-			backdropShape(inst, i, list) // (outside the target and clip, the shape draws nothing)
+		emptyBase := ok && b.Base&0xFF != 0 && backdropOverNothing(list.Quads, i)
+		if !canRead || !ok || !inside || emptyBase {
+			backdropFallback(q, b, emptyBase) // outside the target and clip, the shape draws nothing
 			continue
 		}
 		d := backdropDown(&b)
@@ -247,6 +249,7 @@ func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, in
 		needH = max(needH, (y1-y0+d-1)/d+1)
 	}
 	if needW == 0 {
+		r.sizeBackdrops(0, 0, w, h)
 		return false, 0
 	}
 	if !r.initBackdrops() {
@@ -279,20 +282,30 @@ func (r *Renderer) prepareBackdrops(target uintptr, w, h int, list *DrawList, in
 	return true, n
 }
 
-// sizeBackdrops makes the textures at least w×h texels, for a target of
-// tw×th pixels: they grow when a region outgrows them and are made again,
-// to fit, when the target's size has changed.
-func (r *Renderer) sizeBackdrops(w, h, tw, th int) {
+// sizeBackdrops shares sufficient capacity across targets. After 60 frames
+// using at most a quarter of its area it shrinks, keeping growth headroom.
+func (r *Renderer) sizeBackdrops(w, h, _, _ int) {
 	bd := &r.bd
-	resized := bd.forW != tw || bd.forH != th
-	if bd.tex[0] != 0 && w <= bd.tw && h <= bd.th && !resized {
+	if bd.tex[0] == 0 && (w == 0 || h == 0) {
 		return
 	}
-	bd.forW, bd.forH = tw, th
-	if !resized {
+	if w > bd.tw || h > bd.th {
 		w, h = max(w, bd.tw), max(h, bd.th)
+		bd.peakW, bd.peakH, bd.calm = 0, 0, 0
+	} else {
+		if w*h > bd.tw*bd.th/4 {
+			bd.peakW, bd.peakH, bd.calm = 0, 0, 0
+			return
+		}
+		bd.peakW, bd.peakH = max(w, bd.peakW), max(h, bd.peakH)
+		bd.calm++
+		if bd.calm < instanceCalmFrames {
+			return
+		}
+		w, h = min(bd.tw, 2*bd.peakW), min(bd.th, 2*bd.peakH)
+		bd.peakW, bd.peakH, bd.calm = 0, 0, 0
 	}
-	w, h = (w+31)&^31, (h+31)&^31
+	w, h = sizeClass(w, 32), sizeClass(h, 32)
 	if bd.tex[0] != 0 && w == bd.tw && h == bd.th {
 		return
 	}

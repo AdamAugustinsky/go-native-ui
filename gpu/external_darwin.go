@@ -456,12 +456,9 @@ func (r *Renderer) releaseLeases(s *ringSlot) {
 	objc.F.Call2(cv.cacheFlush, r.ext.cache, 0)
 }
 
-// beginYUV binds what a pass's quad pipeline reads besides texture 0: no
-// conversion, and empty chroma textures.
+// beginYUV disables conversion; beginPass binds the empty chroma textures.
 func (r *Renderer) beginYUV(enc objc.ID) {
 	objc.Send3(enc, rsSetFBytes, uintptr(unsafe.Pointer(&yuvOff)), unsafe.Sizeof(yuvOff), 1)
-	objc.Send2(enc, rsSetFTexture, uintptr(r.empty), 1)
-	objc.Send2(enc, rsSetFTexture, uintptr(r.empty), 2)
 }
 
 // bindRun binds texture id for the run of quads that starts with it: its

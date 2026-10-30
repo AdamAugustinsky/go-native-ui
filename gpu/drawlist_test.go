@@ -5,6 +5,32 @@ import (
 	"testing"
 )
 
+func TestInstanceCapacityHysteresis(t *testing.T) {
+	var d instanceDemand
+	if n := d.capacity(0, 0); n != 0 {
+		t.Fatal("clear-only frame allocated")
+	}
+	if n := d.capacity(0, 65); n != 128 {
+		t.Fatalf("first demand class = %d, want 128", n)
+	}
+	for range instanceCalmFrames - 1 {
+		if n := d.capacity(4096, 100); n != 4096 {
+			t.Fatal("shrunk during a short lull")
+		}
+	}
+	if n := d.capacity(4096, 2048); n != 4096 {
+		t.Fatal("burst resized sufficient capacity")
+	}
+	for range instanceCalmFrames - 1 {
+		if n := d.capacity(4096, 100); n != 4096 {
+			t.Fatal("burst did not reset the calm period")
+		}
+	}
+	if n := d.capacity(4096, 100); n != 256 {
+		t.Fatalf("sustained demand class = %d, want 256", n)
+	}
+}
+
 func TestBackdropHighWaterAfterWarmup(t *testing.T) {
 	for _, warm := range []int{0, 1} {
 		list := DrawList{Quads: make([]Quad, 0, 8)}

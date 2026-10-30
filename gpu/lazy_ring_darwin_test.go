@@ -4,6 +4,30 @@ package gpu
 
 import "testing"
 
+func TestInstanceRingShrinks(t *testing.T) {
+	r := newTestRenderer(t)
+	for i := range r.slots {
+		if err := r.growSlot(&r.slots[i], 100000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := &DrawList{Quads: []Quad{solid(0, 0, 4, 4, 0xFF0000FF)}}
+	out := make([]byte, 4*4*4)
+	frame := func() { r.RenderToRGBA(4, 4, black, list, out) }
+	for range ringSlots * (instanceCalmFrames + 1) {
+		frame()
+	}
+	for i := range r.slots {
+		if got := r.slots[i].quads; got != initialQuads {
+			t.Fatalf("slot %d retains %d quads after low demand", i, got)
+		}
+	}
+	near(t, "after shrinking", (img{4, 4, out}).at(2, 2), [4]int{255, 0, 0, 255}, 0)
+	if n := testing.AllocsPerRun(100, frame); n != 0 {
+		t.Fatalf("warm shrunk ring: %g allocations", n)
+	}
+}
+
 func TestLazyInstanceRing(t *testing.T) {
 	r := newTestRenderer(t)
 	checkEmpty := func() {

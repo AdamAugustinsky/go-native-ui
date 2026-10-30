@@ -331,10 +331,10 @@ func TestBatching(t *testing.T) {
 		{"empty", nil, 0},
 		{"shapes only", []Quad{shape(0), shape(1), shape(2)}, 1},
 		{"one texture", []Quad{glyph(0, a, red), glyph(1, a, red), glyph(2, a, red)}, 1},
-		{"two textures", []Quad{glyph(0, a, red), glyph(1, b, green)}, 2},
-		{"alternating", []Quad{glyph(0, a, red), glyph(1, b, green), glyph(2, a, red)}, 3},
+		{"two textures", []Quad{glyph(0, a, red), glyph(1, b, green)}, 1},
+		{"alternating", []Quad{glyph(0, a, red), glyph(1, b, green), glyph(2, a, red)}, 1},
 		{"shape joins open run", []Quad{glyph(0, a, red), shape(1), glyph(2, a, red)}, 1},
-		{"shape first", []Quad{shape(0), glyph(1, a, red), shape(2), glyph(3, b, green), glyph(4, a, red)}, 4},
+		{"shape first", []Quad{shape(0), glyph(1, a, red), shape(2), glyph(3, b, green), glyph(4, a, red)}, 1},
 	}
 	for _, c := range cases {
 		out := make([]byte, 5*1*4)
@@ -355,7 +355,7 @@ func TestBatching(t *testing.T) {
 
 func TestRingGrowth(t *testing.T) {
 	r := newTestRenderer(t)
-	const n = initialQuads*2 + 100
+	const n = 1<<13 + 100
 	list := &DrawList{}
 	for i := 0; i < n; i++ {
 		x := float32(i % 200)
@@ -381,7 +381,10 @@ func TestEncodeZeroAlloc(t *testing.T) {
 	r := newTestRenderer(t)
 	const w, h = 256, 256
 	r.newTarget(w, h)
-	atlases := [2]TextureID{r.NewTexture(TexR8, 16, 16), r.NewTexture(TexR8, 16, 16)}
+	var atlases [runTextures + 1]TextureID
+	for i := range atlases {
+		atlases[i] = r.NewTexture(TexR8, 16, 16)
+	}
 	for _, a := range atlases {
 		r.Upload(a, 0, 0, 16, 16, make([]byte, 256), 16)
 	}
@@ -397,7 +400,7 @@ func TestEncodeZeroAlloc(t *testing.T) {
 			q.BorderColor = 0xFFFFFF40
 			q.Clip = [4]float32{0, 0, 250, 250}
 			if i%3 == 0 {
-				q.Mode, q.Tex, q.UV = ModeMaskR8, atlases[(i/30)%2], [4]float32{0, 0, 16, 16}
+				q.Mode, q.Tex, q.UV = ModeMaskR8, atlases[(i/30)%len(atlases)], [4]float32{0, 0, 16, 16}
 			}
 			if i%50 == 0 {
 				q.Soft = 4

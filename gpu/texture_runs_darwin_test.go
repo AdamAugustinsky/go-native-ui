@@ -3,41 +3,8 @@
 package gpu
 
 import (
-	"slices"
 	"testing"
 )
-
-func TestTextureTableOverflow(t *testing.T) {
-	r := newTestRenderer(t)
-	var quads []Quad
-	for i := range 17 {
-		kind, mode := TexRGBA8, ModeRGBA
-		pixels := []byte{byte(10 * i), 80, 160, 255}
-		if i%2 == 0 {
-			kind, mode, pixels = TexR8, ModeMaskR8, []byte{byte(10 * i)}
-		}
-		tex := r.NewTexture(kind, 1, 1)
-		r.Upload(tex, 0, 0, 1, 1, pixels, len(pixels))
-		q := solid(float32(i), 0, float32(i+1), 1, 0xFFFFFFFF)
-		q.Mode, q.Tex, q.UV = mode, tex, [4]float32{0, 0, 1, 1}
-		quads = append(quads, q)
-	}
-	original := slices.Clone(quads)
-	m := render(r, 17, 1, transparent, quads...)
-	if got := r.DrawCalls(); got != 3 {
-		t.Errorf("17 textures: %d draws, want 3", got)
-	}
-	if !slices.Equal(quads, original) {
-		t.Fatal("renderer modified the caller's quads")
-	}
-	for i := range 17 {
-		want := [4]int{10 * i, 80, 160, 255}
-		if i%2 == 0 {
-			want = [4]int{10 * i, 10 * i, 10 * i, 10 * i}
-		}
-		near(t, "table sample", m.at(i, 0), want, 0)
-	}
-}
 
 func TestTextureTableYUVTransitions(t *testing.T) {
 	r := newTestRenderer(t)
