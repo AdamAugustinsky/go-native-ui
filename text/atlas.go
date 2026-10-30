@@ -1,7 +1,11 @@
 package text
 
 // shelf is one horizontal strip of a page.
-type shelf struct{ y, h, x int }
+type shelf struct {
+	y, h, x       int
+	dirty         bool
+	dx0, dx1, dy1 int
+}
 
 // packer is a shelf packer: rectangles go left to right on the shelf with
 // the smallest sufficient height; a new shelf opens below when none fits.
@@ -54,32 +58,28 @@ func (p *packer) alloc(w, h int) (x, y int, ok bool) {
 	return x, y, true
 }
 
-// page is one atlas texture in CPU memory plus its changed region.
+// page is one atlas texture in CPU memory. Changed spans live on its shelves;
+// new and reset textures are uploaded whole to initialize transparent texels.
 type page struct {
-	color      bool
-	bpp        int
-	pix        []byte
-	pack       packer
-	dirty      bool
-	dx0, dy0   int // dirty rect, half-open [dx0,dx1)×[dy0,dy1)
-	dx1, dy1   int
-	usedPixels int
+	color  bool
+	bpp    int
+	pix    []byte
+	pack   packer
+	dirty  bool   // whole page, before shelf spans
+	filled uint64 // most recent allocation epoch
 }
 
 const glyphPad = 1 // transparent pixels around every glyph
 
-// atlas owns the pages and the glyph cache that points into them.
-//
-// When no page of the needed kind has room and its byte budget is reached the
-// whole atlas is reset: every page is cleared, the glyph cache emptied and
-// the generation bumped. Previously returned GlyphEntries are then stale and
-// the caller (the renderer) re-looks-up its glyphs and re-uploads the pages
-// that Dirty reports. A page-granular LRU would avoid re-rasterizing the hot
-// set; it can replace the reset without changing the API.
+// atlas owns CPU pages for device recovery and the glyph cache that points
+// into them. On pressure it recycles the oldest-filled page of the requested
+// kind; entries and pixels in every other page stay valid. Any recycled page
+// bumps the generation so the renderer rebuilds references before drawing.
 type atlas struct {
 	pages   []*page
 	glyphs  glyphTable
 	gen     uint32
+	clock   uint64
 	maxPer  int
 	pageDim int
 }
@@ -97,7 +97,7 @@ func (a *atlas) newPage(color bool, dim int) *page {
 		color: color, bpp: bpp,
 		pix:   make([]byte, dim*dim*bpp),
 		pack:  packer{w: dim, h: dim, shelves: make([]shelf, 0, 64)},
-		dirty: true, dx1: dim, dy1: dim,
+		dirty: true,
 	}
 }
 
@@ -119,8 +119,6 @@ func (a *atlas) reset() {
 		// Upload the cleared page whole: old glyph pixels in the GPU texture
 		// would otherwise show through the new glyphs' padding.
 		p.dirty = true
-		p.dx0, p.dy0, p.dx1, p.dy1 = 0, 0, p.pack.w, p.pack.h
-		p.usedPixels = 0
 	}
 	a.glyphs.clear()
 	a.gen++
@@ -128,7 +126,7 @@ func (a *atlas) reset() {
 
 // alloc finds room for a w×h glyph bitmap plus padding and returns the page
 // index and the position of the glyph rectangle itself. It may reset the
-// atlas; the caller must not hold GlyphEntries across a call that changes
+// page; the caller must not hold GlyphEntries across a call that changes
 // a.gen.
 func (a *atlas) alloc(color bool, w, h int) (pg, x, y int, ok bool) {
 	pw, ph := w+2*glyphPad, h+2*glyphPad
@@ -141,18 +139,23 @@ func (a *atlas) alloc(color bool, w, h int) (pg, x, y int, ok bool) {
 				continue
 			}
 			if px, py, ok := p.pack.alloc(pw, ph); ok {
-				p.usedPixels += pw * ph
+				a.clock++
+				p.filled = a.clock
 				return i, px + glyphPad, py + glyphPad, true
 			}
 		}
 		used := a.pixelsKind(color)
 		left := a.maxPer*a.pageDim*a.pageDim - used
 		dim := a.pageDim
-		// Start colour small, but leave room for a maximum-sized glyph.
-		// Later pages are large; the tail uses smaller size classes to use
-		// the original byte budget in full, without relocating live glyphs.
-		if color && used == 0 && a.maxPer > 1 {
+		// Colour grows one size class per page; a larger glyph can skip
+		// classes. Pages never resize while their glyphs are live.
+		if color {
 			dim = min(256, a.pageDim)
+			for _, p := range a.pages {
+				if p.color {
+					dim = max(dim, min(2*p.pack.w, a.pageDim))
+				}
+			}
 			for dim < pw || dim < ph {
 				dim = min(dim*2, a.pageDim)
 			}
@@ -164,17 +167,33 @@ func (a *atlas) alloc(color bool, w, h int) (pg, x, y int, ok bool) {
 			a.pages = append(a.pages, a.newPage(color, dim))
 			p := a.pages[len(a.pages)-1]
 			if px, py, ok := p.pack.alloc(pw, ph); ok {
-				p.usedPixels += pw * ph
+				a.clock++
+				p.filled = a.clock
 				return len(a.pages) - 1, px + glyphPad, py + glyphPad, true
 			}
 		}
-		a.reset()
+		// Only a sufficiently large page can satisfy this request after reset.
+		oldest := -1
+		for i, p := range a.pages {
+			if p.color == color && p.pack.w >= pw && p.pack.h >= ph && (oldest < 0 || p.filled < a.pages[oldest].filled) {
+				oldest = i
+			}
+		}
+		if oldest < 0 {
+			return 0, 0, 0, false
+		}
+		p := a.pages[oldest]
+		clear(p.pix)
+		p.pack.reset()
+		p.dirty = true
+		a.glyphs.removePage(uint8(oldest))
+		a.gen++
 	}
 	return 0, 0, 0, false
 }
 
 // write copies a w×h bitmap with the given source stride into page pg at
-// (x, y) and extends the page's dirty rectangle.
+// (x, y) and extends that shelf's dirty span.
 func (a *atlas) write(pg, x, y, w, h int, src []byte, stride int) {
 	p := a.pages[pg]
 	row := w * p.bpp
@@ -182,13 +201,21 @@ func (a *atlas) write(pg, x, y, w, h int, src []byte, stride int) {
 		d := ((y+r)*p.pack.w + x) * p.bpp
 		copy(p.pix[d:d+row], src[r*stride:r*stride+row])
 	}
-	if !p.dirty {
-		p.dirty = true
-		p.dx0, p.dy0, p.dx1, p.dy1 = x, y, x+w, y+h
+	if p.dirty {
 		return
 	}
-	p.dx0, p.dy0 = min(p.dx0, x), min(p.dy0, y)
-	p.dx1, p.dy1 = max(p.dx1, x+w), max(p.dy1, y+h)
+	for i := range p.pack.shelves {
+		s := &p.pack.shelves[i]
+		if s.y != y-glyphPad {
+			continue
+		}
+		if !s.dirty {
+			s.dirty, s.dx0, s.dx1, s.dy1 = true, x, x+w, y+h
+		} else {
+			s.dx0, s.dx1, s.dy1 = min(s.dx0, x), max(s.dx1, x+w), max(s.dy1, y+h)
+		}
+		return
+	}
 }
 
 func (a *atlas) pageInfo(i int) (w, h int, color bool) {
@@ -203,12 +230,27 @@ func (a *atlas) pageInfo(i int) (w, h int, color bool) {
 // region's top-left texel and extends through the last texel of its last
 // row; row r of the region begins at pixels[r*stride].
 func (a *atlas) dirtyRegion(i int) (x, y, w, h int, pixels []byte, stride int, ok bool) {
-	if i < 0 || i >= len(a.pages) || !a.pages[i].dirty {
+	if i < 0 || i >= len(a.pages) {
 		return
 	}
 	p := a.pages[i]
+	if p.dirty {
+		w, h = p.pack.w, p.pack.h
+	} else {
+		found := false
+		for j := range p.pack.shelves {
+			s := &p.pack.shelves[j]
+			if s.dirty {
+				x, y, w, h = s.dx0, s.y+glyphPad, s.dx1-s.dx0, s.dy1-s.y-glyphPad
+				found = true
+				break
+			}
+		}
+		if !found {
+			return
+		}
+	}
 	stride = p.pack.w * p.bpp
-	x, y, w, h = p.dx0, p.dy0, p.dx1-p.dx0, p.dy1-p.dy0
 	start := y*stride + x*p.bpp
 	end := (y+h-1)*stride + (x+w)*p.bpp
 	return x, y, w, h, p.pix[start:end], stride, true
@@ -219,12 +261,27 @@ func (a *atlas) dirtyRegion(i int) (x, y, w, h int, pixels []byte, stride int, o
 func (a *atlas) markAllDirty() {
 	for _, p := range a.pages {
 		p.dirty = true
-		p.dx0, p.dy0, p.dx1, p.dy1 = 0, 0, p.pack.w, p.pack.h
 	}
 }
 
+// clearDirty consumes the region returned by dirtyRegion. A whole-page
+// upload covers every pending shelf; otherwise the next dirty shelf remains.
 func (a *atlas) clearDirty(i int) {
-	if i >= 0 && i < len(a.pages) {
-		a.pages[i].dirty = false
+	if i < 0 || i >= len(a.pages) {
+		return
+	}
+	p := a.pages[i]
+	if p.dirty {
+		p.dirty = false
+		for j := range p.pack.shelves {
+			p.pack.shelves[j].dirty = false
+		}
+		return
+	}
+	for j := range p.pack.shelves {
+		if p.pack.shelves[j].dirty {
+			p.pack.shelves[j].dirty = false
+			return
+		}
 	}
 }

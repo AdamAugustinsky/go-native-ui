@@ -39,12 +39,8 @@ func TestColorAtlasDimensionsAndBudget(t *testing.T) {
 		}
 	}
 	var total int
-	for i, p := range a.pages {
+	for _, p := range a.pages {
 		total += len(p.pix)
-		dx, dy, dw, dh, data, stride, dirty := a.dirtyRegion(i)
-		if !dirty || dx != 0 || dy != 0 || dw != p.pack.w || dh != p.pack.h || stride != dw*4 || len(data) != len(p.pix) || !bytes.Equal(data, make([]byte, len(data))) {
-			t.Fatalf("reset page %d not cleared/dirtied at its real dimensions", i)
-		}
 	}
 	if total != maxPagesPerKind*PageSize*PageSize*4 {
 		t.Fatalf("colour capacity=%d, want full byte budget", total)
@@ -289,7 +285,7 @@ func TestRunCacheEviction(t *testing.T) {
 	t.Logf("generation %d, %d runs resident", c.gen, len(c.ents))
 }
 
-func TestRunCacheEvictAllWhenAllReferenced(t *testing.T) {
+func TestRunCacheEvictsFractionWhenAllReferenced(t *testing.T) {
 	c := newRunCache()
 	c.maxRuns = 8
 	for i := 0; i < 8; i++ {
@@ -298,7 +294,7 @@ func TestRunCacheEvictAllWhenAllReferenced(t *testing.T) {
 		checkStr(t, c, 0, s) // a lookup, not insertion, marks the entry reused
 	}
 	insertStr(c, 0, "overflow")
-	if len(c.ents) > 1+c.maxRuns/2 {
+	if len(c.ents) < 2 || len(c.ents) > 1+c.maxRuns*3/4 {
 		t.Fatalf("no headroom after evicting a fully referenced cache: %d resident", len(c.ents))
 	}
 	checkStr(t, c, 0, "overflow")
@@ -318,5 +314,90 @@ func TestAtlasResetDirtiesWholePage(t *testing.T) {
 	a.reset()
 	if dx, dy, dw, dh, _, _, ok := a.dirtyRegion(pg); !ok || dx != 0 || dy != 0 || dw != 64 || dh != 64 {
 		t.Fatalf("after reset dirty = %d,%d %dx%d ok=%v, want the whole page", dx, dy, dw, dh, ok)
+	}
+}
+
+// Consuming one shelf must expose the next without uploading the space
+// between them. Whole-page restoration supersedes all pending shelf spans.
+func TestAtlasDirtyShelves(t *testing.T) {
+	a := newAtlas()
+	a.pageDim = 64
+	pg, x, y, _ := a.alloc(false, 10, 10)
+	_, xx, yy, _ := a.alloc(false, 10, 30)
+	a.clearDirty(pg)
+	a.write(pg, x, y, 10, 10, make([]byte, 100), 10)
+	a.write(pg, xx, yy, 10, 30, make([]byte, 300), 10)
+	texels, regions := 0, 0
+	for {
+		_, _, w, h, _, _, ok := a.dirtyRegion(pg)
+		if !ok {
+			break
+		}
+		texels += w * h
+		regions++
+		a.clearDirty(pg)
+	}
+	if texels != 400 || regions != 2 {
+		t.Fatalf("%d texels in %d regions", texels, regions)
+	}
+	a.write(pg, x, y, 10, 10, make([]byte, 100), 10)
+	a.markAllDirty()
+	if _, _, w, h, _, _, ok := a.dirtyRegion(pg); !ok || w != 64 || h != 64 {
+		t.Fatal("restore did not cover the whole page")
+	}
+	a.clearDirty(pg)
+	if _, _, _, _, _, _, ok := a.dirtyRegion(pg); ok {
+		t.Fatal("whole upload left stale shelf spans")
+	}
+}
+
+func TestAtlasPressurePreservesOtherPagesAndProbeChains(t *testing.T) {
+	a := newAtlas()
+	a.pageDim, a.maxPer = 64, 2
+	gray, x, y, _ := a.alloc(false, 60, 60)
+	a.write(gray, x, y, 60, 60, bytes.Repeat([]byte{91}, 3600), 60)
+	other, _, _, _ := a.alloc(false, 60, 60)
+	color, _, _, _ := a.alloc(true, 60, 60)
+	a.alloc(true, 60, 60)
+	for p := range a.pages {
+		a.clearDirty(p)
+	}
+	for i := 0; i < 300; i++ {
+		a.glyphs.insert(glyphKey(FaceID(i%7), uint16(i), 0), GlyphEntry{Page: uint8(i % len(a.pages)), W: 1})
+	}
+	gen := a.gen
+	recycled, _, _, ok := a.alloc(true, 60, 60)
+	if !ok || recycled != color || a.gen != gen+1 {
+		t.Fatal("did not recycle the oldest colour page")
+	}
+	if a.pages[gray].pix[y*64+x] != 91 || a.pages[gray].dirty || a.pages[other].dirty {
+		t.Fatal("colour pressure changed grayscale pages")
+	}
+	for i := 0; i < 300; i++ {
+		_, ok := a.glyphs.lookup(glyphKey(FaceID(i%7), uint16(i), 0))
+		if ok != (i%len(a.pages) != color) {
+			t.Fatalf("glyph %d: lookup=%v after page removal", i, ok)
+		}
+	}
+	if n := a.glyphs.n; n != 225 {
+		t.Fatalf("%d keys after removal, want 225", n)
+	}
+}
+
+func TestColorAtlasGrowsGeometrically(t *testing.T) {
+	a := newAtlas()
+	for want := 256; want <= PageSize; want *= 2 {
+		var pg int
+		for len(a.pages) == 0 || a.pages[len(a.pages)-1].pack.w < want {
+			pg, _, _, _ = a.alloc(true, 126, 126)
+		}
+		if want == 256 {
+			pg, _, _, _ = a.alloc(true, 126, 126)
+		} else {
+			pg = len(a.pages) - 1
+		}
+		if w, _, _ := a.pageInfo(pg); w != want {
+			t.Fatalf("page width %d, want %d", w, want)
+		}
 	}
 }

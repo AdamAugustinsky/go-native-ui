@@ -562,8 +562,8 @@ func (s *goSystem) Glyph(face FaceID, gid uint16, sub uint8) GlyphEntry {
 	return e
 }
 
-// AtlasGeneration changes when the atlas is reset because it is full: every
-// page is then cleared and all GlyphEntries are stale.
+// AtlasGeneration changes when a full atlas page is recycled. Earlier
+// GlyphEntries may be stale; other pages keep their glyphs and pixels.
 func (s *goSystem) AtlasGeneration() uint32 { return s.atlas.gen }
 
 func (s *goSystem) rasterize(face FaceID, gid uint16, sub uint8) (e GlyphEntry) {
@@ -652,7 +652,7 @@ func (s *goSystem) rasterizeColor(fc *gtFace, gid uint16) GlyphEntry {
 		return GlyphEntry{}
 	}
 	bx, by := g.bearingX, g.bearingY
-	src, sw, sh, err := pngPremultiplied(g.png)
+	src, sw, sh, err := fc.data.cb.png.decode(g.png)
 	if err != nil {
 		return GlyphEntry{}
 	}
@@ -662,7 +662,8 @@ func (s *goSystem) rasterizeColor(fc *gtFace, gid uint16) GlyphEntry {
 	if dw+2*glyphPad > PageSize || dh+2*glyphPad > PageSize {
 		return GlyphEntry{}
 	}
-	pix := scalePremultiplied(src, sw, sh, dw, dh)
+	pix := scalePremultiplied(fc.data.cb.scaled, src, sw, sh, dw, dh)
+	fc.data.cb.scaled = pix
 	pg, ax, ay, ok := s.atlas.alloc(true, dw, dh)
 	if !ok {
 		return GlyphEntry{}
@@ -691,7 +692,8 @@ func (s *goSystem) Dirty(p int) (x, y, w, h int, pixels []byte, stride int, ok b
 	return s.atlas.dirtyRegion(p)
 }
 
-// ClearDirty marks page p as uploaded.
+// ClearDirty consumes the region returned by Dirty. Repeat Dirty and
+// ClearDirty until the page has no pending regions.
 func (s *goSystem) ClearDirty(p int) { s.atlas.clearDirty(p) }
 
 // DirtyAll marks every atlas page changed in full, so the next Dirty of each

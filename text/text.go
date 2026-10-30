@@ -10,7 +10,8 @@
 //     by (font, bytes). A hit allocates nothing.
 //   - The glyph cache and atlas (cache.go, atlas.go) store rasterized glyphs
 //     in pages up to 1024×1024 (R8 coverage, RGBA premultiplied for colour glyphs)
-//     and track the region changed since the last upload.
+//     and track changed spans per shelf. Consume Dirty/ClearDirty until
+//     each page is clean.
 //   - Paragraph layout (para.go, D42) breaks styled text (Para: the text,
 //     pointer-free Spans and a font per style) into lines at a width. On
 //     macOS it is CoreText's typesetter (para_darwin.go), which gives AppKit's
@@ -47,8 +48,8 @@
 //
 // A RunView is valid until the next eviction of the run cache; compare
 // RunGeneration before and after shaping a batch. A GlyphEntry is valid
-// until the next atlas reset; compare AtlasGeneration (a reset clears every
-// page, so the caller re-uploads and re-looks-up its glyphs).
+// until an atlas page is recycled; compare AtlasGeneration and re-look-up
+// glyphs after it changes. Other pages keep their pixels and glyph entries.
 package text
 
 // FontKey identifies a font (family, size, weight, scale) in a System.

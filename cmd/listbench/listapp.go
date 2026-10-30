@@ -77,7 +77,7 @@ func newListApp(rows int) *listApp {
 func (l *listApp) Init(a *app.App) error {
 	l.a = a
 	a.UI.Reserve(1024)
-	a.Text.ReserveRuns(text.MaxCachedRuns, text.MaxCachedGlyphs, text.MaxCachedTextBytes)
+	a.Text.ReserveRuns(8192, 128<<10, 512<<10)
 	return nil
 }
 

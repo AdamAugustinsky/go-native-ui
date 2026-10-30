@@ -553,3 +553,39 @@ func TestCloseReleasesTheCaches(t *testing.T) {
 	}
 	runtime.KeepAlive(s)
 }
+
+// Alternating wide/tall requests converge to one bitmap, and persistent
+// raster state must produce the same pixels as a fresh context at each scale.
+func TestBitmapRetainsBothAxesAndRasterState(t *testing.T) {
+	s := newSys(t)
+	s.bitmapFor(false, 240, 60)
+	bm := s.bitmapFor(false, 60, 240)
+	if bm.w != 256 || bm.h != 256 {
+		t.Fatalf("scratch %dx%d, want 256x256", bm.w, bm.h)
+	}
+	ctx := bm.ctx
+	allocFree(t, "alternating bitmap requests", func() func() {
+		return func() {
+			for i := 0; i < 100; i++ {
+				s.bitmapFor(false, 240, 60)
+				s.bitmapFor(false, 60, 240)
+			}
+		}
+	})
+	if s.gray.ctx != ctx {
+		t.Fatal("bitmap context was replaced")
+	}
+	for _, scale := range []float32{1, 2, 1.5, 3, 1} {
+		f := s.Font(FontDesc{Scale: scale})
+		v := shapeStr(s, f, "A")
+		for _, smooth := range []uint8{0, 1, 4, 2, 0} {
+			e := s.rasterize(v.Faces[0], v.Glyphs[0], 2, smooth)
+			got := pixels(t, s, e)
+			s.freeBitmap(&s.gray)
+			fresh := s.rasterize(v.Faces[0], v.Glyphs[0], 2, smooth)
+			if string(got) != string(pixels(t, s, fresh)) {
+				t.Fatalf("scale %v smooth %d: cached graphics state changed pixels", scale, smooth)
+			}
+		}
+	}
+}

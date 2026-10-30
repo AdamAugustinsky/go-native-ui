@@ -12,6 +12,7 @@ import (
 
 	"github.com/ebitengine/purego"
 
+	"gonativeui/internal/cf"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )
@@ -20,15 +21,14 @@ import (
 // ffi.Frame: no purego.RegisterFunc / SyscallN, which allocate.
 var sy struct {
 	// CoreFoundation
-	cfRelease, cfRetain                         uintptr
 	cfStringCreateWithBytes, cfStringGetCString uintptr
+	cfHash, cfEqual                             uintptr
 	cfDictionaryCreate, cfDictionaryGetValue    uintptr
 	cfAttributedStringCreate                    uintptr
 	cfAttrCreateMutable, cfAttrReplaceString    uintptr
 	cfAttrSetAttributes, cfAttrSetAttribute     uintptr
 	cfAttrGetLength                             uintptr
 	cfAttrBeginEditing, cfAttrEndEditing        uintptr
-	cfArrayGetCount, cfArrayGetValueAtIndex     uintptr
 	cfArrayCreate, arrayCallBacks               uintptr // arrayCallBacks: the address of the callback struct
 	cfNumberCreate                              uintptr
 	cfNumberGetValue, cfNumberGetTypeID         uintptr
@@ -60,7 +60,6 @@ var sy struct {
 	cgColorSpaceCreateDeviceGray, cgColorSpaceCreateDeviceRGB uintptr
 	cgBitmapContextCreate                                     uintptr
 	cgContextSetGrayFillColor                                 uintptr
-	cgContextSaveGState, cgContextRestoreGState               uintptr
 	cgContextScaleCTM                                         uintptr
 	cgSetBool                                                 [8]uintptr // (ctx, bool) setters, see ctxFlags
 	// constant CFStringRefs (values of the exported globals)
@@ -120,7 +119,11 @@ func loadSyms() error {
 		// cache, and the process's first window then raises inside
 		// +systemFontOfSize: (an offscreen rig, then a live window).
 		open("/System/Library/Frameworks/AppKit.framework/AppKit")
-		cf := open("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+		if err := cf.Init(); err != nil {
+			loadErr = err
+			return
+		}
+		cfLib := cf.CoreFoundation()
 		ct := open("/System/Library/Frameworks/CoreText.framework/CoreText")
 		cg := open("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
 		if loadErr != nil {
@@ -141,21 +144,20 @@ func loadSyms() error {
 			}
 			return *(*uintptr)(ffi.PtrFromC(p))
 		}
-		sy.cfRelease, sy.cfRetain = sym(cf, "CFRelease"), sym(cf, "CFRetain")
-		sy.cfStringCreateWithBytes, sy.cfStringGetCString = sym(cf, "CFStringCreateWithBytes"), sym(cf, "CFStringGetCString")
-		sy.cfDictionaryCreate, sy.cfDictionaryGetValue = sym(cf, "CFDictionaryCreate"), sym(cf, "CFDictionaryGetValue")
-		sy.cfAttributedStringCreate = sym(cf, "CFAttributedStringCreate")
-		sy.cfAttrCreateMutable, sy.cfAttrReplaceString = sym(cf, "CFAttributedStringCreateMutable"), sym(cf, "CFAttributedStringReplaceString")
-		sy.cfAttrSetAttributes, sy.cfAttrSetAttribute = sym(cf, "CFAttributedStringSetAttributes"), sym(cf, "CFAttributedStringSetAttribute")
-		sy.cfAttrGetLength = sym(cf, "CFAttributedStringGetLength")
-		sy.cfAttrBeginEditing, sy.cfAttrEndEditing = sym(cf, "CFAttributedStringBeginEditing"), sym(cf, "CFAttributedStringEndEditing")
-		sy.cfArrayGetCount, sy.cfArrayGetValueAtIndex = sym(cf, "CFArrayGetCount"), sym(cf, "CFArrayGetValueAtIndex")
-		sy.cfNumberCreate = sym(cf, "CFNumberCreate")
-		sy.cfArrayCreate, sy.arrayCallBacks = sym(cf, "CFArrayCreate"), sym(cf, "kCFTypeArrayCallBacks")
-		sy.cfNumberGetValue, sy.cfNumberGetTypeID = sym(cf, "CFNumberGetValue"), sym(cf, "CFNumberGetTypeID")
-		sy.cfGetTypeID, sy.cfPreferencesCopyAppValue = sym(cf, "CFGetTypeID"), sym(cf, "CFPreferencesCopyAppValue")
-		sy.kCurrentApplication = global(cf, "kCFPreferencesCurrentApplication")
-		sy.keyCallBacks, sy.valueCallBacks = sym(cf, "kCFTypeDictionaryKeyCallBacks"), sym(cf, "kCFTypeDictionaryValueCallBacks")
+		sy.cfHash, sy.cfEqual = sym(cfLib, "CFHash"), sym(cfLib, "CFEqual")
+		sy.cfStringCreateWithBytes, sy.cfStringGetCString = sym(cfLib, "CFStringCreateWithBytes"), sym(cfLib, "CFStringGetCString")
+		sy.cfDictionaryCreate, sy.cfDictionaryGetValue = sym(cfLib, "CFDictionaryCreate"), sym(cfLib, "CFDictionaryGetValue")
+		sy.cfAttributedStringCreate = sym(cfLib, "CFAttributedStringCreate")
+		sy.cfAttrCreateMutable, sy.cfAttrReplaceString = sym(cfLib, "CFAttributedStringCreateMutable"), sym(cfLib, "CFAttributedStringReplaceString")
+		sy.cfAttrSetAttributes, sy.cfAttrSetAttribute = sym(cfLib, "CFAttributedStringSetAttributes"), sym(cfLib, "CFAttributedStringSetAttribute")
+		sy.cfAttrGetLength = sym(cfLib, "CFAttributedStringGetLength")
+		sy.cfAttrBeginEditing, sy.cfAttrEndEditing = sym(cfLib, "CFAttributedStringBeginEditing"), sym(cfLib, "CFAttributedStringEndEditing")
+		sy.cfNumberCreate = sym(cfLib, "CFNumberCreate")
+		sy.cfArrayCreate, sy.arrayCallBacks = sym(cfLib, "CFArrayCreate"), sym(cfLib, "kCFTypeArrayCallBacks")
+		sy.cfNumberGetValue, sy.cfNumberGetTypeID = sym(cfLib, "CFNumberGetValue"), sym(cfLib, "CFNumberGetTypeID")
+		sy.cfGetTypeID, sy.cfPreferencesCopyAppValue = sym(cfLib, "CFGetTypeID"), sym(cfLib, "CFPreferencesCopyAppValue")
+		sy.kCurrentApplication = global(cfLib, "kCFPreferencesCurrentApplication")
+		sy.keyCallBacks, sy.valueCallBacks = sym(cfLib, "kCFTypeDictionaryKeyCallBacks"), sym(cfLib, "kCFTypeDictionaryValueCallBacks")
 
 		sy.ctFontCreateUIFontForLanguage, sy.ctFontCreateWithName = sym(ct, "CTFontCreateUIFontForLanguage"), sym(ct, "CTFontCreateWithName")
 		sy.ctFontCreateWithFontDescriptor = sym(ct, "CTFontCreateWithFontDescriptor")
@@ -183,7 +185,6 @@ func loadSyms() error {
 		sy.cgColorSpaceCreateDeviceGray, sy.cgColorSpaceCreateDeviceRGB = sym(cg, "CGColorSpaceCreateDeviceGray"), sym(cg, "CGColorSpaceCreateDeviceRGB")
 		sy.cgBitmapContextCreate = sym(cg, "CGBitmapContextCreate")
 		sy.cgContextSetGrayFillColor = sym(cg, "CGContextSetGrayFillColor")
-		sy.cgContextSaveGState, sy.cgContextRestoreGState = sym(cg, "CGContextSaveGState"), sym(cg, "CGContextRestoreGState")
 		sy.cgContextScaleCTM = sym(cg, "CGContextScaleCTM")
 		for i, f := range ctxFlags {
 			sy.cgSetBool[i] = sym(cg, f.name)
@@ -229,21 +230,35 @@ type faceEnt struct {
 	gone  bool    // released by ReleaseScale: the slot is free for the next face
 }
 
+type facePointer struct {
+	font  uintptr
+	scale float32
+}
+type faceHash struct {
+	hash  uintptr
+	scale float32
+}
+
 // bitmap is a reusable CGBitmapContext with its backing memory (Go-owned,
 // pointer-free, never moved by the GC).
 type bitmap struct {
 	ctx, cs      uintptr
 	buf          []byte
 	w, h, stride int
+	scale        float64
+	smooth       uint8
 }
 
 // System is the macOS text system. See the package comment for threading.
 type System struct {
 	fr *ffi.Frame // this System's call frame; one System per thread
 
-	fonts      []fontEnt
-	faces      []faceEnt
-	faceByName map[string]FaceID
+	fonts         []fontEnt
+	fontByDesc    map[FontDesc]FontKey
+	faceByPointer map[facePointer]FaceID
+	faceByHash    map[faceHash]FaceID
+	faces         []faceEnt
+	faceByName    map[string]FaceID
 
 	runs  *runCache
 	atlas *atlas
@@ -253,25 +268,24 @@ type System struct {
 	gray, rgba bitmap
 
 	// Scratch in long-lived heap memory (C writes into it).
-	tmp   []byte    // copy of the UTF-8 being shaped
-	name  []byte    // face name / key build buffer
-	cstr  [256]byte // CFStringGetCString out
-	gbuf  []uint16
-	xbuf  []float32
-	fbuf  []FaceID
-	cbuf  []uint32  // cluster per glyph (RunView.Clusters) of the line being shaped
-	pos   []float64 // CTRunGetPositions output, x,y pairs
-	idx   []int64   // CTRunGetStringIndices output (CFIndex, UTF-16 units)
-	u16b  []uint32  // byte offset in the source of each UTF-16 unit of the CFString, plus the length
-	san   []byte    // the source with every invalid byte replaced by U+FFFD
-	keys  [2]uintptr
-	vals  [2]uintptr
-	num   [1]float64
-	inum  [1]int32
-	gid   [1]uint16
-	pt    [2]float64
-	rect  [4]float64 // bounding rect out
-	three [3]float64 // ascent/descent/leading out
+	tmp  []byte    // copy of the UTF-8 being shaped
+	name []byte    // face name / key build buffer
+	cstr [256]byte // CFStringGetCString out
+	gbuf []uint16
+	xbuf []float32
+	fbuf []FaceID
+	cbuf []uint32  // cluster per glyph (RunView.Clusters) of the line being shaped
+	pos  []float64 // CTRunGetPositions output, x,y pairs
+	idx  []int64   // CTRunGetStringIndices output (CFIndex, UTF-16 units)
+	u16b []uint32  // byte offset in the source of each UTF-16 unit of the CFString, plus the length
+	san  []byte    // the source with every invalid byte replaced by U+FFFD
+	keys [2]uintptr
+	vals [2]uintptr
+	num  [1]float64
+	inum [1]int32
+	gid  [1]uint16
+	pt   [2]float64
+	rect [4]float64 // bounding rect out
 
 	closed bool
 }
@@ -282,11 +296,14 @@ func New() (*System, error) {
 		return nil, err
 	}
 	s := &System{
-		fr:         new(ffi.Frame),
-		faceByName: make(map[string]FaceID),
-		runs:       newRunCache(),
-		atlas:      newAtlas(),
-		paras:      newParaCache(),
+		fr:            new(ffi.Frame),
+		fontByDesc:    make(map[FontDesc]FontKey),
+		faceByPointer: make(map[facePointer]FaceID),
+		faceByHash:    make(map[faceHash]FaceID),
+		faceByName:    make(map[string]FaceID),
+		runs:          newRunCache(),
+		atlas:         newAtlas(),
+		paras:         newParaCache(),
 	}
 	s.tmp = make([]byte, 0, 256)
 	s.name = make([]byte, 0, 256)
@@ -299,11 +316,7 @@ func New() (*System, error) {
 
 // ---- CoreFoundation helpers ----
 
-func (s *System) release(cf uintptr) {
-	if cf != 0 {
-		s.fr.Call1(sy.cfRelease, cf)
-	}
-}
+func (s *System) release(obj uintptr) { cf.CFRelease(s.fr, obj) }
 
 // poolPush opens an autorelease pool around a CoreText call sequence.
 // CoreText autoreleases internal Objective-C objects (about 1 KB per
@@ -320,7 +333,7 @@ func (s *System) poolPop(p uintptr) {
 	runtime.UnlockOSThread()
 }
 
-func (s *System) retain(cf uintptr) { s.fr.Call1(sy.cfRetain, cf) }
+func (s *System) retain(obj uintptr) { cf.CFRetain(s.fr, obj) }
 
 // cfString creates a CFString from UTF-8 bytes; 0 if they're invalid UTF-8.
 // The bytes are copied to heap scratch first so C never sees caller memory.
@@ -400,14 +413,15 @@ func (s *System) traitsAttrs(weight int, mono bool) uintptr {
 // that doesn't exist silently resolves to CoreText's default.
 func (s *System) Font(d FontDesc) FontKey {
 	d = normalizeDesc(d)
+	if key, ok := s.fontByDesc[d]; ok {
+		return key
+	}
 	free := -1
 	for i := range s.fonts {
 		if s.fonts[i].gone {
 			if free < 0 {
 				free = i
 			}
-		} else if s.fonts[i].desc == d {
-			return FontKey(i)
 		}
 	}
 	if free < 0 && len(s.fonts) >= math.MaxUint16 {
@@ -454,6 +468,7 @@ func (s *System) Font(d FontDesc) FontKey {
 		s.fonts = append(s.fonts, fe)
 		key = FontKey(len(s.fonts) - 1)
 	}
+	s.fontByDesc[d] = key
 	s.fonts[key].metrics.MonoAdvance = s.Run(s.Shape(key, []byte("0"))).Advance
 	return key
 }
@@ -476,6 +491,7 @@ func (s *System) ReleaseScale(scale float32) int {
 	n := 0
 	for i := range s.fonts {
 		if f := &s.fonts[i]; !f.gone && f.desc.Scale == scale {
+			delete(s.fontByDesc, f.desc)
 			s.release(f.attrs)
 			s.release(f.font)
 			*f = fontEnt{gone: true}
@@ -485,6 +501,8 @@ func (s *System) ReleaseScale(scale float32) int {
 	faces := 0
 	for i := range s.faces {
 		if f := &s.faces[i]; !f.gone && f.scale == scale {
+			delete(s.faceByPointer, facePointer{f.font, f.scale})
+			delete(s.faceByHash, faceHash{s.fr.Call1(sy.cfHash, f.font), f.scale})
 			s.release(f.font)
 			delete(s.faceByName, f.key)
 			*f = faceEnt{gone: true}
@@ -604,16 +622,23 @@ func (s *System) Metrics(f FontKey) Metrics {
 
 // faceFor maps a CTFont rasterised at scale to a FaceID, retaining new
 // fonts. Identity is the CTFontRef pointer (cheap, exact while the font is
-// retained) and otherwise PostScript name + size, with the scale.
+// retained), then CFHash/CFEqual for recreated fallback fonts, and finally
+// PostScript name + size, with the scale.
 func (s *System) faceFor(font uintptr, scale float32) FaceID {
+	if id, ok := s.faceByPointer[facePointer{font, scale}]; ok {
+		return id
+	}
+	// CoreText may create an equal fallback CTFont for every line. CFHash is
+	// stable across those objects; CFEqual keeps hash collisions harmless.
+	hk := faceHash{s.fr.Call1(sy.cfHash, font), scale}
+	if id, ok := s.faceByHash[hk]; ok && s.fr.Call2(sy.cfEqual, font, s.faces[id].font) != 0 {
+		return id
+	}
 	free := -1
 	for i := range s.faces {
 		if s.faces[i].gone {
-			if free < 0 {
-				free = i
-			}
-		} else if s.faces[i].font == font && s.faces[i].scale == scale {
-			return FaceID(i)
+			free = i
+			break
 		}
 	}
 	ps := s.fr.Call1(sy.ctFontCopyPostScriptName, font)
@@ -635,6 +660,7 @@ func (s *System) faceFor(font uintptr, scale float32) FaceID {
 		s.name = append(s.name, byte(bits), byte(bits>>8), byte(bits>>16), byte(bits>>24))
 	}
 	if id, ok := s.faceByName[string(s.name)]; ok {
+		s.faceByHash[hk] = id
 		return id
 	}
 	if free < 0 && len(s.faces) >= math.MaxUint16 {
@@ -655,6 +681,8 @@ func (s *System) faceFor(font uintptr, scale float32) FaceID {
 		id = FaceID(len(s.faces) - 1)
 	}
 	s.faceByName[fe.key] = id
+	s.faceByHash[hk] = id
+	s.faceByPointer[facePointer{font, scale}] = id
 	return id
 }
 
@@ -697,13 +725,12 @@ func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 			as := s.fr.Reset().Arg(0).Arg(str).Arg(fe.attrs).Call(sy.cfAttributedStringCreate).R0()
 			line := s.fr.Call1(sy.ctLineCreateWithAttributedString, as)
 			runs := s.fr.Call1(sy.ctLineGetGlyphRuns, line)
-			nruns := int(s.fr.Call1(sy.cfArrayGetCount, runs))
+			nruns := cf.ArrayLen(s.fr, runs)
 			for i := 0; i < nruns; i++ {
-				run := s.fr.Call2(sy.cfArrayGetValueAtIndex, runs, uintptr(i))
+				run := cf.ArrayAt(s.fr, runs, i)
 				s.appendRun(run, fe.face, fe.desc.Scale)
 			}
-			advance = float32(s.fr.Reset().Arg(line).ArgPtr(unsafe.Pointer(&s.three[0])).
-				ArgPtr(unsafe.Pointer(&s.three[1])).ArgPtr(unsafe.Pointer(&s.three[2])).
+			advance = float32(s.fr.Reset().Arg(line).Arg(0).Arg(0).Arg(0).
 				Call(sy.ctLineGetTypographicBounds).F64(0) * float64(fe.desc.Scale))
 			s.release(line)
 			s.release(as)
@@ -932,7 +959,7 @@ func readSmoothPref() {
 		return
 	}
 	v := fr.Call2(sy.cfPreferencesCopyAppValue, key, sy.kCurrentApplication)
-	fr.Call1(sy.cfRelease, key)
+	cf.CFRelease(fr, key)
 	if v == 0 {
 		return
 	}
@@ -942,13 +969,13 @@ func readSmoothPref() {
 			smoothOn = false
 		}
 	}
-	fr.Call1(sy.cfRelease, v)
+	cf.CFRelease(fr, v)
 }
 
 const prefKey = "AppleFontSmoothing"
 
-// AtlasGeneration changes when the atlas is reset because it is full: every
-// page is then cleared and all GlyphEntries are stale.
+// AtlasGeneration changes when a full atlas page is recycled. Earlier
+// GlyphEntries may be stale; other pages keep their glyphs and pixels.
 func (s *System) AtlasGeneration() uint32 { return s.atlas.gen }
 
 // rasterize draws one glyph at quarter-pixel offset sub and, for outline
@@ -991,17 +1018,20 @@ func (s *System) rasterize(face FaceID, gid uint16, sub, smooth uint8) GlyphEntr
 	// that region's bottom edge. The pen is given in the scaled user space.
 	s.pt[0] = (sx - float64(x0)) / sc
 	s.pt[1] = (float64(bm.h-h) - float64(y0)) / sc
-	if !fc.color {
+	if !fc.color && bm.smooth != smooth {
 		// An alpha-only context: the bitmap is the coverage whatever the fill,
 		// and the fill's grey selects the smoothing level's stem dilation.
 		s.fr.Reset().Arg(bm.ctx).ArgBool(smooth > 0).Call(sy.cgSetBool[shouldSmooth])
 		s.fr.Reset().Arg(bm.ctx).ArgF64(smoothGray[smooth]).ArgF64(1).Call(sy.cgContextSetGrayFillColor)
+		bm.smooth = smooth
 	}
-	s.fr.Call1(sy.cgContextSaveGState, bm.ctx)
-	s.fr.Reset().Arg(bm.ctx).ArgF64(sc).ArgF64(sc).Call(sy.cgContextScaleCTM)
+	if bm.scale != sc {
+		ratio := sc / bm.scale
+		s.fr.Reset().Arg(bm.ctx).ArgF64(ratio).ArgF64(ratio).Call(sy.cgContextScaleCTM)
+		bm.scale = sc
+	}
 	s.fr.Reset().Arg(fc.font).ArgPtr(unsafe.Pointer(&s.gid[0])).ArgPtr(unsafe.Pointer(&s.pt[0])).
 		Arg(1).Arg(bm.ctx).Call(sy.ctFontDrawGlyphs)
-	s.fr.Call1(sy.cgContextRestoreGState, bm.ctx)
 	pg, ax, ay, ok := s.atlas.alloc(fc.color, w, h)
 	if !ok {
 		return GlyphEntry{}
@@ -1023,8 +1053,7 @@ func (s *System) bitmapFor(color bool, w, h int) *bitmap {
 	if bm.ctx != 0 && bm.w >= w && bm.h >= h {
 		return bm
 	}
-	s.freeBitmap(bm)
-	cw, ch := 128, 128
+	cw, ch := max(128, bm.w), max(128, bm.h)
 	for cw < w {
 		cw *= 2
 	}
@@ -1035,18 +1064,21 @@ func (s *System) bitmapFor(color bool, w, h int) *bitmap {
 	if color {
 		bpp, info, csFn = 4, bitmapAlphaPre, sy.cgColorSpaceCreateDeviceRGB
 	}
-	bm.buf = make([]byte, cw*ch*bpp)
-	bm.w, bm.h, bm.stride = cw, ch, cw*bpp
-	bm.cs = s.fr.Call0(csFn)
-	bm.ctx = s.fr.Reset().ArgPtr(unsafe.Pointer(&bm.buf[0])).Arg(uintptr(cw)).Arg(uintptr(ch)).Arg(8).
-		Arg(uintptr(bm.stride)).Arg(bm.cs).Arg32(info).Call(sy.cgBitmapContextCreate).R0()
-	if bm.ctx == 0 {
-		s.freeBitmap(bm)
+	next := bitmap{scale: 1, smooth: 255}
+	next.buf = make([]byte, cw*ch*bpp)
+	next.w, next.h, next.stride = cw, ch, cw*bpp
+	next.cs = s.fr.Call0(csFn)
+	next.ctx = s.fr.Reset().ArgPtr(unsafe.Pointer(&next.buf[0])).Arg(uintptr(cw)).Arg(uintptr(ch)).Arg(8).
+		Arg(uintptr(next.stride)).Arg(next.cs).Arg32(info).Call(sy.cgBitmapContextCreate).R0()
+	if next.ctx == 0 {
+		s.freeBitmap(&next)
 		return nil
 	}
 	for i := range ctxFlags {
-		s.fr.Reset().Arg(bm.ctx).ArgBool(ctxFlags[i].on).Call(sy.cgSetBool[i])
+		s.fr.Reset().Arg(next.ctx).ArgBool(ctxFlags[i].on).Call(sy.cgSetBool[i])
 	}
+	s.freeBitmap(bm)
+	*bm = next
 	return bm
 }
 
@@ -1072,7 +1104,8 @@ func (s *System) Dirty(p int) (x, y, w, h int, pixels []byte, stride int, ok boo
 	return s.atlas.dirtyRegion(p)
 }
 
-// ClearDirty marks page p as uploaded.
+// ClearDirty consumes the region returned by Dirty. Repeat Dirty and
+// ClearDirty until the page has no pending regions.
 func (s *System) ClearDirty(p int) { s.atlas.clearDirty(p) }
 
 // DirtyAll marks every atlas page changed in full, so the next Dirty of each
@@ -1099,6 +1132,7 @@ func (s *System) Close() {
 	}
 	s.closePara()
 	s.fonts, s.faces, s.faceByName = nil, nil, nil
+	s.fontByDesc, s.faceByPointer, s.faceByHash = nil, nil, nil
 	s.freeBitmap(&s.gray)
 	s.freeBitmap(&s.rgba)
 	s.runs, s.atlas, s.paras, s.pl = newRunCache(), newAtlas(), newParaCache(), ctPara{}

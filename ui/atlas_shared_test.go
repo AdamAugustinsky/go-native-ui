@@ -273,3 +273,29 @@ func TestAtlasRestoreUploadsCleanPages(t *testing.T) {
 		})
 	}
 }
+
+type shelfShaper struct {
+	*fakeShaper
+	pending int
+	pix     [16]byte
+}
+
+func (s *shelfShaper) Dirty(int) (x, y, w, h int, pixels []byte, stride int, ok bool) {
+	if s.pending == 0 {
+		return
+	}
+	return 0, s.pending, 4, 4, s.pix[:], 4, true
+}
+
+func (s *shelfShaper) ClearDirty(int) { s.pending-- }
+
+func TestAtlasSyncConsumesEveryShelf(t *testing.T) {
+	sh := &shelfShaper{fakeShaper: newFake(), pending: 3}
+	up := &stagingUploader{texUploader: texUploader{uploads: map[gpu.TextureID]int{}}}
+	c := New(sh)
+	c.up = up
+	c.syncAtlas()
+	if sh.pending != 0 || up.total() != 1 || up.stages != 2 {
+		t.Fatalf("pending=%d uploads=%d stages=%d", sh.pending, up.total(), up.stages)
+	}
+}

@@ -110,8 +110,8 @@ func checkStrRun(t *testing.T, c *runCache, r *strRun) {
 	}
 }
 
-// Eviction (both the compaction that keeps referenced runs and the
-// drop-everything path) and the rehash it ends with allocate nothing.
+// Fractional compaction and rehashing allocate nothing, including when
+// every entry has been hit.
 func TestRunCacheEvictionIsAllocFree(t *testing.T) {
 	const n = 5000
 	runs := makeRuns("scan_", n)
@@ -145,22 +145,22 @@ func TestRunCacheEvictionIsAllocFree(t *testing.T) {
 		checkStrRun(t, c, &hot[i])
 	}
 
-	// Drop-all path: every resident run referenced and more than half full.
+	// Every resident run referenced: still evict by access epoch.
 	more := makeRuns("more_", 500)
 	var c2 *runCache
-	allocFree(t, "drop-all evictions", func() func() {
+	allocFree(t, "all-referenced evictions", func() func() {
 		c2 = newRunCache()
 		c2.maxRuns = 50
 		c2.reserve(50, 50*12, 50*12)
 		return func() {
 			for i := range more {
 				more[i].insert(c2)
-				c2.lookup(1, more[i].b) // exercise the all-referenced drop path
+				c2.lookup(1, more[i].b) // exercise eviction of hit entries
 			}
 		}
 	})
 	if c2.gen == 0 {
-		t.Fatal("the drop-all path was not exercised")
+		t.Fatal("all-referenced eviction was not exercised")
 	}
 }
 
@@ -184,5 +184,44 @@ func TestRunCacheReserveClampsAndKeepsEntries(t *testing.T) {
 	c.reserve(-5, 0, 0) // negative and shrinking requests do nothing
 	for i := range runs {
 		checkStrRun(t, c, &runs[i])
+	}
+}
+
+// The incoming payload must fit alongside survivors, and exceptional runs
+// must never grow ordinary slabs beyond the advertised limits.
+func TestRunCacheBoundsAndOversizedLifetime(t *testing.T) {
+	c := newRunCache()
+	c.maxRuns, c.maxText, c.maxGlyphs = 4, 16, 8
+	c.reserve(4, 8, 16)
+	insertStr(c, 0, "12345678")
+	c.lookup(0, []byte("12345678"))
+	ref := c.insert(0, []byte("abcdefghijkl"), nil, nil, nil, nil, 12)
+	if !c.within(0, 0) || string(c.view(ref).Text) != "abcdefghijkl" {
+		t.Fatal("incoming run exceeded the budget or lost its text")
+	}
+	before := c.gen
+	over := insertStr(c, 0, "01234567890123456789012345678901")
+	if over != overRunRef || c.gen == before || len(c.text) > c.maxText || len(c.glyph) > c.maxGlyphs {
+		t.Fatal("oversized run grew ordinary storage or did not invalidate references")
+	}
+	checkStr(t, c, 0, "01234567890123456789012345678901")
+	before = c.gen
+	over = insertStr(c, 0, "a different oversized string")
+	if c.gen == before || string(c.view(over).Text) != "a different oversized string" {
+		t.Fatal("oversized replacement did not invalidate references")
+	}
+	for i := 0; i <= c.maxRuns; i++ {
+		c.insert(0, []byte{byte(i)}, nil, nil, nil, nil, 1)
+	}
+	if c.overOK || c.over.text != nil || c.over.glyph != nil || len(c.view(over).Text) != 0 {
+		t.Fatal("unused exceptional storage was retained")
+	}
+	if cap(c.ents) > c.maxRuns || cap(c.text) > c.maxText || cap(c.glyph) > c.maxGlyphs || cap(c.xs) > c.maxGlyphs || cap(c.faces) > c.maxGlyphs || cap(c.clus) > c.maxGlyphs {
+		t.Fatal("ordinary capacity exceeded its budget")
+	}
+	insertStr(c, 0, "another exceptional string")
+	c.drop()
+	if c.overOK || c.over.text != nil {
+		t.Fatal("drop retained exceptional storage")
 	}
 }
