@@ -3,6 +3,8 @@ package text
 import (
 	"math/rand"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -33,6 +35,56 @@ func ourBoundaries(s string) []int {
 		if off >= len(b) {
 			return out
 		}
+	}
+}
+
+func checkGraphemeIterator(t *testing.T, b []byte, want []int) {
+	t.Helper()
+	var it GraphemeIterator
+	for _, off := range want[1:] {
+		if got := it.Next(b); got != off {
+			t.Fatalf("%q: iterator at %d, want %d (%v)", b, got, off, want)
+		}
+	}
+	if it.Next(b) != len(b) || it.Next(b) != len(b) {
+		t.Fatal("iterator past the end")
+	}
+	if len(want) < 20 {
+		for i, off := range want {
+			it = GraphemeIterator{off: off}
+			for _, next := range want[i+1:] {
+				if got := it.Next(b); got != next {
+					t.Fatalf("%q: iterator starting at %d reached %d, want %d", b, off, got, next)
+				}
+			}
+		}
+	}
+}
+
+func TestGraphemeIteratorFlags(t *testing.T) {
+	for _, s := range []string{"", strings.Repeat("🇬🇧", 1024), "\u0600🇬🇧🇧🇬🇬\u0301🇬🇧", "👩\u0301\u200d👩 क्ष\u094dक्ष"} {
+		want := []int{0}
+		for off := 0; off < len(s); {
+			off = NextGrapheme([]byte(s), off)
+			want = append(want, off)
+		}
+		checkGraphemeIterator(t, []byte(s), want)
+	}
+}
+
+func BenchmarkGraphemeIteratorFlags(b *testing.B) {
+	for _, n := range []int{64, 256, 1024} {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			txt := []byte(strings.Repeat("🇬🇧", n))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for j := 0; j < b.N; j++ {
+				var it GraphemeIterator
+				for k := 0; k < len(txt); {
+					k = it.Next(txt)
+				}
+			}
+		})
 	}
 }
 
@@ -68,6 +120,7 @@ func TestGraphemeMatchesGoText(t *testing.T) {
 		}
 		s := string(rs)
 		want, got := gtBoundaries(t, &seg, s), ourBoundaries(s)
+		checkGraphemeIterator(t, []byte(s), got)
 		if !slices.Equal(want, got) && !pictRestart(rs) {
 			t.Fatalf("%+q: go-text %v, ours %v", s, want, got)
 		}
@@ -214,6 +267,7 @@ func TestGraphemeMalformedUTF8(t *testing.T) {
 	var seg segmenter.Segmenter
 	for _, b := range cases {
 		want := sanitizedBoundaries(t, &seg, b)
+		checkGraphemeIterator(t, b, want)
 		var got []int
 		for off := 0; off <= len(b); off++ {
 			if IsGraphemeBoundary(b, off) {
@@ -261,6 +315,7 @@ func TestGraphemeRandomBytes(t *testing.T) {
 			b[i] = pool[rng.Intn(len(pool))]
 		}
 		want := sanitizedBoundaries(t, &seg, b)
+		checkGraphemeIterator(t, b, want)
 		var got []int
 		for off := 0; off <= len(b); off++ {
 			if IsGraphemeBoundary(b, off) {

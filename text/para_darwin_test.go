@@ -630,7 +630,7 @@ func TestReserveRunsKeepsTheDefaultParagraphBudget(t *testing.T) {
 		t.Errorf("budget %+v after ReserveRuns", got)
 	}
 	n := s.paras.reservedBytes()
-	if n > 3<<20 {
+	if n > 4<<20 { // includes the pointer-free caret geometry
 		t.Errorf("ReserveRuns reserved %.1f MiB for paragraphs", float64(n)/(1<<20))
 	}
 	t.Logf("paragraph cache reserved by ReserveRuns: %.2f MiB", float64(n)/(1<<20))

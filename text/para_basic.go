@@ -40,19 +40,16 @@ type BasicLayouter struct {
 	runs  []styleRun
 	ends  []int32
 	ell   [len(ellipsis)]byte
-	txt   []byte // the text being laid out
-
-	// The shaped style runs, copied out of the shaper's run cache (whose
-	// views a later Shape may evict or reuse): the measurements of line
-	// breaking and of the ellipsis cut read only these.
-	meas []measRun
-	mg   []uint16
-	mx   []float32
-	mc   []uint32
+	// Measurements copied out of the shaper's run cache, whose views a later
+	// Shape may evict: simple runs need only X, the others indexed carets.
+	meas   []measRun
+	mx     []float32
+	ms     []caretStop
+	carets CaretIndex
 }
 
-// measRun is one shaped style run in BasicLayouter's copies: its glyphs
-// [off, off+n), its advance, and how many bytes of the run the shaper took.
+// measRun indexes [off, off+n) in mx for a simple run, ms otherwise. textLen
+// is how many bytes the shaper took; adv is the simple run's final advance.
 type measRun struct {
 	off, n, textLen int
 	adv             float32
@@ -110,26 +107,22 @@ func (l *BasicLayouter) reserve(b ParaBudget, declare bool) {
 	l.lb.reserve(sc.bytes)
 	grow(&l.runs, sc.runs)
 	grow(&l.meas, sc.runs)
-	grow(&l.mg, sc.inGlyphs)
 	grow(&l.mx, sc.inGlyphs)
-	grow(&l.mc, sc.inGlyphs)
+	grow(&l.ms, sc.bytes+sc.runs)
+	l.carets.reserve(sc.bytes, sc.inGlyphs)
 }
 
 // maxScratch caps the scratch a Reserve call sizes for one string, in bytes;
 // longer ones grow it (once).
 const maxScratch = 64 << 10
 
-// shapeRuns shapes every style run whole and copies each one's glyphs,
-// positions and clusters out of the run cache right away.
+// shapeRuns shapes every style run whole and indexes its carets right away.
 func (l *BasicLayouter) shapeRuns(p *Para) {
-	l.meas, l.mg, l.mx, l.mc = l.meas[:0], l.mg[:0], l.mx[:0], l.mc[:0]
+	l.meas, l.mx, l.ms = l.meas[:0], l.mx[:0], l.ms[:0]
 	for _, r := range l.runs {
 		v := l.sh.Run(l.sh.Shape(paraFont(p, r.style), p.Text[r.start:r.end]))
-		m := measRun{off: len(l.mg), n: len(v.Glyphs), textLen: min(len(v.Text), r.end-r.start), adv: v.Advance}
-		l.mg = append(l.mg, v.Glyphs...)
-		l.mx = append(l.mx, v.X...)
+		m := measRun{off: len(l.mx), n: len(v.Glyphs), textLen: min(len(v.Text), r.end-r.start), adv: v.Advance}
 		if len(v.Clusters) == len(v.Glyphs) && len(v.X) == len(v.Glyphs) {
-			l.mc = append(l.mc, v.Clusters...)
 			m.simple = m.n > 0 && m.n == len(v.Text) && m.textLen == m.n
 			if m.simple {
 				last := float32(0)
@@ -146,20 +139,17 @@ func (l *BasicLayouter) shapeRuns(p *Para) {
 			// No cluster information: nothing to measure with, so no
 			// wrapping (see layout).
 			m.n, m.textLen = 0, -1
-			l.mg = l.mg[:m.off]
-			l.mx = l.mx[:m.off]
+		}
+		if m.simple {
+			l.mx = append(l.mx, v.X...)
+		} else if m.n > 0 {
+			v.Text = p.Text[r.start : r.start+m.textLen]
+			l.carets.Build(v)
+			m.off, m.n = len(l.ms), len(l.carets.data.stops)
+			l.ms = append(l.ms, l.carets.data.stops...)
 		}
 		l.meas = append(l.meas, m)
 	}
-}
-
-// measView is style run k as shaped, from the copies.
-func (l *BasicLayouter) measView(k int) RunView {
-	m := &l.meas[k]
-	r := &l.runs[k]
-	e := m.off + m.n
-	return RunView{Glyphs: l.mg[m.off:e:e], X: l.mx[m.off:e:e], Clusters: l.mc[m.off:e:e],
-		Text: l.txt[r.start : r.start+max(m.textLen, 0)], Advance: m.adv}
 }
 
 // measure is the advance of the bytes [a, b) of the text, from the whole
@@ -187,17 +177,17 @@ func (l *BasicLayouter) measure(a, b int) float32 {
 			w += x1 - x0
 			continue
 		}
-		v := l.measView(k)
-		d := v.CaretX(min(b, r.end)-r.start) - v.CaretX(max(a, r.start)-r.start)
-		w += max(d, -d)
+		if m := &l.meas[k]; m.n > 0 {
+			d := caretData{stops: l.ms[m.off : m.off+m.n]}
+			x := d.stops[d.stopAt(min(b, r.end)-r.start)].x - d.stops[d.stopAt(max(a, r.start)-r.start)].x
+			w += max(x, -x)
+		}
 	}
 	return w
 }
 
 func (l *BasicLayouter) layout(p *Para) {
 	txt := p.Text
-	l.txt = txt
-	defer func() { l.txt = nil }()
 	l.runs = styleRuns(l.runs[:0], p)
 	l.shapeRuns(p)
 	// Without cluster information (or room to wrap in) the text is one line
@@ -216,16 +206,12 @@ func (l *BasicLayouter) layout(p *Para) {
 	if !measurable {
 		l.b.fitHi = 0
 	}
-	l.breakLines(txt, p.Width, wrapping)
+	l.breakLines(txt, p.Width, wrapping, p.MaxLines)
 	if measurable && !wrapping {
-		l.noteUnbounded(txt, p)
+		l.noteUnbounded(txt)
 	}
 
 	n := len(l.ends)
-	if p.MaxLines > 0 && n > p.MaxLines {
-		n = p.MaxLines
-		l.b.truncated = true
-	}
 	var top float32
 	start := 0
 	paraStart, rtl := 0, paraRTL(p, 0)
@@ -291,12 +277,16 @@ func paraEnd(b []byte, start int) int {
 
 // breakLines fills l.ends with the byte offsets of the ends of the lines of
 // txt for the width avail.
-func (l *BasicLayouter) breakLines(txt []byte, avail float32, wrapping bool) {
+func (l *BasicLayouter) breakLines(txt []byte, avail float32, wrapping bool, maxLines int) {
 	l.ends = l.ends[:0]
 	l.brk = l.lb.Breaks(l.brk[:0], txt)
 	start := 0
 	lastFit := -1
 	for k := 0; k < len(l.brk); {
+		if maxLines > 0 && len(l.ends) >= maxLines {
+			l.b.truncated = start < len(txt)
+			return
+		}
 		end := int(l.brk[k] &^ BreakMandatory)
 		hard := l.brk[k]&BreakMandatory != 0
 		if end <= start {
@@ -331,8 +321,9 @@ func (l *BasicLayouter) breakLines(txt []byte, avail float32, wrapping bool) {
 		}
 		// A single segment wider than the line: split it between characters.
 		g := start
+		it := GraphemeIterator{off: start}
 		for {
-			n := NextGrapheme(txt, g)
+			n := it.Next(txt)
 			if n > te || n <= g {
 				break
 			}
@@ -404,8 +395,9 @@ func (l *BasicLayouter) cutForEllipsis(p *Para, start, limit int, wrapping bool)
 func (l *BasicLayouter) fitCut(p *Para, start, limit int, ew float32) int {
 	room := p.Width - ew
 	cut := start
+	it := GraphemeIterator{off: start}
 	for g := start; g < limit; {
-		n := NextGrapheme(p.Text, g)
+		n := it.Next(p.Text)
 		if n <= g || n > limit {
 			break
 		}
@@ -441,8 +433,8 @@ func (l *BasicLayouter) note(x float32, fits bool) {
 // one line per newline, so a width keeps it when every line fits (the
 // segments of a line are narrower than the line). Text left out by MaxLines
 // would come out differently at a width that wraps.
-func (l *BasicLayouter) noteUnbounded(txt []byte, p *Para) {
-	if p.MaxLines > 0 && len(l.ends) > p.MaxLines {
+func (l *BasicLayouter) noteUnbounded(txt []byte) {
+	if l.b.truncated {
 		l.b.fitHi = 0
 		return
 	}

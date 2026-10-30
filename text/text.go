@@ -120,6 +120,8 @@ type RunView struct {
 	Clusters []uint32
 	// Text is the shaped source string (aliasing cache storage).
 	Text []byte
+	// carets is present on cached paragraph lines.
+	carets caretData
 }
 
 // ClusterRTL is set in RunView.Clusters entries of right-to-left glyphs.
