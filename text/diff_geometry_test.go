@@ -83,6 +83,7 @@ func FuzzRangeRectsDifferential(f *testing.F) {
 	}
 	s := workerSystem(f)
 	font := s.Font(FontDesc{Family: "Helvetica Neue", SizePt: 13, Scale: 2})
+	warmDiffFonts(s, font)
 	l := NewBasicLayouter(s)
 	f.Fuzz(func(t *testing.T, b []byte, width uint16, mode uint8, endpoint uint16) {
 		if len(b) > 128 {

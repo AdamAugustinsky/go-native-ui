@@ -234,6 +234,9 @@ jobs:
         run: |
           go vet -tags gnui_publicapi $(go list ./... | grep -v -E "$PKGS_EXCLUDE")
           go test -json -tags gnui_publicapi -count=1 -skip "$QUARANTINE" ./platform ./app | go run ./tools/testtimes -title "macOS arm64, gnui_publicapi" -raw test-macos-publicapi.json
+      - name: invariant assertions (gnuiassert) and the simulated user's fixed seed
+        if: ${{ !cancelled() }}
+        run: go test -json -tags gnuiassert -count=1 -skip "$QUARANTINE" ./core ./ui ./app/simtests/ui ./cmd/pilot/pilot | go run ./tools/testtimes -title "macOS arm64, gnuiassert" -raw test-macos-gnuiassert.json
       - name: ffi benchmarks
         run: go test -run '^$' -bench . -benchmem ./internal/ffi
       - name: a release build has no debug chord, menu or inspector panel (gnui_release)

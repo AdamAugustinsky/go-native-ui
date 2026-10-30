@@ -3,6 +3,7 @@ package ui
 import (
 	"math"
 
+	"gonativeui/core"
 	"gonativeui/gpu"
 	"gonativeui/text"
 )
@@ -212,6 +213,9 @@ func (c *Context) End(list *gpu.DrawList) {
 	c.keepRich()
 	c.syncAtlas()
 	c.mesh.reset()
+	if core.Assertions {
+		c.assertFrame()
+	}
 }
 
 // maxOverflowRepaints is how many frames in a row that dropped glyphs (atlas

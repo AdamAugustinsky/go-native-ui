@@ -414,6 +414,7 @@ func (c *Context) TextField(label string, buf *TextBuffer) TextFieldSignal {
 		buf.activity = in.Time
 	}
 	res.Changed = buf.rev != rev0
+	c.verifyField(buf)
 	b.escClears = escClears && buf.Len() > 0 // (what the next Begin reads: the text as this frame leaves it)
 	if rec := c.semOf(id); rec != nil {      // the value and the selection, for assistive technologies
 		rec.state |= SemEditable

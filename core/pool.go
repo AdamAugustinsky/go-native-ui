@@ -56,6 +56,9 @@ func (p *Pool) Alloc() Handle {
 	if n := len(p.free); n > 0 {
 		idx = p.free[n-1]
 		p.free = p.free[:n-1]
+		if Assertions {
+			Assert(int(idx) < len(p.gen) && !p.live[idx], "pool: free list names a live or unknown slot")
+		}
 	} else {
 		idx = uint32(len(p.gen))
 		p.gen = append(p.gen, 1)
@@ -68,6 +71,9 @@ func (p *Pool) Alloc() Handle {
 	}
 	p.live[idx] = true
 	p.n++
+	if Assertions {
+		Assert(p.n+len(p.free) == len(p.gen), "pool: live plus free slots differ from the slots made")
+	}
 	return makeHandle(idx, p.gen[idx])
 }
 
@@ -95,8 +101,15 @@ func (p *Pool) FreeIndex(i uint32) bool {
 	if p.gen[i] == 0 { // wrapped: keep the zero Handle invalid
 		p.gen[i] = 1
 	}
+	if Assertions {
+		// Free must never allocate: Alloc and Reserve keep room for every slot.
+		Assert(len(p.free) < cap(p.free), "pool: free list would grow")
+	}
 	p.free = append(p.free, i)
 	p.n--
+	if Assertions {
+		Assert(p.n >= 0 && p.n+len(p.free) == len(p.gen), "pool: live plus free slots differ from the slots made")
+	}
 	return true
 }
 

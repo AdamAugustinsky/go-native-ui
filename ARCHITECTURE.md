@@ -419,7 +419,7 @@ Linux targets stay at the brief's values until we have machines.
 - Fuzzing: `func FuzzX` targets over parsers, payloads, editing, shaping and
   encoders check properties (round-trips, offsets on boundaries, exact edit
   references), not only the absence of panics. Their seeds run as tests; CI's
-  `fuzz` job fuzzes a bounded set (D-pending (synctest-fuzz)).
+  `fuzz` job fuzzes a bounded set (D91).
 
 ## 13. Risks
 

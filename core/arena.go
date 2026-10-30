@@ -45,6 +45,10 @@ func (a *Arena) Cap() int { return cap(a.buf) }
 
 // Reserve makes room for n more bytes without growth.
 func (a *Arena) Reserve(n int) {
+	if Assertions {
+		// Spans address the arena with 32-bit offsets.
+		Assert(n >= 0 && len(a.buf)+n <= maxSpanBytes, "arena: reserve past a Span's 32-bit range")
+	}
 	if len(a.buf)+n <= cap(a.buf) {
 		return
 	}
@@ -133,8 +137,16 @@ func (a *Arena) AppendFloat(v float64, prec int) {
 	a.buf = strconv.AppendFloat(a.buf, v, 'f', prec, 64)
 }
 
+// maxSpanBytes is the most bytes a Span can address.
+const maxSpanBytes = 1<<32 - 1
+
 // Bytes returns the bytes of s. The slice must not be appended to.
 func (a *Arena) Bytes(s Span) []byte {
+	if Assertions {
+		// Slicing to the capacity would succeed and read stale bytes: a span
+		// from before Reset (or from another arena) must not resolve.
+		Assert(uint64(s.Off)+uint64(s.Len) <= uint64(len(a.buf)), "arena: span past the bytes in use")
+	}
 	return a.buf[s.Off : s.Off+s.Len : s.Off+s.Len]
 }
 
@@ -144,11 +156,19 @@ func (a *Arena) String(s Span) string {
 	if s.Len == 0 {
 		return ""
 	}
+	if Assertions {
+		Assert(uint64(s.Off)+uint64(s.Len) <= uint64(len(a.buf)), "arena: span past the bytes in use")
+	}
 	return unsafe.String(&a.buf[s.Off], int(s.Len))
 }
 
 // Tail returns the bytes appended at or after offset off.
-func (a *Arena) Tail(off int) []byte { return a.buf[off:len(a.buf):len(a.buf)] }
+func (a *Arena) Tail(off int) []byte {
+	if Assertions {
+		Assert(off >= 0 && off <= len(a.buf), "arena: tail offset past the bytes in use")
+	}
+	return a.buf[off:len(a.buf):len(a.buf)]
+}
 
 // PointerFree reports whether T contains no pointers (and so may be carved
 // from an Arena). It uses reflection and allocates: call it at start-up.
