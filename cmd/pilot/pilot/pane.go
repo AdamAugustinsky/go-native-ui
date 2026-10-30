@@ -2,9 +2,12 @@ package pilot
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"gonativeui/fs"
@@ -289,6 +292,11 @@ func (p *pane) onListing(r *fs.Result) {
 	if l.Err != nil {
 		err := l.Err // (before the listing goes back: a worker may reuse it at once)
 		p.release(l, lease)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || onWindows && errors.Is(err, winErrNotDirectory) {
+			// Focus-gain relisting also covers a missed deletion notification.
+			p.onResult(&fs.Result{Kind: fs.ResultGone, ID: p.id})
+			return
+		}
 		p.setMsg(errText(err), true)
 		return
 	}

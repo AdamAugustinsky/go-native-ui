@@ -15,6 +15,24 @@ import (
 	"gonativeui/ui"
 )
 
+func TestRelistMissingDirectoryLeavesStaleRows(t *testing.T) {
+	for _, err := range []error{os.ErrNotExist, syscall.ENOTDIR} {
+		src := new(fakeSrc)
+		p := newPane(1, src, nativePath("/"))
+		p.setInitial(nativePath("/parent/gone"), listing(fs.SortName, false, item{name: "stale", when: "2026-10-17 12:00"}))
+		p.relist()
+		deliver(p, &fs.Listing{Err: err})
+		if !p.nav.pending || p.nav.path != nativePath("/parent") || p.nav.kind != navGone {
+			t.Fatalf("missing folder stayed visible: dir=%s nav=%+v", p.dir, p.nav)
+		}
+		deliver(p, listing(fs.SortName, false, item{name: "current", when: "2026-10-17 12:00"}))
+		settle(t, p)
+		if p.dir != nativePath("/parent") || names(p) != "current" {
+			t.Fatalf("return shows %s: %s", p.dir, names(p))
+		}
+	}
+}
+
 // fakeSrc is a Source that records requests; the tests deliver the results. It
 // numbers requests and leases like fs.Service and counts the Release calls that
 // the Service would ignore (a lease that is not the one handed out).
