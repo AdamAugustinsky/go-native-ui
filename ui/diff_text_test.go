@@ -42,6 +42,11 @@ func FuzzTextReuseDifferential(f *testing.F) {
 				font = 1
 			}
 			span := Span{Off: 0, Len: uint32(len(body)), Style: 1, Flags: SpanLink}
+			pad, align := float32(mode>>5), Align(mode>>3%3)
+			if step == 2 && mode&64 != 0 {
+				align = (align + 1) % 3
+				pad++
+			}
 			var ids [2][2]ID
 			for j, h := range []*harness{cached, fresh} {
 				h.frame(func(c *Context) {
@@ -49,9 +54,24 @@ func FuzzTextReuseDifferential(f *testing.F) {
 					c.NextWidth(Px(w))
 					c.NextHeight(TextSize(0))
 					ids[j][0] = c.BoxKeyed(DrawText|WrapText, 123, body)
+					c.NextPad(pad)
+					c.NextAlign(align)
 					r := c.RichText(456, body, []Span{span}, st, RichOpts{MaxW: w, MaxLines: int(mode % 4), Ellipsis: mode&4 != 0})
 					ids[j][1] = r.ID
 				})
+				// End has recorded the current public range geometry. Native
+				// cursor regions collected during emit must cover those same
+				// rectangles, clipped to this box and the window.
+				var expected []CursorRegion
+				clip := intersect(h.c.Rect(ids[j][1]), [4]float32{0, 0, 500, 600})
+				for _, r := range h.c.RichRangeRects(ids[j][1], 0, len(body), nil) {
+					if r = intersect(r, clip); !empty(r) {
+						expected = append(expected, CursorRegion{Rect: r, Cursor: CursorPointer})
+					}
+				}
+				if actual := h.c.CursorRegions(nil); !slices.Equal(actual, expected) {
+					t.Fatalf("frame=%d context=%d emitted=%v current ranges=%v", step, j, actual, expected)
+				}
 			}
 			for kind := 0; kind < 2; kind++ {
 				a, bb := &cached.c.boxes[ids[0][kind]], &fresh.c.boxes[ids[1][kind]]
