@@ -14,14 +14,19 @@ import (
 	"gonativeui/internal/objc"
 )
 
-// Prewarm (macOS). NewRenderer's shader library is compiled from source by
-// the system's Metal compiler. Its cache usually answers in about a
-// millisecond, but now and then it misses (after a new build, under load, on
-// old commits too), and then the quad shader compiles for about 90 ms on an
-// idle Mac mini and 120–190 ms on a loaded one, the backdrop shaders for
-// about 50 ms more, at their first frame. Prewarm moves that onto a thread
-// of its own, started before the window opens, so that the main thread opens
-// the window meanwhile and waits only for what is left.
+// Prewarm (macOS). NewRenderer's shader library is the precompiled one
+// (library_darwin.go), else compiled from source by the system's Metal
+// compiler, whose cache usually answers in about a millisecond but now and
+// then misses (after a new build, under load, on old commits too): then the
+// quad shader compiles for about 90–120 ms on a Mac mini, the backdrop
+// shaders for about 45 ms more, at their first frame. The precompiled
+// library skips that, not the pipelines: Metal's back end compiles their
+// AIR to GPU code, about 0.2 ms from its own cache and, on a miss (AIR it
+// has not seen: the first launch of a new library), about 32 ms for the
+// quad pipeline and 16 ms for the backdrop ones
+// (docs/measurements/metallib-macos.md). Prewarm moves all of it onto a
+// thread of its own, started before the window opens, so that the main
+// thread opens the window meanwhile and waits only for what is left.
 
 // qosUserInteractive is QOS_CLASS_USER_INTERACTIVE.
 const qosUserInteractive = 0x21
@@ -154,15 +159,6 @@ func nsString(fr *ffi.Frame, s string) objc.ID {
 	return o
 }
 
-// newLibrary compiles src on device (owned; 0 on failure, the NSError in
-// *errOut), on frame fr.
-func newLibrary(fr *ffi.Frame, device objc.ID, src string, errOut *uintptr) objc.ID {
-	s := nsString(fr, src)
-	defer msg(fr, s, selRelease)
-	*errOut = 0
-	return msg(fr, device, rsNewLibrary, uintptr(s), 0, uintptr(unsafe.Pointer(errOut)))
-}
-
 // newFunction is lib's function name (owned; 0 if missing), on frame fr.
 func newFunction(fr *ffi.Frame, lib objc.ID, name string) objc.ID {
 	s := nsString(fr, name)
@@ -175,7 +171,7 @@ type buildFail uint8
 
 const (
 	buildOK       buildFail = iota
-	buildCompile            // the library did not compile (the NSError in *errOut)
+	buildCompile            // the library did not load or compile (the NSError in *errOut)
 	buildEntry              // an entry point is missing
 	buildPipeline           // the pipeline state was refused (the NSError in *errOut)
 )
@@ -183,11 +179,16 @@ const (
 // quadPipeline builds the quad pipeline (quadMSL, premultiplied blending
 // into BGRA8) on device, on frame fr: owned, or 0 and the step that failed.
 func quadPipeline(fr *ffi.Frame, device objc.ID, errOut *uintptr) (objc.ID, buildFail) {
-	lib := newLibrary(fr, device, quadMSL, errOut)
+	lib := newLibrary(fr, device, "quad", quadMSL, errOut)
 	if lib == 0 {
 		return 0, buildCompile
 	}
 	defer msg(fr, lib, selRelease)
+	return quadPipelineOf(fr, device, lib, errOut)
+}
+
+// quadPipelineOf is quadPipeline from the library lib.
+func quadPipelineOf(fr *ffi.Frame, device, lib objc.ID, errOut *uintptr) (objc.ID, buildFail) {
 	vs, fs := newFunction(fr, lib, "vs_main"), newFunction(fr, lib, "fs_main")
 	for _, f := range []objc.ID{vs, fs} {
 		if f != 0 {
@@ -220,11 +221,16 @@ func quadPipeline(fr *ffi.Frame, device objc.ID, errOut *uintptr) (objc.ID, buil
 // bd_down and bd_blur, into BGRA8) on device, on frame fr: owned, or 0 and
 // the step that failed.
 func backdropPipelines(fr *ffi.Frame, device objc.ID, errOut *uintptr) (down, blur objc.ID, fail buildFail) {
-	lib := newLibrary(fr, device, backdropMSL, errOut)
+	lib := newLibrary(fr, device, "backdrop", backdropMSL, errOut)
 	if lib == 0 {
 		return 0, 0, buildCompile
 	}
 	defer msg(fr, lib, selRelease)
+	return backdropPipelinesOf(fr, device, lib, errOut)
+}
+
+// backdropPipelinesOf is backdropPipelines from the library lib.
+func backdropPipelinesOf(fr *ffi.Frame, device, lib objc.ID, errOut *uintptr) (down, blur objc.ID, fail buildFail) {
 	vs, fd, fb := newFunction(fr, lib, "bd_vs"), newFunction(fr, lib, "bd_down"), newFunction(fr, lib, "bd_blur")
 	for _, f := range []objc.ID{vs, fd, fb} {
 		if f != 0 {
