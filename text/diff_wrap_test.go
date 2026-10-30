@@ -23,6 +23,7 @@ func FuzzWrapDifferential(f *testing.F) {
 	}
 	s := workerSystem(f)
 	fonts := []FontKey{s.Font(FontDesc{SizePt: 13, Scale: 1}), s.Font(FontDesc{SizePt: 16, Scale: 1, Weight: 700})}
+	warmDiffFonts(s, fonts...)
 	l := NewBasicLayouter(s)
 	old := &diffOldLayouter{sh: s}
 	f.Fuzz(func(t *testing.T, b []byte, width uint16, mode uint8, split uint16) {

@@ -168,3 +168,51 @@ uses fixed slices in simulation; production retains its 1 ms time budget.
 Native app activation, watcher delivery, preferences and shell menus still
 need native-platform testing. Icon style and sidebar discovery are pinned;
 actual icon decoding and name-prefetch workers participate in the barrier.
+
+## The simulated user and the invariants
+
+`app.NewSimUser(seed)` is a seeded stream of input for a simulated window:
+pointer moves, clicks (right, middle, double and triple), drags, wheel notches
+and trackpad gestures with phases and momentum, keys with modifiers and
+repeats, typed text in several scripts (combining marks, emoji sequences,
+line breaks, controls and invalid UTF-8, which fields drop), press-and-hold
+replacements, input-method compositions that commit, cancel or lose the window
+focus, ⌘C/⌘X/⌘V/⌘A/⌘Z with a seeded clipboard, window focus changes, resizes
+and scale changes (1× to 3×, never below `Config.MinWidth`/`MinHeight`). Each
+`Step` sends one action and advances the clock by at least one 60 Hz tick, so
+a seed is a run: with the simulator's own determinism it replays exactly. It
+never sends `EvClose` and never ⌘Q or ⌘W.
+
+`app.SimInvariants` is one of the default checks, after every step. It runs
+`ui.Context.Verify` on each finished frame: the box tree's parent, child and
+sibling links; the keyed box cache holding exactly the boxes built (keys,
+slots and the pool agree); finite rectangles and sizes that are not inside
+out; every scroll offset inside `[0, content − view]`; a virtual list's first
+row inside its rows; and each text field built in the frame holding valid
+UTF-8 within its `Max`, with its caret and anchor inside the text on the start
+of a character and of a grapheme cluster. The focus is not checked: a focus
+on a key no box has is pending by design (a field an opener builds next
+frame, a virtual list's row scrolled out of view). `SimAuditAllowing`
+replaces `SimAudit` for an app with documented audit exceptions (rexlook's).
+
+Built with `-tags gnuiassert`, `ui.Context.End` runs `Verify` itself and
+panics on a failure, and `core` asserts its own invariants: an arena span read
+past the bytes in use (a span from before a reset), a reservation past a
+span's 32-bit range, a pool's live and free slots not adding up or its free
+list growing, a table probing without an empty slot, a ring with more claimed
+than it holds. Without the tag `core.Assertions` is a false constant and the
+checks compile away.
+
+`TestSimUser` (`app/simtests/ui`: a scene with a field, a VList, Markdown, a
+popover, a tooltip, a menu and a stepper; Notes; the gallery; rexlook) and
+`TestPilotSimUser` (`cmd/pilot/pilot`, on synthetic folders) run seed 1 for
+300 steps by default; the scene runs twice and must replay to the same trace
+hash, and each UI target then checks D27's exact allocations on a warmed hover
+path. A failure prints its seed and the command that replays it.
+
+```sh
+CGO_ENABLED=0 go test -count=1 ./app/simtests/ui -run '^TestSimUser$' -v
+GNUI_SIM_SEED=0xa GNUI_SIM_STEPS=300 go test ./app/simtests/ui -run 'TestSimUser/scene$' -count=1 -v
+GNUI_SIM_SEEDS=100 CGO_ENABLED=0 go test -tags gnuiassert -count=1 ./app/simtests/ui -run '^TestSimUser$'
+tools/simexplore.sh 1h 2000   # random seeds, assertions on, both suites
+```
