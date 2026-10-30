@@ -907,7 +907,7 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	runStart := 0
 	for i := range quads {
 		q := &quads[i]
-		if q.Mode == ModeShape || q.Mode == ModeBackdrop || q.Tex == bound {
+		if q.Mode == ModeShape || q.Mode == ModeCapsule || q.Mode == ModeBackdrop || q.Tex == bound {
 			continue
 		}
 		if i > runStart {

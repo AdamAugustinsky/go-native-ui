@@ -215,6 +215,11 @@ fragment float4 fs_main(VOut in [[stage_in]],
 			}
 			res = col * outer;
 		}
+	} else if (mode == 4u) {
+		float2 a = p - rect.xy - uv.xy, d = uv.zw - uv.xy;
+		float along = clamp(dot(a, d) / max(dot(d, d), 1e-6), 0.0, 1.0);
+		float sd = length(a - d * along) - radii.x;
+		res = col * clamp(0.5 - sd, 0.0, 1.0);
 	} else {
 		float cov = 1.0;
 		if (any(radii > 0.0)) {

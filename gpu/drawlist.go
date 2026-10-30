@@ -30,6 +30,11 @@ const (
 	// with it as a shape instead (Renderer.Backdrops). UV, Border,
 	// BorderColor and Soft are ignored.
 	ModeBackdrop
+	// ModeCapsule fills a round-capped line segment. Rect is its bounding
+	// box; UV holds its start and end relative to Rect's top left, and
+	// Radii[0] its radius. Color, Clip and FadeX apply as for ModeShape;
+	// the other radii, Border, BorderColor, Soft and Tex are ignored.
+	ModeCapsule
 )
 
 // Backdrop is the recipe of a ModeBackdrop quad. Each output pixel is

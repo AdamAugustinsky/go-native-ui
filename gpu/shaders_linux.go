@@ -202,6 +202,11 @@ void main() {
 			}
 			res = col * outer;
 		}
+	} else if (vMode == 4u) {
+		vec2 a = p - rect.xy - uv.xy, d = uv.zw - uv.xy;
+		float along = clamp(dot(a, d) / max(dot(d, d), 1e-6), 0.0, 1.0);
+		float sd = length(a - d * along) - radii.x;
+		res = col * clamp(0.5 - sd, 0.0, 1.0);
 	} else {
 		float cov = 1.0;
 		if (any(greaterThan(radii, vec4(0.0)))) {

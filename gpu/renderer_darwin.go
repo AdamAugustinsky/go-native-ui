@@ -871,7 +871,7 @@ nextQuad:
 			runStart = i + 1
 			continue
 		}
-		if q.Mode == ModeShape || yuv && q.Tex == bound {
+		if q.Mode == ModeShape || q.Mode == ModeCapsule || yuv && q.Tex == bound {
 			continue
 		}
 		if !yuv {
