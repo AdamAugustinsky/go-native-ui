@@ -2,6 +2,7 @@ package uisim_test
 
 import (
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -250,4 +251,20 @@ func TestSimUIVListBackExpiresOnReturn(t *testing.T) {
 		t.Fatal("30-second back-buffer expiry was lost while hidden")
 	}
 	checkModel(t, b)
+}
+
+func TestSimUILogicalResizeWhileHidden(t *testing.T) {
+	s, b := smallScene(t)
+	b.k.Focus(b.fieldKey)
+	wake(t, s, 12*time.Second)
+	for i, size := range [][2]int32{{500, 600}, {1100, 800}, {650, 500}} {
+		hide(t, s)
+		b.source = strings.Repeat("Streaming text reflows to the resized viewport. ", 5+i*3) + "\n\n```go\nvar answer = 42\n```\n"
+		b.parse()
+		// Change the logical viewport independently of display scaling.
+		event(t, s, platform.Event{Kind: platform.EvResize, W: size[0], H: size[1], Scale: 1})
+		quiet(t, s, 8*time.Hour)
+		show(t, s)
+		freshReturn(t, s, b)
+	}
 }
