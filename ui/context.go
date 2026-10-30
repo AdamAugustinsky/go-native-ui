@@ -479,6 +479,12 @@ func (c *Context) Reserve(n int) {
 	if cap(c.st.reads) < n/4 { // (a build reads the last layout of a few of its boxes)
 		c.st.reads = append(make([]layoutRead, 0, n/4), c.st.reads...)
 	}
+	// Truncated labels (a list's cells, say) keep a cache each; a quarter of
+	// the boxes is ample, at some 28 bytes a box.
+	c.cutPool.Reserve(n / 4)
+	if cap(c.cuts) < n/4 {
+		c.cuts = append(make([]truncCache, 0, n/4), c.cuts...)
+	}
 }
 
 // Scale is the pixels-per-point factor passed to Begin; Pt converts points.
