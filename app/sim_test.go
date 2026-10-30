@@ -14,6 +14,7 @@ import (
 
 	"gonativeui/core"
 	filesys "gonativeui/fs"
+	"gonativeui/gpu"
 	"gonativeui/img"
 	"gonativeui/markdown"
 	"gonativeui/platform"
@@ -258,7 +259,20 @@ func runSimSmoke(t *testing.T, seed uint64, hours time.Duration) uint64 {
 	}
 	// A completely unchanged return must reproduce the exact draw list.
 	draw, _ := s.FrameHash(0)
-	s.AddCheck(SimReturnFrame(0, draw))
+	beforeQuads := append([]gpu.Quad(nil), s.windows[0].a.list.Quads...)
+	checkReturn := SimReturnFrame(0, draw)
+	s.AddCheck(func(s *Sim) error {
+		if err := checkReturn(s); err != nil {
+			after := s.windows[0].a.list.Quads
+			for i := 0; i < min(len(beforeQuads), len(after)); i++ {
+				if beforeQuads[i] != after[i] {
+					return fmt.Errorf("%w; quads %d -> %d, first difference %d: %+v -> %+v", err, len(beforeQuads), len(after), i, beforeQuads[i], after[i])
+				}
+			}
+			return fmt.Errorf("%w; quads %d -> %d", err, len(beforeQuads), len(after))
+		}
+		return nil
+	})
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible}))
 	simMust(t, s.Event(0, platform.Event{Kind: platform.EvFocus}))
 	_, err = s.Idle(time.Hour, 0)
@@ -309,4 +323,39 @@ func TestSimFourHours(t *testing.T) {
 			}
 		})
 	}
+}
+
+type simCodeScene struct {
+	k    *base.Kit
+	view mdview.MarkdownView
+}
+
+func (b *simCodeScene) Init(a *App) error {
+	b.k = base.NewKit(a.UI, a.Text, rex.Theme())
+	b.k.ReduceMotion = true
+	return nil
+}
+func (b *simCodeScene) Build(c *ui.Context) {
+	b.k.Begin(c)
+	c.NextSize(ui.Pct(1), ui.Pct(1))
+	c.NextAxis(ui.AxisY)
+	c.Open(ui.Clip, "root")
+	mdview.CodeBlock(b.k, ui.Key(1), []byte("func answer() int { return 42 }"), mdview.CodeOpts{View: &b.view})
+	c.Close()
+	b.k.End()
+}
+func (b *simCodeScene) SimClose() { b.view.Close() }
+
+func TestSimCodeScaleChange(t *testing.T) {
+	s, err := NewSim(Config{}, 500, 300, 1, new(simCodeScene), SimOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	simMust(t, s.Advance(time.Second))
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible}))
+	simMust(t, s.Advance(time.Hour))
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvResize, W: 600, H: 400, Scale: 1.25}))
+	simMust(t, s.Event(0, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}))
+	simMust(t, s.Advance(time.Second))
 }
