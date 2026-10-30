@@ -14,16 +14,28 @@ var ErrRunning = errors.New("session: a daemon is already running there")
 // ServeOptions tunes a daemon.
 type ServeOptions struct {
 	Config
-	IdleExit time.Duration
-	Stop     <-chan struct{}
+	IdleExit time.Duration   // see the Unix ServeOptions
+	Stop     <-chan struct{} // see the Unix ServeOptions
 }
 
-func NewLocal(Config) Service                                       { return unsupported{} }
-func Dial(string) (Service, error)                                  { return nil, ErrUnsupported }
+// NewLocal returns a service whose every call fails with ErrUnsupported:
+// there are no pseudo-terminals here.
+func NewLocal(Config) Service { return unsupported{} }
+
+// Dial fails with ErrUnsupported here.
+func Dial(string) (Service, error) { return nil, ErrUnsupported }
+
+// DialOrLaunch fails with ErrUnsupported here.
 func DialOrLaunch(string, []string, time.Duration) (Service, error) { return nil, ErrUnsupported }
-func Serve(string, ServeOptions) error                              { return ErrUnsupported }
-func RunDaemon(string, ServeOptions) error                          { return ErrUnsupported }
-func DefaultDir(string) string                                      { return "" }
+
+// Serve fails with ErrUnsupported here.
+func Serve(string, ServeOptions) error { return ErrUnsupported }
+
+// RunDaemon fails with ErrUnsupported here.
+func RunDaemon(string, ServeOptions) error { return ErrUnsupported }
+
+// DefaultDir is empty here.
+func DefaultDir(string) string { return "" }
 
 type unsupported struct{}
 

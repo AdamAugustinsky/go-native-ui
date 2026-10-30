@@ -44,8 +44,8 @@ var (
 
 // Size is a terminal's size in cells and, optionally, pixels.
 type Size struct {
-	Cols, Rows    int
-	Width, Height int
+	Cols, Rows    int // cells; 0 leaves the size as it is
+	Width, Height int // pixels, for programs that ask (0: unknown)
 }
 
 // Options describes a new session.
@@ -59,15 +59,15 @@ type Options struct {
 
 // Info describes a session.
 type Info struct {
-	ID       string
-	Argv     []string
-	Pid      int
-	Persist  bool
-	Created  time.Time
-	Size     Size
-	Attached bool
-	Exited   bool // the program has exited and its output has been read
-	ExitCode int  // with Exited; -1 if a signal ended it
+	ID       string    // the session's stable ID
+	Argv     []string  // the program and its arguments
+	Pid      int       // the program's process ID
+	Persist  bool      // the session outlives its view
+	Created  time.Time // when the session started
+	Size     Size      // the terminal's size
+	Attached bool      // a view is attached
+	Exited   bool      // the program has exited and its output has been read
+	ExitCode int       // with Exited; -1 if a signal ended it
 }
 
 // Service creates sessions and attaches views to them.
