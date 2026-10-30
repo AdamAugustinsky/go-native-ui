@@ -124,6 +124,11 @@ engine could have done.
 	c.BeginFlow("tiles", ui.FlowOpts{GapX: c.Pt(12), GapY: c.Pt(12)}) // the tiles wrap onto lines
 ```
 
+- **A window of panes is a workspace.** Splits, the pane in use, hidden
+  and empty panes, a narrow window's single pane and the saved layout are
+  `widget/workspace`; each pane's material, corners and stroke are its
+  surface profile (`th.Surface(theme.SurfacePane, inactive)`). See
+  [workspace.md](workspace.md).
 - **Flex and grid are built in** (GUIDE §3): `Grow(weight)` for the room that
   is left, `NextMinSize`/`NextMaxSize` for bounds, `NextAlignSelf` for one
   child's cross alignment, `BeginGrid` for equal columns that follow the

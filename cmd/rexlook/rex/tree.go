@@ -1,18 +1,18 @@
 package rex
 
 import (
-	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/workspace"
 )
 
-// The model: tabs, each holding a binary tree of splits whose leaves are
-// panes. Everything is held in fixed arrays so that changing the layout (a
-// split, a close, a tab) allocates nothing.
+// The model: tabs, each holding a workspace (widget/workspace): a tree of
+// splits whose leaves are panes, the focus and the maximised pane. Everything
+// is held in fixed arrays so that changing the layout (a split, a close, a
+// tab) allocates nothing.
 
 const (
 	maxTabs  = 6
 	maxPanes = 8
-	maxNodes = 2 * maxPanes
 )
 
 type paneKind uint8
@@ -25,32 +25,16 @@ const (
 	kindShell                 // a fish prompt
 )
 
+// pane is what the scene keeps of a pane, by its slot in the tab's layout
+// (workspace.Layout.Slot).
 type pane struct {
 	used bool
-	uid  uint32
+	uid  uint32 // the pane's workspace.PaneID
 	kind paneKind
 
 	// born is set until the pane has been drawn once: it grows out of from.
 	born bool
 	from [4]float32
-}
-
-type node struct {
-	used   bool
-	uid    uint32
-	leaf   bool
-	pane   int8    // leaf: slot in tab.panes
-	axis   ui.Axis // split: AxisX = children side by side, AxisY = stacked
-	ratio  float32 // split: share of the space (minus the gutter) given to the first child
-	a, b   int8    // split: children
-	parent int8    // -1 at the root
-
-	// Results of the latest layout.
-	rect   [4]float32
-	gut    [4]float32 // split: the gutter between the children
-	avail  float32    // split: space along the axis shared by the children (rect minus the gutter)
-	lo, hi float32    // split: allowed size of the first child
-	press  float32    // split: ratio when a drag started
 }
 
 type tabStyle struct {
@@ -69,155 +53,67 @@ type tab struct {
 	label      string // name and path in one string, for a native tab
 	style      tabStyle
 
-	root  int8
-	nodes [maxNodes]node
-	panes [maxPanes]pane
-	focus uint32 // uid of the focused pane
-	max   uint32 // uid of the maximised pane, 0 = none
-
-	rects [maxPanes][4]float32 // tree layout of the panes, by slot
+	// ws is the tab's panes: the split tree, the focus and the maximised
+	// pane (workspace.Layout); panes is the scene's own state of each, by
+	// slot.
+	ws    workspace.Layout
+	panes [workspace.MaxPanes]pane
 }
 
 // ---- construction ----
 
-func (t *tab) newNode() int8 {
-	for i := range t.nodes {
-		if !t.nodes[i].used {
-			t.nodes[i] = node{used: true, parent: -1}
-			return int8(i)
-		}
-	}
-	return -1
-}
+func (t *tab) numPanes() int { return t.ws.Len() }
 
-func (t *tab) numPanes() int {
-	n := 0
-	for i := range t.panes {
-		if t.panes[i].used {
-			n++
-		}
-	}
-	return n
-}
+func (t *tab) slotOf(uid uint32) int8 { return int8(t.ws.Slot(workspace.PaneID(uid))) }
 
-// newPane allocates a pane slot; the caller supplies the uid.
-func (t *tab) newPane(uid uint32, kind paneKind) int8 {
-	for i := range t.panes {
-		if !t.panes[i].used {
-			t.panes[i] = pane{used: true, uid: uid, kind: kind}
-			return int8(i)
-		}
-	}
-	return -1
-}
+// focus is the uid of the focused pane, max that of the maximised one (0:
+// none).
+func (t *tab) focus() uint32 { return uint32(t.ws.Focus()) }
+func (t *tab) max() uint32   { return uint32(t.ws.Zoomed()) }
 
-func (t *tab) slotOf(uid uint32) int8 {
-	for i := range t.panes {
-		if t.panes[i].used && t.panes[i].uid == uid {
-			return int8(i)
-		}
-	}
-	return -1
-}
+// rect is where the layout put the pane in slot s.
+func (t *tab) rect(s int8) [4]float32 { return t.ws.Rect(workspace.PaneID(t.panes[s].uid)) }
 
-// leafOf is the node that holds the pane in slot s.
-func (t *tab) leafOf(s int8) int8 {
-	for i := range t.nodes {
-		if n := &t.nodes[i]; n.used && n.leaf && n.pane == s {
-			return int8(i)
-		}
-	}
-	return -1
-}
+func (t *tab) paneKey(uid uint32) ui.Key { return t.ws.PaneKey(workspace.PaneID(uid)) }
 
 // setRoot makes a single pane the content of an empty tab.
-func (t *tab) setRoot(uid uint32, kind paneKind, nodeUID uint32) {
-	p := t.newPane(uid, kind)
-	n := t.newNode()
-	t.nodes[n].leaf, t.nodes[n].pane, t.nodes[n].uid = true, p, nodeUID
-	t.root = n
-	t.focus = uid
+func (t *tab) setRoot(uid uint32, kind paneKind) {
+	t.ws.Key = keyWorkspace
+	t.ws.Reset(workspace.PaneID(uid))
+	t.panes = [workspace.MaxPanes]pane{}
+	t.panes[t.slotOf(uid)] = pane{used: true, uid: uid, kind: kind}
 }
 
-// splitLeaf replaces the leaf holding pane slot s by a split whose children
-// are that leaf and a new pane. It returns the new pane's slot, -1 if the tab
-// is full.
-func (t *tab) splitLeaf(s int8, axis ui.Axis, ratio float32, newPaneUID uint32, kind paneKind, splitUID, leafUID uint32) int8 {
-	leaf := t.leafOf(s)
-	if leaf < 0 || t.numPanes() >= maxPanes {
+// splitLeaf puts a new pane after the pane in slot s along axis, the first
+// of the two keeping ratio of their room. It returns the new pane's slot, -1
+// if the tab is full.
+func (t *tab) splitLeaf(s int8, axis ui.Axis, ratio float32, uid uint32, kind paneKind) int8 {
+	if s < 0 || !t.panes[s].used || t.numPanes() >= maxPanes {
 		return -1
 	}
-	np := t.newPane(newPaneUID, kind)
-	nl, ns := t.newNode(), t.newNode()
-	if np < 0 || nl < 0 || ns < 0 {
-		if np >= 0 {
-			t.panes[np] = pane{}
-		}
-		if nl >= 0 {
-			t.nodes[nl] = node{}
-		}
-		if ns >= 0 {
-			t.nodes[ns] = node{}
-		}
+	d := workspace.Right
+	if axis == ui.AxisY {
+		d = workspace.Down
+	}
+	div := t.ws.Split(workspace.PaneID(t.panes[s].uid), workspace.PaneID(uid), d, 0.5)
+	if div == 0 {
 		return -1
 	}
-	t.nodes[nl].leaf, t.nodes[nl].pane, t.nodes[nl].uid = true, np, leafUID
-
-	parent := t.nodes[leaf].parent
-	sp := &t.nodes[ns]
-	sp.uid, sp.axis, sp.ratio, sp.a, sp.b, sp.parent = splitUID, axis, ratio, leaf, nl, parent
-	t.nodes[leaf].parent, t.nodes[nl].parent = ns, ns
-	if parent < 0 {
-		t.root = ns
-	} else if pn := &t.nodes[parent]; pn.a == leaf {
-		pn.a = ns
-	} else {
-		pn.b = ns
-	}
+	t.ws.SetShare(div, ratio)
+	np := t.slotOf(uid)
+	t.panes[np] = pane{used: true, uid: uid, kind: kind}
 	return np
 }
 
 // closeLeaf removes the pane in slot s and gives its space to its sibling.
-// It reports false for the last pane of the tab. The focus moves to the
-// first pane of the sibling when the closed pane had it.
+// It reports false for the last pane of the tab. The focus goes back to the
+// pane focused before (workspace.Layout.Close).
 func (t *tab) closeLeaf(s int8) bool {
-	leaf := t.leafOf(s)
-	if leaf < 0 || t.nodes[leaf].parent < 0 {
+	if s < 0 || !t.panes[s].used || !t.ws.Close(workspace.PaneID(t.panes[s].uid)) {
 		return false
 	}
-	p := t.nodes[leaf].parent
-	pn := &t.nodes[p]
-	sib := pn.a
-	if sib == leaf {
-		sib = pn.b
-	}
-	g := pn.parent
-	t.nodes[sib].parent = g
-	if g < 0 {
-		t.root = sib
-	} else if gn := &t.nodes[g]; gn.a == p {
-		gn.a = sib
-	} else {
-		gn.b = sib
-	}
-	uid := t.panes[s].uid
 	t.panes[s] = pane{}
-	t.nodes[leaf] = node{}
-	t.nodes[p] = node{}
-	if t.max == uid {
-		t.max = 0
-	}
-	if t.focus == uid {
-		t.focus = t.panes[t.nodes[t.firstLeaf(sib)].pane].uid
-	}
 	return true
-}
-
-func (t *tab) firstLeaf(n int8) int8 {
-	for !t.nodes[n].leaf {
-		n = t.nodes[n].a
-	}
-	return n
 }
 
 // ---- layout ----
@@ -228,73 +124,9 @@ type gutters struct {
 	minW, minH float32 // smallest pane
 }
 
-func (t *tab) minSize(n int8, axis ui.Axis, g *gutters) float32 {
-	nd := &t.nodes[n]
-	if nd.leaf {
-		if axis == ui.AxisX {
-			return g.minW
-		}
-		return g.minH
-	}
-	a, b := t.minSize(nd.a, axis, g), t.minSize(nd.b, axis, g)
-	if nd.axis != axis {
-		return max(a, b)
-	}
-	if axis == ui.AxisX {
-		return a + b + g.x
-	}
-	return a + b + g.y
-}
-
-// layout places the tree in the work rectangle (whole pixels). The first
+// layout places the tree in the work rectangle (whole pixels): the first
 // child of a split gets ratio × (space − gutter), kept between the two
-// children's minimum sizes (shared in proportion when the window is too
-// small for both), and the boundary snaps to a pixel.
-func (t *tab) layout(work [4]float32, g *gutters) {
-	t.place(t.root, work, g)
-}
-
-func (t *tab) place(n int8, r [4]float32, g *gutters) {
-	nd := &t.nodes[n]
-	nd.rect = r
-	if nd.leaf {
-		t.rects[nd.pane] = r
-		return
-	}
-	ax := 0
-	gut := g.x
-	if nd.axis == ui.AxisY {
-		ax, gut = 1, g.y
-	}
-	a0, a1 := r[ax], r[ax+2]
-	avail := max(0, a1-a0-gut)
-	minA, minB := t.minSize(nd.a, nd.axis, g), t.minSize(nd.b, nd.axis, g)
-	lo, hi := minA, avail-minB
-	first := avail * nd.ratio
-	if lo <= hi {
-		first = min(max(first, lo), hi)
-	} else {
-		first = avail * minA / (minA + minB)
-		lo, hi = first, first
-	}
-	nd.avail, nd.lo, nd.hi = avail, lo, hi
-	mid := theme.Snap(a0 + first)
-	ra, rb, gr := r, r, r
-	ra[ax+2] = mid
-	rb[ax] = mid + gut
-	gr[ax], gr[ax+2] = mid, mid+gut
-	nd.gut = gr
-	t.place(nd.a, ra, g)
-	t.place(nd.b, rb, g)
-}
-
-// dragSplit moves the divider of split node n to where it was at the start of
-// the drag plus delta pixels, within the children's minimum sizes.
-func (t *tab) dragSplit(n int8, delta float32) {
-	nd := &t.nodes[n]
-	if nd.avail <= 0 {
-		return
-	}
-	first := min(max(nd.press*nd.avail+delta, nd.lo), nd.hi)
-	nd.ratio = first / nd.avail
+// children's minimum sizes (workspace.Layout.Arrange).
+func (t *tab) layout(work [4]float32, g *gutters, scale float32) {
+	t.ws.Arrange(work, workspace.Metrics{Scale: scale, Gutter: [2]float32{g.x, g.y}, Min: [2]float32{g.minW, g.minH}})
 }

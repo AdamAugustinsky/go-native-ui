@@ -50,7 +50,7 @@ func TestAuditLayout(t *testing.T) {
 				t.Error("the program's title did not arrive")
 			}
 			widgettest.AuditLayout(t, fmt.Sprintf("termdemo %v %dx%d", m, sz[0], sz[1]), o.UI, fieldAllow)
-			d.p.close()
+			d.close()
 			o.Close()
 		}
 	}
