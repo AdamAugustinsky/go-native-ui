@@ -286,7 +286,7 @@ type Video struct {
 	turns  int
 	fps    float32
 	dur    time.Duration
-	poster []byte // premultiplied RGBA, until uploaded
+	poster []byte // premultiplied RGBA, until a playback frame takes over
 	posW   int
 	posH   int
 
@@ -303,6 +303,7 @@ type Video struct {
 	cur          uintptr       // the current frame's CVPixelBuffer (retained)
 	r            *gpu.Renderer
 	posTex       gpu.TextureID
+	posEpoch     uint32
 	wake         func()
 	curW, curH   int           // stored dimensions, read only when a new buffer arrives
 	holdTex      gpu.TextureID // owned snapshot of a paused frame
@@ -663,22 +664,36 @@ func (v *Video) Frame(r *gpu.Renderer, now int64) (tex gpu.TextureID, w, h int, 
 		}
 		if !v.playing && now >= v.pullTo {
 			if v.holdFrame(r) {
+				v.dropPoster()
 				return v.holdTex, w, h, next
 			}
 		}
 		if t, err := r.ImportPixelBuffer(v.cur, v.turns); err == nil {
+			v.dropPoster()
 			return t, w, h, next
 		}
 	}
-	if v.posTex == 0 && v.poster != nil {
-		v.posTex = r.NewTexture(gpu.TexRGBA8, v.posW, v.posH)
+	if v.poster != nil && (v.posTex == 0 || v.posEpoch != r.Epoch()) {
+		if v.posTex == 0 {
+			v.posTex = r.NewTexture(gpu.TexRGBA8, v.posW, v.posH)
+		}
 		r.Upload(v.posTex, 0, 0, v.posW, v.posH, v.poster, v.posW*4)
-		v.poster = nil // on the GPU now
+		v.posEpoch = r.Epoch()
 	}
 	if v.posTex != 0 {
 		return v.posTex, v.posW, v.posH, next
 	}
 	return 0, 0, 0, next
+}
+
+// Once a playback buffer can supply the picture, the initial poster is
+// redundant on both CPU and GPU. Until then it restores an emptied texture.
+func (v *Video) dropPoster() {
+	v.poster = nil
+	if v.posTex != 0 {
+		v.r.FreeTexture(v.posTex)
+		v.posTex = 0
+	}
 }
 
 // holdFrame stages a paused buffer once. Later redraws need no import or
