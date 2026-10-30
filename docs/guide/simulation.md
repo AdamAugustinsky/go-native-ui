@@ -14,19 +14,30 @@ Create a builder as for `NewOffscreen`. Open more windows with
 the renderer and text system, with separate UI contexts and pacers. Window
 zero is the first window; integer window ids are never reused.
 
-```go
-s, err := app.NewSim(cfg, 900, 700, 1, builder, app.SimOptions{Seed: 42})
-if err != nil { t.Fatal(err) }
-defer s.Close()
-must := func(err error) { t.Helper(); if err != nil { t.Fatal(err) } }
-must(s.Advance(time.Second))
-must(s.Event(0, platform.Event{Kind: platform.EvVisible}))
-_, err = s.Idle(4*time.Hour, 0) // no frame is allowed during this interval
-must(err)
-must(s.Event(0, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}))
-must(s.Event(0, platform.Event{Kind: platform.EvFocus, Flags: platform.FlagDown}))
-must(s.Advance(time.Second))
-t.Logf("trace %016x", s.TraceHash())
+```go app/example_test.go
+func ExampleSim() {
+	s, err := app.NewSim(app.Config{}, 640, 400, 1, &editor{name: "Notes"}, app.SimOptions{Seed: 7})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Advance(time.Second); err != nil {
+		log.Fatal(err)
+	}
+	if err = s.Event(0, platform.Event{Kind: platform.EvVisible}); err != nil {
+		log.Fatal(err)
+	}
+	if _, err = s.Idle(4*time.Hour, 0); err != nil {
+		log.Fatal(err)
+	}
+	if err = s.Event(0, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}); err != nil {
+		log.Fatal(err)
+	}
+	if err = s.Advance(time.Second); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("replay %016x", s.TraceHash())
+}
 ```
 
 `Event` uses normal `platform.Event` fields, including physical resize size
