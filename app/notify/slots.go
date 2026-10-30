@@ -81,6 +81,8 @@ func initSlots() {
 		slots.requests = platform.NewTickets(platform.SourceNotify, platform.MaxTickets, 256)
 		slots.responses = platform.NewTickets(platform.SourceNotifyResponse, MaxResponses, MaxReply+MaxUserData)
 		slots.spares = platform.NewTickets(platform.SourceNotifyResponse, nSpare, MaxReply+MaxUserData)
+		slots.responses.OnFree(wakeParked)
+		slots.spares.OnFree(wakeParked)
 		pends.free.Store(^uint64(0))
 		platform.OnLastDrain(lastDrain)
 	})
@@ -470,6 +472,7 @@ func (p *parked) wait() {
 		go retryParked(parking.ended)
 	}
 	parking.mu.Unlock()
+	wakeParked()
 }
 
 // storeParked stores the parked responses that fit, in order, and returns
@@ -509,19 +512,20 @@ func giveUp(lost []*parked) {
 	}
 }
 
-// retryParked stores the parked responses as records free (they free as the
-// dispatcher delivers): it tries after 1 ms, backing off to 100 ms while
-// nothing frees, and ends when none is left.
+// wakeParked coalesces record releases and newly parked responses. It also
+// covers a release between a failed reservation and parking the response.
+func wakeParked() {
+	select {
+	case parking.wake <- struct{}{}:
+	default:
+	}
+}
+
+// retryParked stores responses when a record frees; no timer runs while the
+// dispatcher is blocked and no record can become available.
 func retryParked(ended chan struct{}) {
 	defer close(ended)
-	d := time.Millisecond
-	t := time.NewTimer(d)
-	defer t.Stop()
-	for {
-		select {
-		case <-t.C:
-		case <-parking.wake:
-		}
+	for range parking.wake {
 		parking.mu.Lock()
 		done, lost := storeParked(false)
 		empty := len(parking.list) == 0
@@ -533,12 +537,6 @@ func retryParked(ended chan struct{}) {
 		if empty {
 			return
 		}
-		if len(done) > 0 {
-			d = time.Millisecond
-		} else {
-			d = min(2*d, 100*time.Millisecond)
-		}
-		t.Reset(d)
 	}
 }
 

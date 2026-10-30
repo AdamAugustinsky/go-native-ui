@@ -10,12 +10,12 @@ import (
 // platform's events (the event pump), and waking it from other threads.
 
 var (
-	selNextEvent    = objc.Sel("nextEventMatchingMask:untilDate:inMode:dequeue:")
-	selSendEvent    = objc.Sel("sendEvent:")
-	selDateSinceNow = objc.Sel("dateWithTimeIntervalSinceNow:")
-	selType         = objc.Sel("type")
-	selSubtype      = objc.Sel("subtype")
-	selTimestamp    = objc.Sel("timestamp")
+	selNextEvent    = objc.SelZ("nextEventMatchingMask:untilDate:inMode:dequeue:\x00")
+	selSendEvent    = objc.SelZ("sendEvent:\x00")
+	selDateSinceNow = objc.SelZ("dateWithTimeIntervalSinceNow:\x00")
+	selType         = objc.SelZ("type\x00")
+	selSubtype      = objc.SelZ("subtype\x00")
+	selTimestamp    = objc.SelZ("timestamp\x00")
 )
 
 // Wait blocks until at least one event, a wake, a frame slot or the timeout,

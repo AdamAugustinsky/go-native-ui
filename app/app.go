@@ -565,65 +565,77 @@ func (a *App) loop() error {
 	a.launch()
 	defer a.inspectStart()() // the agent bridge, with GNUI_INSPECT set in a development build (bridge_dev.go)
 	for !a.done {
-		if len(a.wins) == 0 {
-			a.idleTurn()
-			continue
+		if err := a.loopTurn(); err != nil {
+			return err
 		}
-		for _, w := range a.wins {
-			w.syncMenuBar()
+	}
+	return nil
+}
+
+// loopTurn gives native objects created outside the pump or a draw their
+// own autorelease lifetime, including turns with no windows open.
+func (a *App) loopTurn() error {
+	pool := framePoolPush()
+	defer framePoolPop(pool)
+
+	if len(a.wins) == 0 {
+		a.idleTurn()
+		return nil
+	}
+	for _, w := range a.wins {
+		w.syncMenuBar()
+	}
+	now := platform.Now()
+	if a.bench != nil {
+		a.bench.loopTurn(now, a.lastDrawT)
+		if now > a.bench.deadline {
+			return a.benchTimeout(now)
 		}
-		now := platform.Now()
-		if a.bench != nil {
-			a.bench.loopTurn(now, a.lastDrawT)
-			if now > a.bench.deadline {
-				return a.benchTimeout(now)
-			}
-		}
-		a.pumping = true
-		a.pump(a.waitTimeout(now)) // pump_*.go
-		a.pumping = false
-		for _, w := range a.wins {
-			if a.done {
-				break
-			}
-			w.tr.wheelStep = w.UI.WheelStep
-			evs := w.windowEvents()
-			for i := range evs {
-				w.dispatch(&evs[i])
-			}
-		}
+	}
+	a.pumping = true
+	a.pump(a.waitTimeout(now)) // pump_*.go
+	a.pumping = false
+	for _, w := range a.wins {
 		if a.done {
 			break
 		}
-		for _, w := range a.wins {
-			if w.turn(platform.Now()) {
-				w.present(false, 1)
-			}
+		w.tr.wheelStep = w.UI.WheelStep
+		evs := w.windowEvents()
+		for i := range evs {
+			w.dispatch(&evs[i])
 		}
-		a.pumping = true
-		for _, w := range a.wins {
-			w.popUpMenus()
+	}
+	if a.done {
+		return nil
+	}
+	for _, w := range a.wins {
+		if w.turn(platform.Now()) {
+			w.present(false, 1)
 		}
-		a.pumping = false
-		for _, w := range a.wins {
-			if w.dbg != nil {
-				w.debugSweep(CauseMenu)
-			}
+	}
+	a.pumping = true
+	for _, w := range a.wins {
+		w.popUpMenus()
+	}
+	a.pumping = false
+	for _, w := range a.wins {
+		if w.dbg != nil {
+			w.debugSweep(CauseMenu)
 		}
-		if a.demo != nil {
-			a.demo.run(a)
-		}
-		for _, w := range a.wins {
-			w.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
-		}
-		if a.hook != nil {
-			a.hook()
-		}
-		a.appTurn()
-		for _, w := range a.wins {
-			if w.dbg != nil {
-				w.debugSweep(CauseUnknown)
-			}
+	}
+	if a.demo != nil {
+		a.demo.run(a)
+	}
+	for _, w := range a.wins {
+		w.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
+	}
+	if a.hook != nil {
+		a.hook()
+	}
+	a.appTurn()
+	for _, w := range a.wins {
+		if w.dbg != nil {
+			w.debugSweep(CauseUnknown)
 		}
 	}
 	return nil

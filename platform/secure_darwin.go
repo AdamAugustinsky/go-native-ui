@@ -37,9 +37,9 @@ var secure struct {
 }
 
 var (
-	selSetAllowedLocales = objc.Sel("setAllowedInputSourceLocales:")
-	selKeyboardSource    = objc.Sel("selectedKeyboardInputSource")
-	selSetKeyboardSource = objc.Sel("setSelectedKeyboardInputSource:")
+	selSetAllowedLocales = objc.SelZ("setAllowedInputSourceLocales:\x00")
+	selKeyboardSource    = objc.SelZ("selectedKeyboardInputSource\x00")
+	selSetKeyboardSource = objc.SelZ("setSelectedKeyboardInputSource:\x00")
 )
 
 // SetSecureInput turns secure event input on or off for this process: on
@@ -125,17 +125,17 @@ func initSecureInput() {
 	}
 	// The application's activation: the app object has no observer of ours, so
 	// the notifications go to a small class of our own.
-	selResign, selBecome := objc.Sel("gnuiSecureResign:"), objc.Sel("gnuiSecureBecome:")
+	selResign, selBecome := objc.SelZ("gnuiSecureResign:\x00"), objc.SelZ("gnuiSecureBecome:\x00")
 	def := objc.Define("GNUISecureInput", objc.Cls("NSObject"), nil)
 	def.Method(selResign, "v@:@", func(*ffi.CB) { secure.activeNow = false; syncSecureInput() })
 	def.Method(selBecome, "v@:@", func(*ffi.CB) { secure.activeNow = true; syncSecureInput() })
 	obs := objc.Send(objc.Send(def.Register(), selAlloc), selInitPlain)
-	nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
-	add := objc.Sel("addObserver:selector:name:object:")
+	nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.SelZ("defaultCenter\x00"))
+	add := objc.SelZ("addObserver:selector:name:object:\x00")
 	objc.Send4(nc, add, uintptr(obs), uintptr(selResign), uintptr(objc.Str("NSApplicationDidResignActiveNotification")), 0)
 	objc.Send4(nc, add, uintptr(obs), uintptr(selBecome), uintptr(objc.Str("NSApplicationDidBecomeActiveNotification")), 0)
 	app := objc.Send(objc.Cls("NSApplication"), selSharedApplication)
-	secure.activeNow = app == 0 || objc.SendBool(app, objc.Sel("isActive"))
+	secure.activeNow = app == 0 || objc.SendBool(app, objc.SelZ("isActive\x00"))
 }
 
 // syncSecureInput makes the system setting what the app and its windows want

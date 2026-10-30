@@ -10,17 +10,17 @@ import "gonativeui/internal/objc"
 // window, title bar included.
 
 var (
-	selOrderOut          = objc.Sel("orderOut:")
-	selSetFrameDisplay   = objc.Sel("setFrame:display:")
-	selToggleFullScreen  = objc.Sel("toggleFullScreen:")
-	selSetDocumentEdited = objc.Sel("setDocumentEdited:")
-	selSetRepFilename    = objc.Sel("setRepresentedFilename:")
-	selSetRepURL         = objc.Sel("setRepresentedURL:")
-	selRequestAttention  = objc.Sel("requestUserAttention:")
-	selCancelAttention   = objc.Sel("cancelUserAttentionRequest:")
-	selDeminiaturize     = objc.Sel("deminiaturize:")
-	selScreens           = objc.Sel("screens")
-	selIsZoomed          = objc.Sel("isZoomed")
+	selOrderOut          = objc.SelZ("orderOut:\x00")
+	selSetFrameDisplay   = objc.SelZ("setFrame:display:\x00")
+	selToggleFullScreen  = objc.SelZ("toggleFullScreen:\x00")
+	selSetDocumentEdited = objc.SelZ("setDocumentEdited:\x00")
+	selSetRepFilename    = objc.SelZ("setRepresentedFilename:\x00")
+	selSetRepURL         = objc.SelZ("setRepresentedURL:\x00")
+	selRequestAttention  = objc.SelZ("requestUserAttention:\x00")
+	selCancelAttention   = objc.SelZ("cancelUserAttentionRequest:\x00")
+	selDeminiaturize     = objc.SelZ("deminiaturize:\x00")
+	selScreens           = objc.SelZ("screens\x00")
+	selIsZoomed          = objc.SelZ("isZoomed\x00")
 )
 
 // primaryTop is the top edge of the primary display in AppKit's space (y up

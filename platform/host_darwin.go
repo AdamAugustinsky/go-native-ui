@@ -33,18 +33,18 @@ import (
 // EvHostCommand, so the app's own focus traversal continues.
 
 var (
-	selScrollWheel      = objc.Sel("scrollWheel:")
-	selInsertTab        = objc.Sel("insertTab:")
-	selInsertBacktab    = objc.Sel("insertBacktab:")
-	selCancelOperation  = objc.Sel("cancelOperation:")
-	selInsertNewline    = objc.Sel("insertNewline:")
-	selSelectFollowing  = objc.Sel("selectKeyViewFollowingView:")
-	selSelectPreceding  = objc.Sel("selectKeyViewPrecedingView:")
-	selSetClipsToBounds = objc.Sel("setClipsToBounds:")
-	selFirstResponder   = objc.Sel("firstResponder")
-	selEndEditingFor    = objc.Sel("endEditingFor:")
-	selSubviews         = objc.Sel("subviews")
-	selFirstObject      = objc.Sel("firstObject")
+	selScrollWheel      = objc.SelZ("scrollWheel:\x00")
+	selInsertTab        = objc.SelZ("insertTab:\x00")
+	selInsertBacktab    = objc.SelZ("insertBacktab:\x00")
+	selCancelOperation  = objc.SelZ("cancelOperation:\x00")
+	selInsertNewline    = objc.SelZ("insertNewline:\x00")
+	selSelectFollowing  = objc.SelZ("selectKeyViewFollowingView:\x00")
+	selSelectPreceding  = objc.SelZ("selectKeyViewPrecedingView:\x00")
+	selSetClipsToBounds = objc.SelZ("setClipsToBounds:\x00")
+	selFirstResponder   = objc.SelZ("firstResponder\x00")
+	selEndEditingFor    = objc.SelZ("endEditingFor:\x00")
+	selSubviews         = objc.SelZ("subviews\x00")
+	selFirstObject      = objc.SelZ("firstObject\x00")
 
 	containerClass, hostClipClass objc.ID
 	hostClipDef                   *objc.ClassDef

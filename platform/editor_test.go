@@ -2,6 +2,7 @@ package platform
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -173,5 +174,29 @@ func TestEditorCommands(t *testing.T) {
 	e.SetCompletionActive(true)
 	if e.CompletionActive() {
 		t.Error("a completion started while composing")
+	}
+}
+
+func TestEditorMapRebuild(t *testing.T) {
+	original := strings.Repeat("é😀مa", 100)
+	for at := 0; at <= len(original); at++ {
+		if !boundary([]byte(original), at) {
+			continue
+		}
+		var m u16map
+		m.build([]byte(original))
+		changed := []byte(original[:at] + "😀é" + original[at:])
+		m.rebuild(changed, at)
+		var want u16map
+		want.build(changed)
+		if m.n16 != want.n16 || !slices.Equal(m.cp, want.cp) {
+			t.Fatalf("map differs after insertion at %d", at)
+		}
+		changed = []byte(original[:at])
+		m.rebuild(changed, at)
+		want.build(changed)
+		if m.n16 != want.n16 || !slices.Equal(m.cp, want.cp) {
+			t.Fatalf("map differs after truncation at %d", at)
+		}
 	}
 }

@@ -5,12 +5,12 @@
 // Keychain, Launch Services, the trash) or that must not touch the main
 // thread's state.
 //
-// internal/objc is for the main thread: its helpers share one call frame and
-// Cls/Sel are not goroutine-safe. This package gives every caller a frame of
-// its own (Acquire/Release; a Frame must live on the heap, which a pool
-// guarantees) and does its lookups with plain dlsym, so any number of
-// goroutines can use it at once. Frameworks are opened with dlopen on first
-// use (Init, Framework), never at startup. Call Init, and check its error,
+// Message helpers use a frame of the caller's own (Acquire/Release; a Frame
+// must live on the heap, which a pool guarantees). Class and selector lookups
+// share internal/objc's goroutine-safe intern tables; message sends never use
+// its main-thread frame. CoreFoundation and service frameworks are opened
+// with dlopen on first use (Init, Framework); objc's Foundation bootstrap
+// still runs at package initialization. Call Init, and check its error,
 // before any other function here.
 //
 // Every pointer argument that reaches C must point to heap memory: the frame
@@ -30,6 +30,7 @@ import (
 	"github.com/ebitengine/purego"
 
 	"gonativeui/internal/ffi"
+	"gonativeui/internal/objc"
 )
 
 // kCFStringEncodingUTF8.
@@ -44,7 +45,7 @@ var (
 	fnDictCreate, fnDictSet                                                   uintptr
 	fnArrayCreate, fnArrayLen, fnArrayAt                                      uintptr
 	fnURLFromFS, fnURLFromString                                              uintptr
-	fnGetClass, fnSelReg, fnMsgSend, fnPoolPush, fnPoolPop                    uintptr
+	fnMsgSend, fnPoolPush, fnPoolPop                                          uintptr
 	keyCallbacks, valueCallbacks                                              uintptr
 	cfLib                                                                     uintptr
 
@@ -90,7 +91,7 @@ func Init() error {
 		fnArrayCreate, fnArrayLen, fnArrayAt = sym(cfLib, "CFArrayCreate"), sym(cfLib, "CFArrayGetCount"), sym(cfLib, "CFArrayGetValueAtIndex")
 		fnURLFromFS, fnURLFromString = sym(cfLib, "CFURLCreateFromFileSystemRepresentation"), sym(cfLib, "CFURLCreateWithString")
 		keyCallbacks, valueCallbacks = sym(cfLib, "kCFTypeDictionaryKeyCallBacks"), sym(cfLib, "kCFTypeDictionaryValueCallBacks")
-		fnGetClass, fnSelReg = sym(objc, "objc_getClass"), sym(objc, "sel_registerName")
+
 		fnMsgSend = sym(objc, "objc_msgSend")
 		fnPoolPush, fnPoolPop = sym(objc, "objc_autoreleasePoolPush"), sym(objc, "objc_autoreleasePoolPop")
 		if bad {
@@ -266,20 +267,10 @@ func URL(fr *ffi.Frame, s string) uintptr {
 }
 
 // Cls looks up an Objective-C class by name (0 if missing).
-func Cls(fr *ffi.Frame, name string) uintptr {
-	b := heapBytes(name)
-	r := fr.Call1(fnGetClass, uintptr(unsafe.Pointer(&b[0])))
-	runtime.KeepAlive(b)
-	return r
-}
+func Cls(_ *ffi.Frame, name string) uintptr { return uintptr(objc.Cls(name)) }
 
-// Sel registers a selector.
-func Sel(fr *ffi.Frame, name string) uintptr {
-	b := heapBytes(name)
-	r := fr.Call1(fnSelReg, uintptr(unsafe.Pointer(&b[0])))
-	runtime.KeepAlive(b)
-	return r
-}
+// Sel registers a selector through the shared, goroutine-safe intern table.
+func Sel(_ *ffi.Frame, name string) uintptr { return uintptr(objc.Sel(name)) }
 
 // Msg sends a message with integer and pointer arguments (up to 6) and
 // returns the integer result. Objective-C objects it returns are autoreleased

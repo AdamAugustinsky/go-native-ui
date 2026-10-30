@@ -26,10 +26,10 @@ func pbInit() {
 		loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit") // Open does too; tests and tools may not have
 		clsPasteboard, clsNSString = objc.Cls("NSPasteboard"), objc.Cls("NSString")
 		pbType = objc.Retain(objc.Str("public.utf8-plain-text"))
-		selGeneralPB, selStringForType = objc.Sel("generalPasteboard"), objc.Sel("stringForType:")
-		selClearContents, selSetStrFT = objc.Sel("clearContents"), objc.Sel("setString:forType:")
-		selAllocStr, selInitBytes = objc.Sel("alloc"), objc.Sel("initWithBytes:length:encoding:")
-		selLenBytes = objc.Sel("lengthOfBytesUsingEncoding:")
+		selGeneralPB, selStringForType = objc.SelZ("generalPasteboard\x00"), objc.SelZ("stringForType:\x00")
+		selClearContents, selSetStrFT = objc.SelZ("clearContents\x00"), objc.SelZ("setString:forType:\x00")
+		selAllocStr, selInitBytes = objc.SelZ("alloc\x00"), objc.SelZ("initWithBytes:length:encoding:\x00")
+		selLenBytes = objc.SelZ("lengthOfBytesUsingEncoding:\x00")
 	})
 }
 

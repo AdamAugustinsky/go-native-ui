@@ -32,20 +32,20 @@ import (
 // Contrast is AppKit's: the effect views draw it themselves.
 
 var (
-	selSetSpacing      = objc.Sel("setSpacing:")
-	selSetContentViewV = objc.Sel("setContentView:")
-	selRetainV         = objc.Sel("retain")
-	selSetBoxType      = objc.Sel("setBoxType:")
-	selSetBorderWidth  = objc.Sel("setBorderWidth:")
-	selSetTitlePos     = objc.Sel("setTitlePosition:")
-	selSetFillColor    = objc.Sel("setFillColor:")
-	selColorSRGB       = objc.Sel("colorWithSRGBRed:green:blue:alpha:")
-	selWindowBGColor   = objc.Sel("windowBackgroundColor")
-	selSetInteractive  = objc.Sel("setEffectIsInteractive:")
-	selSetMasksToBnds  = objc.Sel("setMasksToBounds:")
-	selSetCornerCurve  = objc.Sel("setCornerCurve:")
-	selLayerOf         = objc.Sel("layer")
-	selSetMaskedCorner = objc.Sel("setMaskedCorners:")
+	selSetSpacing      = objc.SelZ("setSpacing:\x00")
+	selSetContentViewV = objc.SelZ("setContentView:\x00")
+	selRetainV         = objc.SelZ("retain\x00")
+	selSetBoxType      = objc.SelZ("setBoxType:\x00")
+	selSetBorderWidth  = objc.SelZ("setBorderWidth:\x00")
+	selSetTitlePos     = objc.SelZ("setTitlePosition:\x00")
+	selSetFillColor    = objc.SelZ("setFillColor:\x00")
+	selColorSRGB       = objc.SelZ("colorWithSRGBRed:green:blue:alpha:\x00")
+	selWindowBGColor   = objc.SelZ("windowBackgroundColor\x00")
+	selSetInteractive  = objc.SelZ("setEffectIsInteractive:\x00")
+	selSetMasksToBnds  = objc.SelZ("setMasksToBounds:\x00")
+	selSetCornerCurve  = objc.SelZ("setCornerCurve:\x00")
+	selLayerOf         = objc.SelZ("layer\x00")
+	selSetMaskedCorner = objc.SelZ("setMaskedCorners:\x00")
 )
 
 // forceReduceTransparency (GNUI_REDUCE_TRANSPARENCY=1) shows every material
@@ -153,14 +153,14 @@ func (w *Window) reduceTransparency() bool {
 		return v.ReduceTransparency
 	}
 	if matWorkspace == 0 { // not following the system appearance: ask AppKit
-		matWorkspace = objc.Retain(objc.Send(objc.Cls("NSWorkspace"), objc.Sel("sharedWorkspace")))
+		matWorkspace = objc.Retain(objc.Send(objc.Cls("NSWorkspace"), objc.SelZ("sharedWorkspace\x00")))
 	}
 	return objc.SendBool(matWorkspace, selReduceTranspWS)
 }
 
 var (
 	matWorkspace      objc.ID
-	selReduceTranspWS = objc.Sel("accessibilityDisplayShouldReduceTransparency")
+	selReduceTranspWS = objc.SelZ("accessibilityDisplayShouldReduceTransparency\x00")
 )
 
 // viewFor is the kind of view region r gets.

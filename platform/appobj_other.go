@@ -4,7 +4,7 @@ package platform
 
 // The application object on Linux (D34; macOS and Windows have their own
 // files): the delivery classes and the quit policy work as on macOS, but the
-// dispatcher is the main loop itself (Wake, then DispatchApp after every
+// dispatcher is the main loop itself (WakeLoop, then DispatchApp after every
 // Wait), no system delegate delivers native events, and the app runs only
 // while it has a window.
 
@@ -17,7 +17,7 @@ func StartApp(o AppOptions) error {
 // AppLaunched does nothing here.
 func AppLaunched() {}
 
-func osSignalApp() { Wake() }
+func osSignalApp() { WakeLoop() }
 
 // WaitApp is the pump with no window open; there is none here (the app runs
 // only while it has a window), so it returns at once.

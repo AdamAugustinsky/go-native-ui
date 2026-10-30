@@ -20,10 +20,10 @@ import (
 const privateAPIBuild = true
 
 var (
-	selSetTitlebarHeight    = objc.Sel("setTitlebarHeight:")                  // NSWindow, private
-	selTitlebarHeight       = objc.Sel("titlebarHeight")                      // NSWindow, private
-	selSetButtonGroupOffset = objc.Sel("setStandardWindowButtonGroupOffset:") // NSWindow, private; an NSSize whose height points up
-	selButtonGroupOffset    = objc.Sel("standardWindowButtonGroupOffset")     // NSWindow, private
+	selSetTitlebarHeight    = objc.SelZ("setTitlebarHeight:\x00")                  // NSWindow, private
+	selTitlebarHeight       = objc.SelZ("titlebarHeight\x00")                      // NSWindow, private
+	selSetButtonGroupOffset = objc.SelZ("setStandardWindowButtonGroupOffset:\x00") // NSWindow, private; an NSSize whose height points up
+	selButtonGroupOffset    = objc.SelZ("standardWindowButtonGroupOffset\x00")     // NSWindow, private
 
 	// The selectors' signatures, checked once per process (lightsABIOK):
 	// 0 not yet, 1 as expected, -1 not.

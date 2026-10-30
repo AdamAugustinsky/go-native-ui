@@ -50,12 +50,12 @@ var (
 	receiveOnce            sync.Once
 	sweepOnce              sync.Once
 
-	selReadObjects     = objc.Sel("readObjectsForClasses:options:")
-	selReadableTypes   = objc.Sel("readableDraggedTypes")
-	selReceivePromised = objc.Sel("receivePromisedFilesAtDestination:options:operationQueue:reader:")
-	selFileNames       = objc.Sel("fileNames")
-	selFileURLDir      = objc.Sel("fileURLWithPath:isDirectory:")
-	selDropRetain      = objc.Sel("retain")
+	selReadObjects     = objc.SelZ("readObjectsForClasses:options:\x00")
+	selReadableTypes   = objc.SelZ("readableDraggedTypes\x00")
+	selReceivePromised = objc.SelZ("receivePromisedFilesAtDestination:options:operationQueue:reader:\x00")
+	selFileNames       = objc.SelZ("fileNames\x00")
+	selFileURLDir      = objc.SelZ("fileURLWithPath:isDirectory:\x00")
+	selDropRetain      = objc.SelZ("retain\x00")
 )
 
 func promiseInit() {

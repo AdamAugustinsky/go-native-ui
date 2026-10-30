@@ -19,8 +19,9 @@ import (
 // gives the window an AXSource (SetAXSource); the window asks it for the tree
 // only once an assistive technology has asked the window about its content
 // (lazy activation: until then the bridge costs nothing), and from then on at
-// every frame (SyncAX), diffing the new tree with the last one to tell the
-// assistive technology what changed.
+// every frame (SyncAX) while queries continue, diffing the new tree with the
+// last one to tell the assistive technology what changed. After 30 seconds
+// without a query, exports stop until the next query. No timer polls it.
 //
 // This file is the part every OS shares: the tree the app hands over (AXTree,
 // records shared with ui through internal/uitypes), the element

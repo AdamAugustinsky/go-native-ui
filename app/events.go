@@ -398,7 +398,7 @@ func (a *App) flushStartup() {
 // thread.
 func (a *App) AtSafePoint(f func()) {
 	a.safe = append(a.safe, f)
-	platform.Wake()
+	platform.SignalDispatch()
 }
 
 // runSafePoints runs the queued safe-point work, including work queued by it

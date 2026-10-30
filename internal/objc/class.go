@@ -67,10 +67,13 @@ func (v *Ivar) Set(obj ID, x uintptr) { atomic.StoreUintptr((*uintptr)(v.at(obj)
 
 func (v *Ivar) at(obj ID) unsafe.Pointer {
 	if v.off == 0 || obj == 0 {
-		panic("objc: ivar " + v.name + " used before Register or on nil")
+		v.invalid()
 	}
 	return ffi.PtrFromC(uintptr(obj) + v.off)
 }
+
+//go:noinline
+func (v *Ivar) invalid() { panic("objc: ivar " + v.name + " used before Register or on nil") }
 
 // indexIvar is the name of the instance variable every class gets.
 const indexIvar = "gnuiIndex"

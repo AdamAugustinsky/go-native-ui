@@ -646,3 +646,45 @@ func TestOfferedURLsArriveAsOpenURLs(t *testing.T) {
 		t.Fatalf("delivered %+v %q", s.evs, s.data)
 	}
 }
+
+func TestTicketFreeSignalsAvailability(t *testing.T) {
+	k := NewTickets(SourcePost, 1, 0)
+	frees := 0
+	k.OnFree(func() { frees++ })
+	tk, err := k.Reserve(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Reserve(0); err != ErrBusy {
+		t.Fatalf("full reservation: %v", err)
+	}
+	if !k.Cancel(tk) || frees != 1 {
+		t.Fatalf("cancel: %d availability signals", frees)
+	}
+	tk, err = k.Reserve(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.Cancel(tk)
+	if frees != 2 {
+		t.Fatalf("reuse: %d signals", frees)
+	}
+}
+
+func TestReadyQueueIsLazy(t *testing.T) {
+	var q readyQueue
+	if q.cells.Load() != nil || q.pending() != 0 || q.headReady() {
+		t.Fatal("unused queue has storage or work")
+	}
+	if _, ok := q.pop(); ok {
+		t.Fatal("unused queue produced work")
+	}
+	q.init()
+	q.push(42)
+	if got, ok := q.pop(); !ok || got != 42 {
+		t.Fatalf("initialized queue: %v, %v", got, ok)
+	}
+	if n := testing.AllocsPerRun(100, func() { q.push(7); q.pop() }); n != 0 {
+		t.Errorf("warmed queue: %v allocations", n)
+	}
+}

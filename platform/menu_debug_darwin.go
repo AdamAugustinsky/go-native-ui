@@ -54,8 +54,8 @@ func (m DebugMenu) Frame() bool {
 	}
 	start, deadline := m.w.handlerRuns, Now()+1e9
 	mode := objc.Str("NSEventTrackingRunLoopMode")
-	loop := objc.Send(objc.Cls("NSRunLoop"), objc.Sel("currentRunLoop"))
-	sel := objc.Sel("runMode:beforeDate:")
+	loop := objc.Send(objc.Cls("NSRunLoop"), objc.SelZ("currentRunLoop\x00"))
+	sel := objc.SelZ("runMode:beforeDate:\x00")
 	for m.w.handlerRuns == start && Now() < deadline {
 		until := objc.ID(objc.F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(selDateSinceNow)).ArgF64(0.01).Call(objc.MsgSend).R0())
 		objc.Send2(loop, sel, uintptr(mode), uintptr(until))
@@ -66,12 +66,12 @@ func (m DebugMenu) Frame() bool {
 // Choose chooses item i of the menu, as a click or Return on it does, and
 // closes the menu.
 func (m DebugMenu) Choose(i int) {
-	objc.Send1(m.menu, objc.Sel("performActionForItemAtIndex:"), uintptr(i))
+	objc.Send1(m.menu, objc.SelZ("performActionForItemAtIndex:\x00"), uintptr(i))
 	m.Close()
 }
 
 // Close closes the menu with nothing chosen, as Escape does.
-func (m DebugMenu) Close() { objc.Send(m.menu, objc.Sel("cancelTracking")) }
+func (m DebugMenu) Close() { objc.Send(m.menu, objc.SelZ("cancelTracking\x00")) }
 
 // axAPI is the accessibility calls openBarMenu makes (a test fakes them).
 // createApp and copyAttr return references the caller owns (the Create and
@@ -132,19 +132,19 @@ func (w *Window) openBarMenu(ax *axAPI, i int) bool {
 	}
 	x, y, ok := ax.value(pos, false)
 	_, h, ok2 := ax.value(size, true)
-	main := objc.Send(w.app, objc.Sel("mainMenu"))
+	main := objc.Send(w.app, objc.SelZ("mainMenu\x00"))
 	if !ok || !ok2 || main == 0 || i >= int(objc.Send(main, selNumberOfItems)) {
 		return false
 	}
-	sub := objc.Send(objc.Send1(main, selItemAtIndex, uintptr(i)), objc.Sel("submenu"))
+	sub := objc.Send(objc.Send1(main, selItemAtIndex, uintptr(i)), objc.SelZ("submenu\x00"))
 	if sub == 0 {
 		return false
 	}
-	cp := objc.Send(sub, objc.Sel("copy"))
+	cp := objc.Send(sub, objc.SelZ("copy\x00"))
 	// AX is top-left global; AppKit's screen coordinates are bottom-left on
 	// the main display.
-	screens := objc.Send(objc.Cls("NSScreen"), objc.Sel("screens"))
-	top := objc.SendRect(objc.Send1(screens, objc.Sel("objectAtIndex:"), 0), selFrame).H
+	screens := objc.Send(objc.Cls("NSScreen"), objc.SelZ("screens\x00"))
+	top := objc.SendRect(objc.Send1(screens, objc.SelZ("objectAtIndex:\x00"), 0), selFrame).H
 	objc.F.Reset().Arg(uintptr(cp)).Arg(uintptr(selPopUpMenu)).Arg(0).ArgPoint(x, top-y-h).Arg(0).Call(objc.MsgSend)
 	objc.Release(cp)
 	return true
@@ -180,8 +180,8 @@ func loadAX() *axAPI {
 			}
 			return objc.ID(*out)
 		},
-		count: func(arr objc.ID) int { return int(objc.Send(arr, objc.Sel("count"))) },
-		at:    func(arr objc.ID, i int) objc.ID { return objc.Send1(arr, objc.Sel("objectAtIndex:"), uintptr(i)) },
+		count: func(arr objc.ID) int { return int(objc.Send(arr, objc.SelZ("count\x00"))) },
+		at:    func(arr objc.ID, i int) objc.ID { return objc.Send1(arr, objc.SelZ("objectAtIndex:\x00"), uintptr(i)) },
 		press: func(el objc.ID) {
 			s := objc.Str("AXPress")
 			objc.F.Reset().Arg(uintptr(el)).Arg(uintptr(s)).Call(perform)
@@ -197,7 +197,7 @@ func loadAX() *axAPI {
 		release: func(ref objc.ID) { objc.F.Reset().Arg(uintptr(ref)).Call(cfRelease) },
 		wait: func() {
 			until := objc.ID(objc.F.Reset().Arg(uintptr(clsNSDate)).Arg(uintptr(selDateSinceNow)).ArgF64(0.5).Call(objc.MsgSend).R0())
-			objc.Send1(objc.Send(objc.Cls("NSRunLoop"), objc.Sel("currentRunLoop")), objc.Sel("runUntilDate:"), uintptr(until))
+			objc.Send1(objc.Send(objc.Cls("NSRunLoop"), objc.SelZ("currentRunLoop\x00")), objc.SelZ("runUntilDate:\x00"), uintptr(until))
 		},
 	}
 }

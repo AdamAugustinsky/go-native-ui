@@ -36,17 +36,17 @@ func colorPanelInit() {
 	cp.once.Do(func() {
 		loadFramework("/System/Library/Frameworks/AppKit.framework/AppKit")
 		cp.clsPanel, cp.clsColor, cp.clsSpace = objc.Cls("NSColorPanel"), objc.Cls("NSColor"), objc.Cls("NSColorSpace")
-		cp.selShared, cp.selSetTarget, cp.selSetAction = objc.Sel("sharedColorPanel"), objc.Sel("setTarget:"), objc.Sel("setAction:")
-		cp.selSetContinuous, cp.selSetShowsAlpha, cp.selSetColor = objc.Sel("setContinuous:"), objc.Sel("setShowsAlpha:"), objc.Sel("setColor:")
-		cp.selColor, cp.selOrderFront, cp.selMakeKey = objc.Sel("color"), objc.Sel("orderFront:"), objc.Sel("makeKeyAndOrderFront:")
-		cp.selClose, cp.selVisible = objc.Sel("close"), objc.Sel("isVisible")
-		cp.selSRGB, cp.selUsing = objc.Sel("sRGBColorSpace"), objc.Sel("colorUsingColorSpace:")
-		cp.selR, cp.selG, cp.selB, cp.selA = objc.Sel("redComponent"), objc.Sel("greenComponent"), objc.Sel("blueComponent"), objc.Sel("alphaComponent")
-		cp.selChanged, cp.selClosed = objc.Sel("gnuiColorChanged:"), objc.Sel("gnuiColorClosed:")
+		cp.selShared, cp.selSetTarget, cp.selSetAction = objc.SelZ("sharedColorPanel\x00"), objc.SelZ("setTarget:\x00"), objc.SelZ("setAction:\x00")
+		cp.selSetContinuous, cp.selSetShowsAlpha, cp.selSetColor = objc.SelZ("setContinuous:\x00"), objc.SelZ("setShowsAlpha:\x00"), objc.SelZ("setColor:\x00")
+		cp.selColor, cp.selOrderFront, cp.selMakeKey = objc.SelZ("color\x00"), objc.SelZ("orderFront:\x00"), objc.SelZ("makeKeyAndOrderFront:\x00")
+		cp.selClose, cp.selVisible = objc.SelZ("close\x00"), objc.SelZ("isVisible\x00")
+		cp.selSRGB, cp.selUsing = objc.SelZ("sRGBColorSpace\x00"), objc.SelZ("colorUsingColorSpace:\x00")
+		cp.selR, cp.selG, cp.selB, cp.selA = objc.SelZ("redComponent\x00"), objc.SelZ("greenComponent\x00"), objc.SelZ("blueComponent\x00"), objc.SelZ("alphaComponent\x00")
+		cp.selChanged, cp.selClosed = objc.SelZ("gnuiColorChanged:\x00"), objc.SelZ("gnuiColorClosed:\x00")
 		t := objc.Define("GNUIColorTarget", objc.Cls("NSObject"), nil)
 		t.Method(cp.selChanged, "v@:@", colorPanelChanged)
 		t.Method(cp.selClosed, "v@:@", colorPanelClosed)
-		cp.target = objc.Send(objc.Send(t.Register(), objc.Sel("alloc")), objc.Sel("init"))
+		cp.target = objc.Send(objc.Send(t.Register(), objc.SelZ("alloc\x00")), objc.SelZ("init\x00"))
 	})
 }
 
@@ -80,7 +80,7 @@ func colorPanelClosed(c *ffi.CB) {
 // nsColor is the NSColor for sRGB components.
 func nsColor(r, g, b, a float32) objc.ID {
 	cp := &colorPanel
-	sel := objc.Sel("colorWithSRGBRed:green:blue:alpha:") // before F is reset: Sel uses it
+	sel := objc.SelZ("colorWithSRGBRed:green:blue:alpha:\x00") // before F is reset: Sel uses it
 	return objc.ID(objc.F.Reset().Arg(uintptr(cp.clsColor)).Arg(uintptr(sel)).
 		ArgF64(float64(r)).ArgF64(float64(g)).ArgF64(float64(b)).ArgF64(float64(a)).Call(objc.MsgSend).R0())
 }
@@ -107,9 +107,9 @@ func (w *Window) ShowColorPanel(r, g, b, a float32) error {
 		if cp.panel == 0 {
 			return ErrUnsupported
 		}
-		nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.Sel("defaultCenter"))
+		nc := objc.Send(objc.Cls("NSNotificationCenter"), objc.SelZ("defaultCenter\x00"))
 		name := objc.Str("NSWindowWillCloseNotification")
-		objc.Send4(nc, objc.Sel("addObserver:selector:name:object:"), uintptr(cp.target), uintptr(cp.selClosed), uintptr(name), uintptr(cp.panel))
+		objc.Send4(nc, objc.SelZ("addObserver:selector:name:object:\x00"), uintptr(cp.target), uintptr(cp.selClosed), uintptr(name), uintptr(cp.panel))
 	}
 	objc.Send1(cp.panel, cp.selSetTarget, uintptr(cp.target))
 	objc.Send1(cp.panel, cp.selSetAction, uintptr(cp.selChanged))

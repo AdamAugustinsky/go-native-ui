@@ -47,8 +47,8 @@ import (
 var dropSyncBudget = 250 * time.Millisecond
 
 var (
-	selDropChangeCount = objc.Sel("changeCount")
-	selDropRelease     = objc.Sel("release")
+	selDropChangeCount = objc.SelZ("changeCount\x00")
+	selDropRelease     = objc.SelZ("release\x00")
 )
 
 // dropRead is one drop's read in flight.

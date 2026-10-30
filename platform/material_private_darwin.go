@@ -43,12 +43,12 @@ type glassConfig struct {
 }
 
 var (
-	selWinCornerRadius = objc.Sel("_cornerRadius") // NSWindow
+	selWinCornerRadius = objc.SelZ("_cornerRadius\x00") // NSWindow
 
-	selSetVariant  = objc.Sel("set_variant:")
-	selSetAdaptive = objc.Sel("set_adaptiveAppearance:")
-	selVariant     = objc.Sel("_variant")
-	selAdaptive    = objc.Sel("_adaptiveAppearance")
+	selSetVariant  = objc.SelZ("set_variant:\x00")
+	selSetAdaptive = objc.SelZ("set_adaptiveAppearance:\x00")
+	selVariant     = objc.SelZ("_variant\x00")
+	selAdaptive    = objc.SelZ("_adaptiveAppearance\x00")
 
 	splitGlassCfg  [2]glassConfig // sidebar, inspector
 	splitGlassDone bool
@@ -91,16 +91,16 @@ func readSplitGlass() (out [2]glassConfig) {
 	defer objc.F.Call1(objc.PoolPop, pool)
 	newObj := func(c objc.ID) objc.ID { return objc.Send(objc.Send(c, selAlloc), selInitPlain) }
 	svc := newObj(svcCls)
-	for _, sel := range [2]objc.SEL{objc.Sel("sidebarWithViewController:"), objc.Sel("inspectorWithViewController:")} {
+	for _, sel := range [2]objc.SEL{objc.SelZ("sidebarWithViewController:\x00"), objc.SelZ("inspectorWithViewController:\x00")} {
 		vc := newObj(vcCls)
 		v := newObj(nsViewClass())
-		objc.Send1(vc, objc.Sel("setView:"), uintptr(v))
+		objc.Send1(vc, objc.SelZ("setView:\x00"), uintptr(v))
 		objc.Send(v, selReleaseObj)
-		objc.Send1(svc, objc.Sel("addSplitViewItem:"), uintptr(objc.Send1(itemCls, sel, uintptr(vc))))
+		objc.Send1(svc, objc.SelZ("addSplitViewItem:\x00"), uintptr(objc.Send1(itemCls, sel, uintptr(vc))))
 		objc.Send(vc, selReleaseObj)
 	}
-	v := objc.Send(svc, objc.Sel("view"))
-	objc.Send(v, objc.Sel("layoutSubtreeIfNeeded"))
+	v := objc.Send(svc, objc.SelZ("view\x00"))
+	objc.Send(v, objc.SelZ("layoutSubtreeIfNeeded\x00"))
 	n := 0
 	var walk func(v objc.ID)
 	walk = func(v objc.ID) {
@@ -110,8 +110,8 @@ func readSplitGlass() (out [2]glassConfig) {
 			n++
 		}
 		subs := objc.Send(v, selSubviews)
-		for i := 0; i < int(objc.Send(subs, objc.Sel("count"))); i++ {
-			walk(objc.Send1(subs, objc.Sel("objectAtIndex:"), uintptr(i)))
+		for i := 0; i < int(objc.Send(subs, objc.SelZ("count\x00"))); i++ {
+			walk(objc.Send1(subs, objc.SelZ("objectAtIndex:\x00"), uintptr(i)))
 		}
 	}
 	walk(v)
@@ -121,8 +121,8 @@ func readSplitGlass() (out [2]glassConfig) {
 
 // osMajor is the running macOS's major version (0 if unknown).
 func osMajor() int {
-	pi := objc.Send(objc.Cls("NSProcessInfo"), objc.Sel("processInfo"))
-	s := string(objc.AppendUTF8(nil, objc.Send(pi, objc.Sel("operatingSystemVersionString")))) // "Version 27.2 (Build …)"
+	pi := objc.Send(objc.Cls("NSProcessInfo"), objc.SelZ("processInfo\x00"))
+	s := string(objc.AppendUTF8(nil, objc.Send(pi, objc.SelZ("operatingSystemVersionString\x00")))) // "Version 27.2 (Build …)"
 	n, seen := 0, false
 	for i := 0; i < len(s); i++ {
 		if c := s[i]; c >= '0' && c <= '9' {
