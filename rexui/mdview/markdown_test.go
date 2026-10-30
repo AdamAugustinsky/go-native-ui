@@ -2,6 +2,7 @@ package mdview_test
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func agentReply(i int) string {
 	return fmt.Sprintf("## Step %d\n\nI changed `ui/richtext.go` and **two** tests; see [the PR](https://example.com/pr/%d).\n\n"+
 		"1. Read the failing test\n2. Patch `layout()`\n   - keep the cache\n\n- [x] parse\n- [ ] render\n\n"+
 		"> The cache is per window.\n\n| File | Lines |\n|:--|--:|\n| a.go | 12 |\n| b.go | 7 |\n\n"+
-		"```go\nfunc step%d() error {\n\treturn nil // done\n}\n```\n\n```diff\n@@ -1 +1 @@\n-old()\n+new()\n```\n", i, i, i)
+		"```Go\nfunc step%d() error {\n\treturn nil // done\n}\n```\n\n```diff\n@@ -1 +1 @@\n-old()\n+new()\n```\n", i, i, i)
 }
 
 // layText is the fake text system with a paragraph layouter, as rich text
@@ -63,6 +64,7 @@ func newMDRig(t *testing.T, n int) *mdRig {
 	l.ReserveParas(text.ParaBudget{Paras: 4096, Glyphs: 1 << 18, Text: 1 << 18})
 	ts := layText{ft, l}
 	g := &mdRig{t: t, c: ui.New(ts), sigs: map[uint64]mdview.MarkdownSignal{}, w: 900, h: 700}
+	t.Cleanup(g.view.Close)
 	g.c.Reserve(1 << 14)
 	g.c.AtlasSync(&fakeui.Uploader{})
 	g.k = base.NewKit(g.c, ts, rex.Theme())
@@ -379,6 +381,7 @@ func TestCodeBlockPassesVerticalScroll(t *testing.T) {
 // the new tokens are made.
 func TestMarkdownStreams(t *testing.T) {
 	g := newMDRig(t, 1)
+	g.h = 2400 // the last line must be visible to be built
 	msg := agentReply(0)
 	var p markdown.Parser
 	for i := 0; i < len(msg); i += 40 {
@@ -388,5 +391,42 @@ func TestMarkdownStreams(t *testing.T) {
 	g.settle()
 	if _, ok := g.node(ui.RoleLabel, "+new()"); !ok {
 		t.Error("the streamed message lacks its last line")
+	}
+}
+
+// Large gutters, mixed-case fences, and visible-line construction are all
+// on the warmed frame path, including callers that draw individual rows.
+func TestLargeCodeFramesAllocateNothing(t *testing.T) {
+	g := newMDRig(t, 0)
+	src := []byte(strings.Repeat("var value = 123\n", 1000))
+	key := ui.HashString(0, "large-code")
+	lang := highlight.LangOf("TyPeScRiPt")
+	frame := func() {
+		g.time += 16_666_667
+		g.in.Time = g.time
+		g.c.Begin(&g.in, 900, 700, 2, 1.0/60)
+		g.k.Begin(g.c)
+		lang = highlight.LangOf("TyPeScRiPt")
+		mdview.CodeBlock(g.k, key, src, mdview.CodeOpts{Lang: lang, Gutter: true, FirstLine: 1000, View: &g.view})
+		mdview.CodeWidth(g.k, 30, mdview.CodeLineOpts{Number: 1234, View: &g.view})
+		mdview.CodeLine(g.k, ui.KeyN(key, 10000), []byte("value"), nil, mdview.CodeLineOpts{Number: 1234, View: &g.view})
+		g.k.End()
+		g.c.End(&g.dl)
+		g.in.ClearFrame()
+	}
+	for range 20 {
+		frame()
+	}
+	if n := g.c.Boxes(); n > 150 {
+		t.Fatalf("1000 lines built %d boxes; invisible lines were not culled", n)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 100 {
+		frame()
+	}
+	runtime.ReadMemStats(&after)
+	if n := after.Mallocs - before.Mallocs; n != 0 {
+		t.Fatalf("large code frames allocated %d objects / %d bytes", n, after.TotalAlloc-before.TotalAlloc)
 	}
 }

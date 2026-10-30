@@ -12,7 +12,12 @@
 //	sig := mdview.Markdown(k, ui.KeyN(c.ParentKey(), id), doc, mdview.MarkdownOpts{Item: id, View: view})
 //
 // Parse on a worker (markdown.Parser), never in Build; with the document
-// parsed and the code highlighted, a frame allocates nothing.
+// parsed and the code highlighted, a frame allocates nothing. CodeBlock
+// builds visible lines and preserves the full height with spacers. Each view
+// keeps at most 512 source entries and block aliases, 16 MiB of tokens and
+// 8 MiB of line offsets. Two shared workers admit at most 64 queued jobs and
+// 16 MiB of copied input including running jobs; completion wakes the UI
+// loop. Close the view when its window closes to cancel its queued work.
 package mdview
 
 import "gonativeui/theme"
