@@ -74,6 +74,9 @@ func fuzzTerminalState(t *testing.T, src []byte, split int) [2]fuzzScreen {
 		t.Fatal(err)
 	}
 	defer tm.Close()
+	// Synchronized output preserves the previous capture. Initialize it
+	// before arbitrary bytes can hold the screen, as a renderer does.
+	tm.Update()
 	for _, p := range [][]byte{src[:split], src[split:]} {
 		if n, err := tm.Write(p); err != nil || n != len(p) {
 			t.Fatalf("Write = %d, %v", n, err)
