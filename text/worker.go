@@ -63,8 +63,10 @@ func NewShaper() (*Shaper, error) {
 }
 
 // Shape copies the shaped output to out. It releases out's previous faces.
-// Only the current font is retained: a new description releases the previous
-// one, bounding fonts and fallback state when a window changes scale.
+// Only the current scale's fonts are retained: a description at a new scale
+// releases the previous scale's, bounding fonts and fallback state when a
+// window changes scale. Fonts of one scale (regular, semibold, a list's body
+// font) stay, so alternating between them reuses their faces and runs.
 func (w *Shaper) Shape(d FontDesc, b []byte, out *ShapedRun) bool {
 	out.Close()
 	if w.s == nil {
@@ -72,7 +74,7 @@ func (w *Shaper) Shape(d FontDesc, b []byte, out *ShapedRun) bool {
 	}
 	d = normalizeDesc(d)
 	if !w.set || w.desc != d {
-		if w.set {
+		if w.set && w.desc.Scale != d.Scale {
 			w.s.ReleaseScale(w.desc.Scale)
 		}
 		w.font = w.s.Font(d)

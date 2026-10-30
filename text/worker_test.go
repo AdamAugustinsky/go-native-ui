@@ -232,6 +232,31 @@ func TestPrefetchBoundCancelAndCopiedInput(t *testing.T) {
 	}
 }
 
+// Alternating fonts of one scale keeps both: after the first pass, shaping
+// in either allocates nothing (a release per switch would remake the faces).
+func TestShaperKeepsFontsOfOneScale(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	w, err := NewShaper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	regular, semi := FontDesc{SizePt: 13, Scale: 2, Weight: 400}, FontDesc{SizePt: 13, Scale: 2, Weight: 600}
+	name := []byte("report_2026-10.pdf")
+	var out ShapedRun
+	defer out.Close()
+	round := func() {
+		if !w.Shape(regular, name, &out) || !w.Shape(semi, name, &out) {
+			t.Fatal("shape failed")
+		}
+	}
+	round()
+	if n := testing.AllocsPerRun(20, round); n != 0 {
+		t.Fatalf("alternating fonts of one scale: %v allocations per round", n)
+	}
+}
+
 func TestWorkerBulkDataIsPointerFree(t *testing.T) {
 	var check func(reflect.Type)
 	check = func(typ reflect.Type) {
