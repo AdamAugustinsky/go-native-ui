@@ -33,24 +33,33 @@ quad, two for backdrop).
 | library, cache hit | 0.0–0.1 ms | 0.0–0.1 ms |
 | pipelines, back end hit (after comment miss) | 0.2 ms | 0.2 ms |
 | pipelines, back end miss (new code) | 32.1–45.3 ms | 15.7–17.1 ms |
-| precompiled `newLibraryWithData:` + pipelines | **not measured** | **not measured** |
+| precompiled `newLibraryWithData:`, back end warm (one run) | library 0.0 ms, pipeline 0.1 ms | pipelines 0.1 ms |
 
 The quad's first compile in each process (the "comment" row) is 20–30 ms
 slower than its second (the "new code" row). This is inferred, not
 measured: the first request most likely also pays the compiler service's
 start-up.
 
-## Not measured: loading the precompiled library
+## Loading the precompiled library (2026-10-29)
 
-This Mac has only the Command Line Tools, which do not include
-`xcrun metal`, so no `.metallib` could be generated here. I tried a
-runtime route: an `MTLDynamicLibrary` serialized with `serializeToURL:`
-loads as an `MTLLibrary`, but asking it for `vs_main` aborts in Metal's
-`validateMTLFunctionType`. Dynamic libraries do not carry render entry
-points, so that route does not give a comparable number. Once CI has
-committed the first `shaders.metallib`, `GNUI_SHADER_COST=1 go test -count=1
--run TestShaderLoadCost -v ./gpu` measures its load and pipelines on the
-same machine.
+The first `shaders.metallib` (32,607 bytes, SHA-256 `079d0273…339f`)
+came from the `metallib` workflow's run on PR #41 (Apple metal
+32023.620, macOS SDK 15.5, `air64-apple-macos14.0`, `-std=metal3.1`); this
+Mac has only the Command Line Tools, so it could not make one. One run of
+`GNUI_SHADER_COST=1 go test -count=1 -run TestShaderLoadCost -v ./gpu`,
+right after `go test ./gpu` had loaded the same library: the library
+loaded in 0.0 ms and the quad and backdrop pipelines took 0.1 ms each,
+against 86.9–159.5 ms (quad) and 45.0–47.2 ms (backdrop) to compile the
+source on a miss in the same run.
+
+That number has the back end warm: the earlier tests had already built
+pipelines from this library. The first launch of a new library on a Mac
+also pays the back-end compile (the "pipelines, back end miss" row, about
+32–45 ms and 16 ms). Showing that for the precompiled path would need the
+system's shader caches cleared, which this run did not do. An earlier
+attempt to make a library without the toolchain (an `MTLDynamicLibrary`
+serialized with `serializeToURL:`) loaded, but asking it for `vs_main`
+aborted in Metal's `validateMTLFunctionType`.
 
 ## What follows (inferred)
 
