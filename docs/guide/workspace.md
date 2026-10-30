@@ -58,9 +58,14 @@ would be guessing at its rules. `Close` followed by `Split` does it today.
 
 ## 2. Surface profiles
 
-```go
-p := th.Surface(theme.SurfacePane, k.Inactive())
+```go cmd/rexlook/rex/panes.go
+	in := theme.Snap(r.th.Surface(theme.SurfacePane, false).Inset)
+// …
+	g := r.th.Surface(theme.SurfacePane, false).Gutter
 ```
+
+A window reads a role's profile for its active state (`k.Inactive()` in
+place of `false` for a window that dims when it is not key).
 
 | Field | Means |
 |---|---|
@@ -89,7 +94,12 @@ The tree is `list | (chat | side)`. The rail and the titlebar band are not
 panes: they stay in the shell, and the work area `Arrange` gets starts after
 the rail.
 
-```go
+This sketch is Zap's code, not this repository's, so it is a `text` block
+that the guide's excerpt test does not check. It has not been compiled
+against Zap. The runnable version of the same tree, with both of Zap's
+gaps checked, is the package's `Example` (widget/workspace/example_test.go).
+
+```text
 const (
 	paneList workspace.PaneID = 1 + iota
 	paneChat
