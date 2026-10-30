@@ -34,13 +34,13 @@ import (
 //     watches): an in-place write, truncate or attribute change touches
 //     only the file's vnode, never the directory's, and the listing shows
 //     size and modification time. Beyond the caps the directory is
-//     watched structurally only. The file set is re-synchronized after
-//     every NOTE_WRITE on the directory.
+//     watched structurally only. The Service's fresh listing synchronizes
+//     the file set after the debounced directory change.
 //
 // Known gaps:
 //
-//   - changes to files created and modified within the few milliseconds
-//     between the directory event and the file's watch being registered;
+//   - changes to files created and modified between the directory event
+//     and the file's watch being registered;
 //   - in-place changes in directories above the caps;
 //   - subdirectories: entries added inside a child do not touch this
 //     directory, so a child's displayed modification time can be stale

@@ -27,7 +27,8 @@ import (
 //
 // Sorting builds one folded key per name (digit runs become '0', a length
 // byte, then the digits without leading zeros) in a recycled scratch
-// buffer, so every comparison is a single bytes.Compare.
+// buffer. Name sorting keeps a prefix beside each index; only prefix ties
+// compare the full keys.
 
 // arenaLimit is the largest arena (names, keys, entry count) that 32-bit
 // offsets can address. A variable only so tests can exercise the overflow

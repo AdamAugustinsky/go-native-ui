@@ -710,8 +710,8 @@ func (s *Service) worker(i int) {
 	}
 }
 
-// control applies Watch and Unwatch to the OS watcher, which may take a
-// while (FSEvents rebuilds its stream), off the UI thread.
+// control applies watches and synchronizes their file sets off the UI thread;
+// opening handles and registering watches may block on the file system.
 func (s *Service) control() {
 	defer s.wg.Done()
 	for {

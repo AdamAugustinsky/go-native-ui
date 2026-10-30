@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"gonativeui/core"
 	"gonativeui/fs"
 )
 
@@ -43,5 +44,43 @@ func TestFillSynthColdAllocationBudget(t *testing.T) {
 	// room for the name arena and runtime noise, but not the old 108 MiB waste.
 	if used := after.TotalAlloc - before.TotalAlloc; used > 150<<20 {
 		t.Fatalf("cold FillSynth allocated %.2f MiB, want <=150", float64(used)/(1<<20))
+	}
+}
+
+// The pool learns the larger of two repeatedly used panes without retaining
+// a one-off peak. Alternating 1M and 100k listings must still reuse all buffers.
+func TestLargeTwoPaneServiceReuse(t *testing.T) {
+	synth := new(SynthSource)
+	p := core.NewParker()
+	defer p.Close()
+	s := fs.NewServiceWith(p.Unpark, synth.List)
+	defer s.Close()
+	paths := [2]string{synthDir(1_000_000), synthDir(100_000)}
+	var held [2]fs.Result
+	buf := make([]fs.Result, 0, 2)
+	round := func() {
+		for i, path := range paths {
+			s.List(uint32(i), path, fs.SortName, false)
+		}
+		for got := 0; got < 2; {
+			buf = s.Poll(buf[:0])
+			for _, r := range buf {
+				s.Release(held[r.ID].Listing, held[r.ID].Lease)
+				held[r.ID] = r
+				got++
+			}
+			if got < 2 {
+				p.Park()
+			}
+		}
+	}
+	for range 8 {
+		round()
+	}
+	if n := testing.AllocsPerRun(5, round); n != 0 {
+		t.Fatalf("warm large two-pane service: %v allocations", n)
+	}
+	for _, r := range held {
+		s.Release(r.Listing, r.Lease)
 	}
 }
