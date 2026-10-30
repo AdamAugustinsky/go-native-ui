@@ -24,6 +24,7 @@ func (t *Terminal) gridRef(p Point, dst *ghGridRef) bool {
 
 // setSelection makes t.sel the terminal's selection (nil clears it).
 func (t *Terminal) setSelection(sel *ghSelection) {
+	t.changed()
 	t.c().Uint(uint64(t.h)).Int32(optSelection).Ptr(unsafe.Pointer(sel)).Do(fn(ghosttyvt.TerminalSet))
 }
 
@@ -254,6 +255,7 @@ func (t *Terminal) FindNext(backward bool) int {
 	if t.closed || t.search == 0 {
 		return -1
 	}
+	t.changed()
 	opt := int32(searchOptSelectNext)
 	if backward {
 		opt = searchOptSelectPrev
