@@ -321,7 +321,7 @@ func (l *BasicLayouter) breakLines(txt []byte, avail float32, wrapping bool, max
 		}
 		// A single segment wider than the line: split it between characters.
 		g := start
-		it := GraphemeIterator{off: start}
+		it := GraphemeIterator{off: GraphemeStart(txt, start)}
 		for {
 			n := it.Next(txt)
 			if n > te || n <= g {
@@ -395,7 +395,7 @@ func (l *BasicLayouter) cutForEllipsis(p *Para, start, limit int, wrapping bool)
 func (l *BasicLayouter) fitCut(p *Para, start, limit int, ew float32) int {
 	room := p.Width - ew
 	cut := start
-	it := GraphemeIterator{off: start}
+	it := GraphemeIterator{off: GraphemeStart(p.Text, start)}
 	for g := start; g < limit; {
 		n := it.Next(p.Text)
 		if n <= g || n > limit {
