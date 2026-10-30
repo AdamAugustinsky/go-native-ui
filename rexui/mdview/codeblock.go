@@ -212,9 +212,14 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 
 	// the lines, in a view that scrolls sideways
 	st := v.source(c, key, src)
-	k.NextScrollMaxHeight(1 << 20) // as tall as the lines
-	sv := k.BeginScroll("code###lines", &st.scroll, base.ScrollHorizontal)
 	lines := st.lines
+	head := float32(0)
+	if o.NoHeader {
+		head = pt(sc, rc.PadY)
+	}
+	contentH := float32(lines)*v.line + head + pt(sc, rc.PadY)
+	k.NextScrollContentHeight(contentH)
+	sv := k.BeginScroll("code###lines", &st.scroll, base.ScrollHorizontal)
 	gw := float32(0)
 	adv := k.TextSystem().Metrics(v.mono).MonoAdvance
 	if o.Gutter {
@@ -222,11 +227,7 @@ func CodeBlock(k *base.Kit, key ui.Key, src []byte, o CodeOpts) CodeSignal {
 	}
 	pr := c.Rect(sv.Outer)
 	w := max(pr[2]-pr[0], gw+float32(st.columns)*adv+2*pt(sc, rc.PadX)+pt(sc, 8))
-	head := float32(0)
-	if o.NoHeader {
-		head = pt(sc, rc.PadY)
-	}
-	c.NextSize(ui.Px(w), ui.Px(float32(lines)*v.line+head+pt(sc, rc.PadY)))
+	c.NextSize(ui.Px(w), ui.Px(contentH))
 	c.NextAxis(ui.AxisY)
 	c.NextPadding(0, head, 0, pt(sc, rc.PadY))
 	content := c.BoxKeyed(0, ui.KeyN(key, 2), nil)

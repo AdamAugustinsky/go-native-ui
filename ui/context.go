@@ -1156,3 +1156,6 @@ func rate(k, dt float32) float32 {
 	}
 	return float32(1 - math.Exp2(float64(-k*dt)))
 }
+
+// RetainedBoxes is the box slab capacity, for memory checkpoints.
+func (c *Context) RetainedBoxes() int { return cap(c.boxes) }

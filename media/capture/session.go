@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 
@@ -134,7 +135,7 @@ type session struct {
 	captureStopped bool
 	streamGone     bool
 	err            error // the first failure
-	timer          *time.Timer
+	timer          *core.Timer
 	tk             [3]platform.Ticket // Started, Ended, Chosen (EventKind-1)
 }
 
@@ -244,7 +245,7 @@ func (s *session) handle(m msg) {
 		s.deliver(Chosen)
 		if d := s.r.opt.Delay; d > 0 {
 			s.ph = phWaiting
-			s.timer = time.AfterFunc(d, func() { s.post(msg{kind: mDelayed}) })
+			s.timer = core.AfterFunc(d, func() { s.post(msg{kind: mDelayed}) })
 			return
 		}
 		s.startCapture()
@@ -434,7 +435,7 @@ func (s *session) stopNow() {
 	} else {
 		s.n.stopCapture()
 	}
-	s.timer = time.AfterFunc(stopTimeout, func() { s.post(msg{kind: mTimeout}) })
+	s.timer = core.AfterFunc(stopTimeout, func() { s.post(msg{kind: mTimeout}) })
 	s.maybeFinish()
 }
 

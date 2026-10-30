@@ -66,16 +66,17 @@ type Kit struct {
 	nDis  int
 	nOff  int // how many of them are on
 
-	rowPt      float32 // NextRowHeight, in points; 0 when none
-	scrollTop  float32 // NextScrollInset, pixels
-	scrollMaxH float32 // NextScrollMaxHeight, pixels
-	nw, nh     ui.Size // Size for the next component (NextSize)
-	hasW, hasH bool
-	passed     [2]bool     // the axes of NextSize also set on the context, for a box opened through it
-	sizeMark   ui.SizeMark // the context's mark of them (syncSize)
-	nextAlign  ui.Align
-	hasAlign   bool
-	nextMono   bool // NextMono
+	rowPt          float32 // NextRowHeight, in points; 0 when none
+	scrollTop      float32 // NextScrollInset, pixels
+	scrollMaxH     float32 // NextScrollMaxHeight, pixels
+	scrollContentH float32 // known content height + 1, pixels (zero: use previous layout)
+	nw, nh         ui.Size // Size for the next component (NextSize)
+	hasW, hasH     bool
+	passed         [2]bool     // the axes of NextSize also set on the context, for a box opened through it
+	sizeMark       ui.SizeMark // the context's mark of them (syncSize)
+	nextAlign      ui.Align
+	hasAlign       bool
+	nextMono       bool // NextMono
 
 	mouse     [2]float32 // pointer position at the previous Begin
 	mouseMove bool       // the pointer moved since then

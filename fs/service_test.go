@@ -828,3 +828,54 @@ func TestServicePoolIdleReclaimsLargeWorkingSet(t *testing.T) {
 	s.kick()
 	waitFor(t, "idle trim", time.Second, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.pooledBytes == 0 && s.poolDue.IsZero() })
 }
+
+func TestServiceSimulatedDebounceAndResultOrder(t *testing.T) {
+	c, err := core.InstallSimClockForTesting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Restore()
+	w := new(fakeWatcher)
+	var wakes atomic.Int32
+	s := newService(func() { wakes.Add(1) }, new(fakeFS).list, func(wake func()) (watcher, error) { w.wake = wake; return w, nil }, 20*time.Millisecond)
+	defer s.Close()
+	barrier := func() {
+		t.Helper()
+		if err := c.Quiesce(time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []uint32{3, 1, 2} {
+		s.Watch(id, "n:3:sim")
+	}
+	barrier()
+	w.emit(Change{ID: 3, Kind: ChangeContent}, Change{ID: 1, Kind: ChangeContent}, Change{ID: 2, Kind: ChangeContent})
+	barrier()
+	if wakes.Load() != 0 {
+		t.Fatal("raw watch events woke the UI")
+	}
+	if _, err = c.AdvanceTo(core.Now() + int64(contentQuiet-time.Nanosecond)); err != nil {
+		t.Fatal(err)
+	}
+	barrier()
+	if got := s.Poll(nil); len(got) != 0 {
+		t.Fatal("debounce fired early")
+	}
+	if _, err = c.AdvanceTo(core.Now() + 1); err != nil {
+		t.Fatal(err)
+	}
+	barrier()
+	got := s.Poll(nil)
+	if len(got) != 3 {
+		t.Fatalf("results=%d, want 3", len(got))
+	}
+	for i, r := range got {
+		if r.ID != uint32(i+1) {
+			t.Fatalf("simultaneous results out of order: %+v", got)
+		}
+		s.Release(r.Listing, r.Lease)
+	}
+	if wakes.Load() != 3 {
+		t.Fatalf("result wakes=%d, want 3", wakes.Load())
+	}
+}

@@ -85,6 +85,12 @@ func (k *Kit) takeScrollInset() float32 {
 // pt high.
 func (k *Kit) NextScrollMaxHeight(pt float32) { k.scrollMaxH = max(k.Pt(pt), 0) }
 
+// NextScrollContentHeight sizes the next scroll view from a known content
+// height in pixels, plus any legacy horizontal bar. Unlike NextScrollMaxHeight
+// it needs no previous layout, so a code block can follow a scale change in
+// its first frame. It overrides NextScrollMaxHeight for that view.
+func (k *Kit) NextScrollContentHeight(px float32) { k.scrollContentH = max(px, 0) + 1 }
+
 // takeScrollMaxHeight returns the maximum NextScrollMaxHeight set, in pixels,
 // and clears it.
 func (k *Kit) takeScrollMaxHeight() float32 {
@@ -115,7 +121,10 @@ func (k *Kit) BeginScroll(label string, st *ScrollState, axes ScrollAxes) Scroll
 	okey := ui.HashString(c.ParentKey(), ident)
 	maxH := k.takeScrollMaxHeight()
 	pad := k.legacyReserve(ui.KeyN(okey, 1), axes, st)
-	if maxH > 0 {
+	if h := k.scrollContentH; h > 0 {
+		k.scrollContentH = 0
+		k.NextHeight(ui.Px(theme.Snap(h - 1 + pad[1])))
+	} else if maxH > 0 {
 		k.NextHeight(ui.Px(k.fitScrollHeight(ui.KeyN(okey, 1), maxH, pad[1])))
 	}
 	k.ApplySize(ui.Pct(1), ui.Pct(1))

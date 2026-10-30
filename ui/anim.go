@@ -130,7 +130,8 @@ func (c *Context) animateBoxes() {
 			if b.key == c.hotKey && (c.active[0] == 0 || c.active[0] == b.key) {
 				t = 1
 			}
-			if approach(&b.hotT, t, c.rHot) {
+			prev := b.hotT
+			if approach(&b.hotT, t, c.rHot) || b.hotT != prev {
 				c.animating = true
 			}
 		}
@@ -139,7 +140,8 @@ func (c *Context) animateBoxes() {
 			if b.key == c.active[0] {
 				t = 1
 			}
-			if approach(&b.activeT, t, c.rActive) {
+			prev := b.activeT
+			if approach(&b.activeT, t, c.rActive) || b.activeT != prev {
 				c.animating = true
 			}
 		}
@@ -148,7 +150,8 @@ func (c *Context) animateBoxes() {
 			if b.key == c.focusKey {
 				t = 1
 			}
-			if approach(&b.focusT, t, c.rFocus) {
+			prev := b.focusT
+			if approach(&b.focusT, t, c.rFocus) || b.focusT != prev {
 				c.animating = true
 			}
 		}

@@ -458,6 +458,9 @@ func (a *App) closeRequested() {
 		return
 	}
 	a.closing = true // at the turn's safe point
+	if a.sim != nil {
+		return
+	}
 	platform.WakeLoop()
 }
 

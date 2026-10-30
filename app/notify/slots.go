@@ -7,9 +7,9 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unicode/utf8"
 
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 
@@ -175,7 +175,7 @@ func endListing() {
 
 // postClock is when a post is stamped (ns since 1970); tests replace it by a
 // clock as coarse as Windows'.
-var postClock = func() int64 { return time.Now().UnixNano() }
+var postClock = func() int64 { return core.WallNow().UnixNano() }
 
 // takeSlot gives a free slot to post gen of id: the record tk and its key,
 // the thread and when it was posted. It returns -1, cancelling tk, if no

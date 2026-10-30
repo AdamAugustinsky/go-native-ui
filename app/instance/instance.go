@@ -146,6 +146,7 @@ import (
 	"time"
 
 	"gonativeui/app/paths"
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 
@@ -244,7 +245,7 @@ var (
 	// time Send keeps retrying (maxTimeout) with a margin.
 	dedupHorizon = 30 * time.Second
 	// nowFn is the clock for it.
-	nowFn = time.Now
+	nowFn = core.WallNow
 )
 
 // maxTimeout caps Options.Timeout.

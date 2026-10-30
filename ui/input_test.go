@@ -266,6 +266,40 @@ func TestAnimationConvergence(t *testing.T) {
 	}
 }
 
+// Build reads the previous End's focus value. The frame that snaps it to
+// zero must leave a final repaint owed, or a faint ring survives until the
+// next event (including a return after hours hidden).
+func TestAnimationFinalValueReachesBuild(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	key := HashString(0, "field")
+	var painted float32
+	build := func(c *Context) {
+		painted = c.FocusTOf(key)
+		c.NextSize(Px(100), Px(30))
+		c.BoxKeyed(Focusable|FocusAnimation, key, nil)
+	}
+	settle := func() {
+		for i := 0; i < 100; i++ {
+			h.frame(build)
+			if !h.c.Animating() {
+				return
+			}
+		}
+		t.Fatal("focus never settled")
+	}
+	settle()
+	h.c.SetFocus(key)
+	settle()
+	if painted != 1 {
+		t.Fatalf("idle Build painted focus=%g, want 1", painted)
+	}
+	h.c.SetFocus(0)
+	settle()
+	if painted != 0 {
+		t.Fatalf("idle Build painted focus=%g, want 0", painted)
+	}
+}
+
 func TestAnimateValue(t *testing.T) {
 	h := newHarness(t, 400, 300)
 	key := HashString(0, "val")

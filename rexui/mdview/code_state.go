@@ -52,7 +52,7 @@ func (v *MarkdownView) dropLayout(frame uint32, keep ui.Key) {
 	found := false
 	for k, st := range v.scroll {
 		if k != keep {
-			if d := frame - st.seen; !found || d >= age {
+			if d := frame - st.seen; !found || d > age || d == age && k < oldest {
 				oldest, age, found = k, d, true
 			}
 		}

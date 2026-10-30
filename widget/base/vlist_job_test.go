@@ -1,8 +1,8 @@
 package base
 
 import (
+	"gonativeui/core"
 	"testing"
-	"time"
 )
 
 // The phases that reach into the id table at random look at the clock every
@@ -60,7 +60,7 @@ func TestVListReleasesIdleBackBuffer(t *testing.T) {
 	if st.bk.slots() == 0 {
 		t.Fatal("long edit did not keep a warm back buffer")
 	}
-	st.bkUsed = time.Now().UnixNano() - vlBackIdleNs - 1
+	st.bkUsed = core.Now() - vlBackIdleNs - 1
 	st.Sync(1)
 	if st.bk.slots() != 0 {
 		t.Fatal("idle back buffer is retained")

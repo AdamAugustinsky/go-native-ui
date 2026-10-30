@@ -109,6 +109,7 @@ import (
 	"unicode/utf8"
 	_ "unsafe" // go:linkname
 
+	"gonativeui/core"
 	"gonativeui/internal/uitypes"
 )
 
@@ -596,6 +597,10 @@ var wakePending atomic.Bool
 // Wake makes the main loop's Wait return with an EvWake event. It is safe
 // to call from any goroutine and cheap when a wake is already pending.
 func Wake() {
+	if c := core.SimulationForTesting(); c != nil {
+		c.Wake()
+		return
+	}
 	if wakePending.CompareAndSwap(false, true) {
 		osWake()
 	}

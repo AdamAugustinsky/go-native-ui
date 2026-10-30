@@ -46,11 +46,12 @@ type Service struct {
 	t0         time.Time
 
 	ring  *core.Ring[resMsg]
-	timer *time.Timer
+	timer *core.Timer
 	wg    sync.WaitGroup
 
 	// Control-goroutine scratch.
-	changes []Change
+	changes  []Change
+	simDirty []uint32 // stable debounce order in a simulation only
 
 	// mu is a core.Mutex: a contended sync.Mutex parks its waiter on a runtime
 	// sudog, which is heap-allocated when the P's cache and the central list
@@ -227,7 +228,7 @@ func newService(wake func(), list func(string, *Listing) error, nw func(func()) 
 	}
 	s := &Service{
 		wake: wake, listFn: list, newWatcher: nw, debounce: debounce, openFn: openPath,
-		t0:       time.Now(),
+		t0:       core.WallNow(),
 		ring:     core.NewRing[resMsg](ringCapacity),
 		ids:      make(map[uint32]*idState),
 		dirtyIDs: make(map[uint32]*idState),
@@ -235,10 +236,12 @@ func newService(wake func(), list func(string, *Listing) error, nw func(func()) 
 	}
 	for i := range s.parks {
 		s.parks[i] = core.NewParker()
+		s.parks[i].BindSimWorkerForTesting()
 	}
 	prewarmScratch(numWorkers + 1) // the workers and the watcher's stats may overlap
 	s.ctlPark = core.NewParker()
-	s.timer = time.AfterFunc(time.Hour, s.kick)
+	s.ctlPark.BindSimWorkerForTesting()
+	s.timer = core.AfterFunc(time.Hour, s.kick)
 	s.timer.Stop()
 	for i := 0; i < numWorkers; i++ {
 		s.wg.Add(1)
@@ -506,7 +509,7 @@ func (s *Service) recycleLocked(slot int32) {
 	s.pooledBytes += l.bufferBytes()
 	s.free = append(s.free, slot)
 	if s.pooledBytes > listingPoolBytes {
-		s.poolDue = time.Now().Add(listingPoolIdle)
+		s.poolDue = core.WallNow().Add(listingPoolIdle)
 		s.kick()
 	} else {
 		s.poolDue = time.Time{}
@@ -611,6 +614,10 @@ func (s *Service) syncListingLocked(id uint32, st *idState, slot int32) {
 func (s *Service) worker(i int) {
 	defer s.wg.Done()
 	park := s.parks[i]
+	defer park.RecoverSimWorker()
+	if !park.StartSimWorker() {
+		return
+	}
 	for {
 		s.mu.Lock()
 		for s.qhead == len(s.queue) && !s.closed {
@@ -713,6 +720,7 @@ func (s *Service) worker(i int) {
 // control applies watches and synchronizes their file sets off the UI thread;
 // opening handles and registering watches may block on the file system.
 func (s *Service) control() {
+	defer s.ctlPark.RecoverSimWorker()
 	defer s.wg.Done()
 	for {
 		if !s.ctlPark.Park() {
@@ -877,7 +885,7 @@ func (s *Service) gapLocked(st *idState) bool {
 	if st.lastMT == st.watchMT || st.dirty {
 		return false
 	}
-	s.dirtyLocked(st, time.Now(), false)
+	s.dirtyLocked(st, core.WallNow(), false)
 	s.kick()
 	return true
 }
@@ -908,7 +916,7 @@ func (s *Service) processChanges() {
 	if w != nil {
 		s.changes = w.drain(s.changes[:0])
 	}
-	now := time.Now()
+	now := core.WallNow()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -939,6 +947,21 @@ func (s *Service) processChanges() {
 	}
 	s.changes = s.changes[:0]
 	var next time.Duration
+	// Map iteration must not choose which simultaneous relist gets the first
+	// result slot in a replay. Production retains its unsorted fast path.
+	if core.SimulationForTesting() != nil {
+		s.simDirty = s.simDirty[:0]
+		for id := range s.dirtyIDs {
+			s.simDirty = append(s.simDirty, id)
+		}
+		slices.Sort(s.simDirty)
+		for _, id := range s.simDirty {
+			st := s.dirtyIDs[id]
+			if !st.dirtyDue.After(now) {
+				s.takeDirtyLocked(id, st)
+			}
+		}
+	}
 	for id, st := range s.dirtyIDs {
 		if wait := st.dirtyDue.Sub(now); wait > 0 {
 			if next == 0 || wait < next {
@@ -946,12 +969,7 @@ func (s *Service) processChanges() {
 			}
 			continue
 		}
-		delete(s.dirtyIDs, id)
-		st.dirty = false
-		if st.path == "" {
-			st.path = st.watchPath
-		}
-		s.enqueueLocked(id, st, st.path, st.key, st.desc, !st.user)
+		s.takeDirtyLocked(id, st)
 	}
 	if !s.poolDue.IsZero() {
 		if wait := s.poolDue.Sub(now); wait <= 0 {
@@ -969,6 +987,15 @@ func (s *Service) processChanges() {
 	if notify {
 		s.signal()
 	}
+}
+
+func (s *Service) takeDirtyLocked(id uint32, st *idState) {
+	delete(s.dirtyIDs, id)
+	st.dirty = false
+	if st.path == "" {
+		st.path = st.watchPath
+	}
+	s.enqueueLocked(id, st, st.path, st.key, st.desc, !st.user)
 }
 
 // Poll appends finished results to dst. Call it on the UI thread after a
@@ -1001,7 +1028,7 @@ func (s *Service) Poll(dst []Result) []Result {
 		dst = append(dst, Result{Kind: ResultListing, ID: m.id, Req: m.req, Refresh: refresh, Listing: s.all[m.slot], Lease: s.lease[m.slot]})
 		if st.resortRefresh {
 			st.resortRefresh = false
-			s.markDirtyLocked(m.id, time.Now(), false)
+			s.markDirtyLocked(m.id, core.WallNow(), false)
 			s.kick()
 		}
 	}
@@ -1079,8 +1106,10 @@ func (s *Service) Close() {
 	}
 	for _, p := range s.parks {
 		p.Unpark()
+		p.StopSimWorker()
 	}
 	s.ctlPark.Unpark()
+	s.ctlPark.StopSimWorker()
 	s.mu.Unlock()
 	stopped := make(chan struct{})
 	go func() { s.wg.Wait(); close(stopped) }()
@@ -1114,4 +1143,11 @@ func ListDir(path string, l *Listing) error {
 	l.Reset()
 	l.Err = listDir(path, l)
 	return l.Err
+}
+
+// RetainedPoolBytes reports unused pooled listing storage at a memory checkpoint.
+func (s *Service) RetainedPoolBytes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pooledBytes
 }

@@ -53,7 +53,7 @@ type sorter struct {
 var (
 	sorterMu      core.Mutex
 	sorterFree    []*sorter
-	sorterTimer   *time.Timer
+	sorterTimer   *core.Timer
 	sorterLastPut time.Time
 )
 
@@ -74,9 +74,9 @@ func getSorter() *sorter {
 func putSorter(s *sorter) {
 	sorterMu.Lock()
 	sorterFree = append(sorterFree, s)
-	sorterLastPut = time.Now()
+	sorterLastPut = core.WallNow()
 	if sorterTimer == nil {
-		sorterTimer = time.AfterFunc(sorterIdle, trimSorters)
+		sorterTimer = core.AfterFunc(sorterIdle, trimSorters)
 	} else {
 		sorterTimer.Reset(sorterIdle)
 	}
@@ -86,7 +86,7 @@ func putSorter(s *sorter) {
 func trimSorters() {
 	sorterMu.Lock()
 	defer sorterMu.Unlock()
-	if idle := time.Since(sorterLastPut); idle < sorterIdle {
+	if idle := core.Since(sorterLastPut); idle < sorterIdle {
 		// A callback already running when putSorter reset the timer must not
 		// discard newly returned, hot scratch.
 		sorterTimer.Reset(sorterIdle - idle)

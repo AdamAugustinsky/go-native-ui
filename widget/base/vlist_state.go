@@ -581,3 +581,6 @@ func runIndex(b *vlBuf, id uint64, at, n int) int {
 	}
 	return -1
 }
+
+// BackCapacity reports the retained rebuild-buffer slots, for memory checkpoints.
+func (st *VListState) BackCapacity() int { return cap(st.bk.ids) }

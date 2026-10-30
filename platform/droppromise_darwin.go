@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"gonativeui/core"
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
 )
@@ -92,7 +93,7 @@ type reception struct {
 	done  bool
 	reqs  []objc.Request
 	hold  []objc.ID // retained: the receivers and the queue
-	timer *time.Timer
+	timer *core.Timer
 }
 
 var (
@@ -230,7 +231,7 @@ func (rc *reception) arm() {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	if !rc.done {
-		rc.timer = time.AfterFunc(receiveTimeout, func() { rc.finish(new(ffi.Frame), true) })
+		rc.timer = core.AfterFunc(receiveTimeout, func() { rc.finish(new(ffi.Frame), true) })
 	}
 }
 
@@ -297,7 +298,7 @@ func sweepDrops() {
 		return
 	}
 	for _, p := range old {
-		if fi, err := os.Lstat(p); err == nil && fi.IsDir() && time.Since(fi.ModTime()) > 24*time.Hour && strings.HasPrefix(filepath.Base(p), "gnui-drop-") {
+		if fi, err := os.Lstat(p); err == nil && fi.IsDir() && core.Since(fi.ModTime()) > 24*time.Hour && strings.HasPrefix(filepath.Base(p), "gnui-drop-") {
 			os.RemoveAll(p)
 		}
 	}

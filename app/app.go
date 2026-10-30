@@ -223,6 +223,7 @@ type App struct {
 	barOn bool        // the window has given the platform its menu bar (menus.go)
 	dbg   *debugState // the debug overlay (debug.go); nil off
 	step  stepState   // Offscreen.Step (debugstep.go)
+	sim   *simWindow  // test-only headless event payloads
 }
 
 // frameRequester is the part of platform.Window that arms the next frame.
@@ -452,6 +453,9 @@ func (a *App) initUI() error {
 	a.UI = ui.New(a.Text)
 	uiDefaults(a.UI)
 	a.UI.ClipboardSet = platform.SetClipboardText
+	if a.sim != nil {
+		a.UI.ClipboardSet = a.sim.s.setClipboard
+	}
 	if a.appObject != nil && a.atlas != nil {
 		a.UI.ShareAtlas(a.atlas) // the app's glyph pages, uploaded once for every window (D30)
 		a.ownTex = &winUploader{r: a.R}
@@ -754,7 +758,7 @@ func (a *App) onEvent(e *platform.Event) {
 	case platform.EvDragEnter, platform.EvDragMove, platform.EvDragLeave, platform.EvDrop, platform.EvDragEnd:
 		var txt []byte
 		if e.Kind == platform.EvDrop && e.Text.Len > 0 {
-			txt = a.Win.Text(e.Text)
+			txt = a.eventText(e.Text)
 		}
 		a.onDrag(e, txt)
 	case platform.EvAccessibility:
@@ -769,7 +773,7 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 	default:
 		if e.Kind == platform.EvPaste && a.paste.isMedia(e) { // the answer to RequestPaste (paste.go)
-			a.onMediaPaste(e, a.Win.Text(e.Text))
+			a.onMediaPaste(e, a.eventText(e.Text))
 			return
 		}
 		if a.bench != nil && a.script != nil && !a.scriptDone && personInput(e.Kind) {
@@ -777,7 +781,7 @@ func (a *App) onEvent(e *platform.Event) {
 		}
 		var txt []byte
 		if e.Kind == platform.EvText || e.Kind == platform.EvPreedit || e.Kind == platform.EvPaste {
-			txt = a.Win.Text(e.Text)
+			txt = a.eventText(e.Text)
 		}
 		if a.tr.event(e, txt) {
 			a.p.invalidate()

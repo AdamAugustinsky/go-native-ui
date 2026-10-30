@@ -36,6 +36,7 @@ import "sync/atomic"
 // of descriptors), NewParker still works, with a channel, which has the
 // semantics but not the zero-allocation property.
 type Parker struct {
+	sim    *simParker    // test-only worker gate; nil in production
 	state  atomic.Uint32 // 1: a token is pending (the OS object is, or is about to be, signalled)
 	closed atomic.Bool
 
@@ -56,6 +57,9 @@ func NewParker() *Parker {
 // Park waits until a token is available and takes it. It returns false when
 // the Parker is closed (immediately if it already is), true otherwise.
 func (p *Parker) Park() bool {
+	if p.sim != nil {
+		return p.sim.park()
+	}
 	if p.closed.Load() {
 		return false
 	}
@@ -78,6 +82,10 @@ func (p *Parker) Park() bool {
 // one. It does not block. When a token is already pending it does nothing
 // (one system call per wake, not per call).
 func (p *Parker) Unpark() {
+	if p.sim != nil {
+		p.sim.pending.Store(true)
+		return
+	}
 	if p.state.Swap(1) != 0 {
 		return
 	}
@@ -99,6 +107,7 @@ func (p *Parker) Unpark() {
 // for a goroutine parked at this moment. It is safe to call more than once and
 // concurrently with Unpark; Unpark after Close does nothing.
 func (p *Parker) Close() {
+	p.StopSimWorker()
 	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gonativeui/app"
+	"gonativeui/platform"
 	"gonativeui/theme/rex"
 	"gonativeui/ui"
 	"gonativeui/widget"
@@ -94,6 +95,32 @@ func ExamplePost() {
 			time.Sleep(10 * time.Millisecond) // the queue is full: keep it and try again
 		}
 	}()
+}
+
+// A simulation jumps across idle hours and retains a replay trace. Builders
+// that own workers implement app.SimCloser to join them before clock restore.
+func ExampleSim() {
+	s, err := app.NewSim(app.Config{}, 640, 400, 1, &editor{name: "Notes"}, app.SimOptions{Seed: 7})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Advance(time.Second); err != nil {
+		log.Fatal(err)
+	}
+	if err = s.Event(0, platform.Event{Kind: platform.EvVisible}); err != nil {
+		log.Fatal(err)
+	}
+	if _, err = s.Idle(4*time.Hour, 0); err != nil {
+		log.Fatal(err)
+	}
+	if err = s.Event(0, platform.Event{Kind: platform.EvVisible, Flags: platform.FlagDown}); err != nil {
+		log.Fatal(err)
+	}
+	if err = s.Advance(time.Second); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("replay %016x", s.TraceHash())
 }
 
 // An app with one window: the Builder is the whole program.

@@ -71,6 +71,7 @@ func NewPrefetcher(workers, capacity int, wake func()) (*Prefetcher, error) {
 	started := make(chan error, workers)
 	for i := range p.park {
 		p.park[i] = core.NewParker()
+		p.park[i].BindSimWorkerForTesting()
 		p.wg.Add(1)
 		go p.worker(i, started)
 	}
@@ -263,6 +264,7 @@ func (p *Prefetcher) take() int {
 }
 
 func (p *Prefetcher) worker(index int, started chan<- error) {
+	defer p.park[index].RecoverSimWorker()
 	defer p.wg.Done()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -272,6 +274,9 @@ func (p *Prefetcher) worker(index int, started chan<- error) {
 		return
 	}
 	defer w.Close()
+	if !p.park[index].StartSimWorker() {
+		return
+	}
 	for {
 		i := p.take()
 		if i < 0 {
