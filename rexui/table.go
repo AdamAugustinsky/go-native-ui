@@ -153,6 +153,7 @@ func tableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs, clear bool) {
 		c.NextSize(ui.TextSize(base.LabelSlack), ui.Px(body))
 		c.NextFont(font)
 		c.NextTextColor(tc)
+		c.NextAlign(hc.Col.Align)
 		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(hc.Key, 1), base.StrBytes(hc.Col.Title))
 		if hc.Sorted {
 			ic := g.SortUp

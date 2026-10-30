@@ -50,3 +50,12 @@ func TestAuditLayout(t *testing.T) {
 		})
 	}
 }
+
+func TestAuditSizeColumnAtOneScale(t *testing.T) {
+	pl := NewScene(Look{Legacy: true})
+	o := newOffscreen(t, pl)
+	for range 16 {
+		o.Frame()
+	}
+	widgettest.AuditLayout(t, "pilot 1x size column", o.UI)
+}
