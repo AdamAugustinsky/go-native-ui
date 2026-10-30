@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -139,6 +140,35 @@ func (b *simPilot) SimRetained() map[string]int {
 		m[fmt.Sprintf("pane-%d", i)] = 4*(cap(p.v.rows)+cap(p.rc.rows)+cap(p.rc.m)) + 8*(cap(p.rowFilter.bits)+cap(p.rc.filter.bits)+cap(p.rc.tab.h)) + 4*cap(p.rc.tab.v)
 	}
 	return m
+}
+
+// heapInUse lists the n call sites holding the most sampled heap, with the
+// innermost frames of ours, for a failed memory floor.
+func heapInUse(n int) string {
+	runtime.GC()
+	recs := make([]runtime.MemProfileRecord, 4096)
+	k, ok := runtime.MemProfile(recs, false)
+	if !ok {
+		return "(profile too large)"
+	}
+	recs = recs[:k]
+	slices.SortFunc(recs, func(a, b runtime.MemProfileRecord) int { return int(b.InUseBytes() - a.InUseBytes()) })
+	var w bytes.Buffer
+	for _, r := range recs[:min(n, len(recs))] {
+		fmt.Fprintf(&w, "%10d B:", r.InUseBytes())
+		frames, shown := runtime.CallersFrames(r.Stack()), 0
+		for f, more := frames.Next(); shown < 4; f, more = frames.Next() {
+			if !strings.HasPrefix(f.Function, "runtime.") {
+				fmt.Fprintf(&w, " %s:%d", f.Function, f.Line)
+				shown++
+			}
+			if !more {
+				break
+			}
+		}
+		w.WriteByte('\n')
+	}
+	return w.String()
 }
 
 func pilotSimMust(t testing.TB, err error) {
@@ -482,7 +512,9 @@ func runPilotSim(t *testing.T, seed uint64, hours time.Duration) uint64 {
 			_, err = s.Idle(time.Minute, 0)
 			pilotSimMust(t, err)
 			floor, err := s.CheckMemory(app.SimMemory{HeapLive: baseline.HeapLive + 16<<20, RunGlyphs: text.MaxCachedGlyphs, RunText: text.MaxCachedTextBytes, Subsystems: map[string]int{"0/listing-pool": 8 << 20, "0/pane-0": 1 << 20, "0/pane-1": 1 << 20}})
-			pilotSimMust(t, err)
+			if err != nil {
+				t.Fatalf("%v\nbaseline heap %d, subsystems %v; now %v\nlargest in use:\n%s", err, baseline.HeapLive, baseline.Subsystems, floor.Subsystems, heapInUse(12))
+			}
 			if floor.HeapLive >= peak.HeapLive {
 				t.Fatalf("heap failed to fall: peak=%d floor=%d", peak.HeapLive, floor.HeapLive)
 			}
