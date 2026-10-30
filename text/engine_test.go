@@ -35,7 +35,7 @@ var (
 
 // testFont returns the path of a font file in go-text's testdata, skipping
 // the test if the module cache is not available.
-func testFont(t *testing.T, name string) string {
+func testFont(t testing.TB, name string) string {
 	t.Helper()
 	fontDirOnce.Do(func() {
 		out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/go-text/typesetting").Output()

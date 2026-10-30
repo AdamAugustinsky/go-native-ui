@@ -147,7 +147,7 @@ func allLTR(rs []rune) bool {
 
 // shapeEnv is an engine with three fonts and fallback to both Arabic and
 // Latin faces, so that face changes happen inside runs.
-func shapeEnv(t *testing.T) (*goSystem, []FontKey) {
+func shapeEnv(t testing.TB) (*goSystem, []FontKey) {
 	t.Helper()
 	roboto := fontRef{file: testFont(t, "Roboto-Regular.ttf")}
 	amiri := fontRef{file: testFont(t, "Amiri-Regular.ttf")}

@@ -3,8 +3,10 @@ package base
 import (
 	"runtime"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"gonativeui/core"
 	"gonativeui/img"
 	"gonativeui/internal/animgen"
 	"gonativeui/ui"
@@ -45,8 +47,19 @@ func newAnimRigAuto(t *testing.T, clipH float32, autoplay bool) *animRig {
 	return a
 }
 
+// bubble runs f in a testing/synctest bubble with the core clock's synctest
+// switch on: the image cache's workers park where the bubble sees them, so
+// run's pause between frames ends only once every decode asked for is done,
+// however loaded the machine is.
+func bubble(t *testing.T, f func(t *testing.T)) {
+	t.Helper()
+	core.UseSynctestForTesting(t)
+	synctest.Test(t, f)
+}
+
 // run draws frames (60 Hz on the rig's clock) until ms milliseconds have
-// passed, giving the workers real time to decode.
+// passed, giving the workers time to decode between frames (all the time
+// they need, in a bubble).
 func (a *animRig) run(ms int) (draws int) {
 	for t0 := a.time; a.time-t0 < int64(ms)*1_000_000; {
 		a.frame()
@@ -72,16 +85,18 @@ func (a *animRig) waitReady(t *testing.T) {
 // TestImageAnimatesInView: an animated image shown by Kit.Image advances, and
 // wakes the app at its frame deadlines through the context.
 func TestImageAnimatesInView(t *testing.T) {
-	a := newAnimRig(t, 100)
-	a.waitReady(t)
-	before := a.cache.Stats().AnimUploads
-	a.run(600)
-	if n := a.cache.Stats().AnimUploads - before; n < 6 {
-		t.Errorf("%d frames shown in 600 ms of 50 ms frames", n)
-	}
-	if w := a.c.WakeAfter(); w <= 0 || w > 50_000_000 {
-		t.Errorf("wake %d ns after a frame, want the next deadline within 50 ms", w)
-	}
+	bubble(t, func(t *testing.T) {
+		a := newAnimRig(t, 100)
+		a.waitReady(t)
+		before := a.cache.Stats().AnimUploads
+		a.run(600)
+		if n := a.cache.Stats().AnimUploads - before; n < 6 {
+			t.Errorf("%d frames shown in 600 ms of 50 ms frames", n)
+		}
+		if w := a.c.WakeAfter(); w <= 0 || w > 50_000_000 {
+			t.Errorf("wake %d ns after a frame, want the next deadline within 50 ms", w)
+		}
+	})
 }
 
 // TestImageStillWhenNotShown: a hidden window, a box clipped away by the box
@@ -89,60 +104,66 @@ func TestImageAnimatesInView(t *testing.T) {
 // nothing uploads, and the context asks for no wake.
 func TestImageStillWhenNotShown(t *testing.T) {
 	t.Run("hidden window", func(t *testing.T) {
-		a := newAnimRig(t, 100)
-		a.waitReady(t)
-		a.run(200)
-		a.in.Hidden = true
-		a.run(100) // the frames in flight settle
-		st := a.cache.Stats()
-		a.run(1000)
-		after := a.cache.Stats()
-		if after.AnimDecodes != st.AnimDecodes || after.AnimUploads != st.AnimUploads {
-			t.Errorf("hidden for 1 s: %d decodes, %d uploads", after.AnimDecodes-st.AnimDecodes, after.AnimUploads-st.AnimUploads)
-		}
-		if w := a.c.WakeAfter(); w != 0 {
-			t.Errorf("hidden: wake %d", w)
-		}
-		a.in.Hidden = false
-		a.run(300)
-		if a.cache.Stats().AnimUploads == after.AnimUploads {
-			t.Error("did not resume when shown again")
-		}
+		bubble(t, func(t *testing.T) {
+			a := newAnimRig(t, 100)
+			a.waitReady(t)
+			a.run(200)
+			a.in.Hidden = true
+			a.run(100) // the frames in flight settle
+			st := a.cache.Stats()
+			a.run(1000)
+			after := a.cache.Stats()
+			if after.AnimDecodes != st.AnimDecodes || after.AnimUploads != st.AnimUploads {
+				t.Errorf("hidden for 1 s: %d decodes, %d uploads", after.AnimDecodes-st.AnimDecodes, after.AnimUploads-st.AnimUploads)
+			}
+			if w := a.c.WakeAfter(); w != 0 {
+				t.Errorf("hidden: wake %d", w)
+			}
+			a.in.Hidden = false
+			a.run(300)
+			if a.cache.Stats().AnimUploads == after.AnimUploads {
+				t.Error("did not resume when shown again")
+			}
+		})
 	})
 	t.Run("clipped away", func(t *testing.T) {
-		a := newAnimRig(t, 0) // a clip box with no height: the image is inside the window but cannot be seen
-		a.waitReady(t)
-		a.run(200)
-		st := a.cache.Stats()
-		a.run(1000)
-		after := a.cache.Stats()
-		if after.AnimDecodes != st.AnimDecodes || after.AnimUploads != st.AnimUploads {
-			t.Errorf("clipped for 1 s: %d decodes, %d uploads", after.AnimDecodes-st.AnimDecodes, after.AnimUploads-st.AnimUploads)
-		}
-		if w := a.c.WakeAfter(); w != 0 {
-			t.Errorf("clipped: wake %d", w)
-		}
+		bubble(t, func(t *testing.T) {
+			a := newAnimRig(t, 0) // a clip box with no height: the image is inside the window but cannot be seen
+			a.waitReady(t)
+			a.run(200)
+			st := a.cache.Stats()
+			a.run(1000)
+			after := a.cache.Stats()
+			if after.AnimDecodes != st.AnimDecodes || after.AnimUploads != st.AnimUploads {
+				t.Errorf("clipped for 1 s: %d decodes, %d uploads", after.AnimDecodes-st.AnimDecodes, after.AnimUploads-st.AnimUploads)
+			}
+			if w := a.c.WakeAfter(); w != 0 {
+				t.Errorf("clipped: wake %d", w)
+			}
+		})
 	})
 	t.Run("reduce motion", func(t *testing.T) {
-		a := newAnimRig(t, 100)
-		a.waitReady(t)
-		a.k.ReduceMotion = true
-		a.run(200)
-		st := a.cache.Stats()
-		a.run(1000)
-		after := a.cache.Stats()
-		if after.AnimUploads != st.AnimUploads || a.c.WakeAfter() != 0 {
-			t.Errorf("reduce motion: %d uploads, wake %d", after.AnimUploads-st.AnimUploads, a.c.WakeAfter())
-		}
-		an := a.cache.Animation(a.h)
-		if !an.Stilled() {
-			t.Error("not reported as stilled")
-		}
-		an.Play()
-		a.run(400)
-		if a.cache.Stats().AnimUploads == after.AnimUploads {
-			t.Error("Play did not start it")
-		}
+		bubble(t, func(t *testing.T) {
+			a := newAnimRig(t, 100)
+			a.waitReady(t)
+			a.k.ReduceMotion = true
+			a.run(200)
+			st := a.cache.Stats()
+			a.run(1000)
+			after := a.cache.Stats()
+			if after.AnimUploads != st.AnimUploads || a.c.WakeAfter() != 0 {
+				t.Errorf("reduce motion: %d uploads, wake %d", after.AnimUploads-st.AnimUploads, a.c.WakeAfter())
+			}
+			an := a.cache.Animation(a.h)
+			if !an.Stilled() {
+				t.Error("not reported as stilled")
+			}
+			an.Play()
+			a.run(400)
+			if a.cache.Stats().AnimUploads == after.AnimUploads {
+				t.Error("Play did not start it")
+			}
+		})
 	})
 }
 
@@ -165,20 +186,22 @@ func TestImageAnimatedFrameAllocatesNothing(t *testing.T) {
 // the app, which draws a frame only when the context asks for one, gets the
 // next frame that builds the image as shown.
 func TestImageRevealedByLayoutStarts(t *testing.T) {
-	a := newAnimRig(t, 0) // clipped away
-	a.waitReady(t)
-	a.run(200)
-	if w := a.c.WakeAfter(); w != 0 || a.c.Animating() {
-		t.Fatalf("clipped: wake %d, animating %v", w, a.c.Animating())
-	}
-	before := a.cache.Stats().AnimUploads
-	a.clipH = 100 // an event changes the layout: this one frame is drawn for it
-	a.frame()
-	for i := 0; i < 300 && (a.c.Animating() || a.c.WakeAfter() > 0); i++ { // then only the frames the context asks for
-		time.Sleep(time.Millisecond)
+	bubble(t, func(t *testing.T) {
+		a := newAnimRig(t, 0) // clipped away
+		a.waitReady(t)
+		a.run(200)
+		if w := a.c.WakeAfter(); w != 0 || a.c.Animating() {
+			t.Fatalf("clipped: wake %d, animating %v", w, a.c.Animating())
+		}
+		before := a.cache.Stats().AnimUploads
+		a.clipH = 100 // an event changes the layout: this one frame is drawn for it
 		a.frame()
-	}
-	if n := a.cache.Stats().AnimUploads - before; n < 2 {
-		t.Errorf("%d frames shown after the layout revealed the image", n)
-	}
+		for i := 0; i < 300 && (a.c.Animating() || a.c.WakeAfter() > 0); i++ { // then only the frames the context asks for
+			time.Sleep(time.Millisecond)
+			a.frame()
+		}
+		if n := a.cache.Stats().AnimUploads - before; n < 2 {
+			t.Errorf("%d frames shown after the layout revealed the image", n)
+		}
+	})
 }

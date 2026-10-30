@@ -81,7 +81,15 @@ func openGIF(data []byte) (*gifAnim, error) {
 			label := data[i+1]
 			switch {
 			case label == 0xF9 && i+8 <= len(data) && data[i+2] == 4:
+				prev := gce
 				copy(gce[:], data[i:i+8])
+				// A transparent colour set by an earlier graphic control of the
+				// same image stays when a later one sets none, as in image/gif,
+				// Chromium and gifBackground; delay and disposal are the last's.
+				if hasGCE && prev[3]&1 != 0 && gce[3]&1 == 0 {
+					gce[3] |= 1
+					gce[6] = prev[6]
+				}
 				hasGCE = true
 			case label == 0xFF && i+19 <= len(data) && data[i+2] == 11 &&
 				string(data[i+3:i+14]) == "NETSCAPE2.0" && data[i+14] == 3 && data[i+15] == 1:

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gonativeui/internal/animgen"
@@ -261,92 +262,96 @@ func TestAnimIdleEvictedUnderCPUPressure(t *testing.T) {
 // are in use (requested, drawn) but not shown, and under CPU pressure they go
 // like the ones not built: the budget holds with only the shown one kept.
 func TestAnimHiddenBuiltEvictedUnderCPUPressure(t *testing.T) {
-	const mem, budget, n = 12 << 20, 40 << 20, 12
-	fs := useFake(t, func(*fakeSet) *fakeDec {
-		return &fakeDec{w: 1000, h: 1000, delays: []int{100, 100, 100}, mem: mem}
-	})
-	g := &animGPU{fakeGPU: newFakeGPU()}
-	c := NewCache(Options{Renderer: g, Wake: func() {}, CPUBytes: budget})
-	defer c.Close(time.Second)
-	now := ms
-	var hs [n]Handle
-	for f := 0; f < 30; f++ {
-		settle(t, c, func() {
-			for i := range hs {
-				k := Key{Hash: uint64(i + 1), W: 16, H: 16, Flags: Animate}
-				hs[i], _ = c.Request(k, Bytes([]byte("FAKE")))
-				c.UseAnimated(hs[i], Present{Now: now, Visible: i == 0})
-			}
+	bubble(t, func(t *testing.T) {
+		const mem, budget, n = 12 << 20, 40 << 20, 12
+		fs := useFake(t, func(*fakeSet) *fakeDec {
+			return &fakeDec{w: 1000, h: 1000, delays: []int{100, 100, 100}, mem: mem}
 		})
-		now += 100 * ms
-		if got := c.Stats().CPUBytes; f > 2 && got > budget+mem {
-			t.Fatalf("frame %d: CPUBytes is %d with %d built and one shown, over the budget of %d", f, got, n, budget)
+		g := &animGPU{fakeGPU: newFakeGPU()}
+		c := NewCache(Options{Renderer: g, Wake: func() {}, CPUBytes: budget})
+		defer c.Close(time.Second)
+		now := ms
+		var hs [n]Handle
+		for f := 0; f < 30; f++ {
+			settle(t, c, func() {
+				for i := range hs {
+					k := Key{Hash: uint64(i + 1), W: 16, H: 16, Flags: Animate}
+					hs[i], _ = c.Request(k, Bytes([]byte("FAKE")))
+					c.UseAnimated(hs[i], Present{Now: now, Visible: i == 0})
+				}
+			})
+			now += 100 * ms
+			if got := c.Stats().CPUBytes; f > 2 && got > budget+mem {
+				t.Fatalf("frame %d: CPUBytes is %d with %d built and one shown, over the budget of %d", f, got, n, budget)
+			}
 		}
-	}
-	if !c.Animated(hs[0]) {
-		t.Error("the shown animation was evicted")
-	}
-	if fs.trims.Load() == 0 {
-		t.Error("no hidden animation lost its canvases")
-	}
-	if live := fs.opens.Load() - fs.closes.Load(); live != n {
-		t.Errorf("%d animations alive, want all %d (trimmed, not evicted)", live, n)
-	}
-	// One is revealed: it carries on, and its canvases count again.
-	before := c.animOf(hs[n-1]).cur
-	for f := 0; f < 10; f++ {
-		settle(t, c, func() {
-			for i := range hs {
-				c.UseAnimated(hs[i], Present{Now: now, Visible: i == 0 || i == n-1})
-			}
-		})
-		now += 100 * ms
-		time.Sleep(5 * time.Millisecond) // (the frame jobs are not part of settle)
-	}
-	if c.animOf(hs[n-1]).cur == before {
-		a := c.animOf(hs[n-1])
-		t.Errorf("not playing: cur %d next %d nring %d inflight %v trimmed %v hidden %v started %v mem %d cpu %d", a.cur, a.next, a.nring, a.inflight, a.trimmed, a.hidden, a.started, a.mem, c.Stats().CPUBytes)
-	}
+		if !c.Animated(hs[0]) {
+			t.Error("the shown animation was evicted")
+		}
+		if fs.trims.Load() == 0 {
+			t.Error("no hidden animation lost its canvases")
+		}
+		if live := fs.opens.Load() - fs.closes.Load(); live != n {
+			t.Errorf("%d animations alive, want all %d (trimmed, not evicted)", live, n)
+		}
+		// One is revealed: it carries on, and its canvases count again.
+		before := c.animOf(hs[n-1]).cur
+		for f := 0; f < 10; f++ {
+			settle(t, c, func() {
+				for i := range hs {
+					c.UseAnimated(hs[i], Present{Now: now, Visible: i == 0 || i == n-1})
+				}
+			})
+			now += 100 * ms
+			synctest.Wait() // the frame jobs, which settle does not wait for, are done
+		}
+		if c.animOf(hs[n-1]).cur == before {
+			a := c.animOf(hs[n-1])
+			t.Errorf("not playing: cur %d next %d nring %d inflight %v trimmed %v hidden %v started %v mem %d cpu %d", a.cur, a.next, a.nring, a.inflight, a.trimmed, a.hidden, a.started, a.mem, c.Stats().CPUBytes)
+		}
+	})
 }
 
 // ---- 4: Close with a decode running leaks no buffer ---------------------------------
 
 func TestAnimCloseTimedOutFreesRing(t *testing.T) {
-	fs := useFake(t, uniform(10, 100, 0))
-	r := newRig(t, Options{})
-	r.start()
-	now := 1_000 * ms
-	for i := 0; i < 3; i++ { // the ring fills
-		r.frame(now, Present{Visible: true}) // (no frame is due: it only asks for the next)
-		r.waitFrame()
-	}
-	now += 100 * ms
-	if r.anim().nring < 2 {
-		t.Fatalf("the ring holds %d frames", r.anim().nring)
-	}
-	gate := make(chan struct{})
-	r.anim().dec.(*fakeDec).block = gate
-	r.c.Poll()
-	r.c.UseAnimated(r.h, Present{Now: now, Visible: true}) // takes a frame, so one is asked for: it blocks
-	if !r.anim().inflight || r.anim().nring == 0 {
-		t.Fatalf("inflight %v, ring %d", r.anim().inflight, r.anim().nring)
-	}
-	for i := r.h.index(); r.c.jobs[i].Load() != jobRunning; { // the worker is in the decode
-		runtime.Gosched()
-	}
-	r.c.Close(20 * time.Millisecond) // gives up on the running decode
-	close(gate)
-	deadline := time.Now().Add(5 * time.Second)
-	for fs.closes.Load() != fs.opens.Load() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	for r.c.refs.Load() != 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	t.Logf("held %d refs %d", r.c.bufs.held(), r.c.refs.Load())
-	if n := r.c.bufs.held(); n != 0 {
-		t.Errorf("%d buffers still held after Close", n)
-	}
+	bubble(t, func(t *testing.T) {
+		fs := useFake(t, uniform(10, 100, 0))
+		r := newRig(t, Options{})
+		r.start()
+		now := 1_000 * ms
+		for i := 0; i < 3; i++ { // the ring fills
+			r.frame(now, Present{Visible: true}) // (no frame is due: it only asks for the next)
+			r.waitFrame()
+		}
+		now += 100 * ms
+		if r.anim().nring < 2 {
+			t.Fatalf("the ring holds %d frames", r.anim().nring)
+		}
+		gate := make(chan struct{})
+		r.anim().dec.(*fakeDec).block = gate
+		r.c.Poll()
+		r.c.UseAnimated(r.h, Present{Now: now, Visible: true}) // takes a frame, so one is asked for: it blocks
+		if !r.anim().inflight || r.anim().nring == 0 {
+			t.Fatalf("inflight %v, ring %d", r.anim().inflight, r.anim().nring)
+		}
+		for i := r.h.index(); r.c.jobs[i].Load() != jobRunning; { // the worker is in the decode
+			runtime.Gosched()
+		}
+		r.c.Close(20 * time.Millisecond) // gives up on the running decode
+		close(gate)
+		deadline := time.Now().Add(5 * time.Second)
+		for fs.closes.Load() != fs.opens.Load() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		for r.c.refs.Load() != 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		t.Logf("held %d refs %d", r.c.bufs.held(), r.c.refs.Load())
+		if n := r.c.bufs.held(); n != 0 {
+			t.Errorf("%d buffers still held after Close", n)
+		}
+	})
 }
 
 // ---- 10: scratch for every goroutine of both pools --------------------------------
