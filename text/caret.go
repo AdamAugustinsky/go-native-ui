@@ -115,9 +115,10 @@ func (c *CaretIndex) reserve(bytes, glyphs int) {
 	grow(&c.links, bytes+1)
 }
 
-// build starts at a known grapheme boundary. Paragraph lines omit the text
-// before that boundary, whose carets all clamp to the first group anyway.
+// Paragraph line breaking may split a grapheme. Keep its actual start so
+// the first group's stops still use the paragraph's segmentation context.
 func (c *CaretIndex) build(v RunView, start int) {
+	start = GraphemeStart(v.Text, start)
 	d := &c.data
 	d.stops, d.groups = d.stops[:0], d.groups[:0]
 	if c.buildASCII(v, start) {

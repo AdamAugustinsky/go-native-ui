@@ -369,7 +369,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 			if spans[j].Flags&spanHit == 0 || c.focusKey != RichLinkKey(b.key, j) || j >= len(pv.Spans) || spans[j].Off != pv.Spans[j].Off || spans[j].Len != pv.Spans[j].Len {
 				continue
 			}
-			c.linkRects(b, &pv, j)
+			c.linkRects(b, &pv, j, b.rp)
 			if c.richLinkShown(id) && c.in.Focused && c.keyActivated(RichLinkKey(b.key, j)) {
 				sig.Clicked, sig.ClickedSpan = spans[j].Tag, j
 			}
@@ -577,7 +577,7 @@ func (c *Context) keepRich() {
 			c.richView(b, r)
 		}
 		b.rp = richPrev{
-			ref: b.para, gen: c.lay.ParaGeneration(), w: max(b.size[0]-b.padSum(0), 0),
+			ref: b.para, gen: c.lay.ParaGeneration(), w: max(b.rect[2]-b.rect[0]-b.padSum(0), 0),
 			ox: b.pad[0], oy: b.pad[1], align: b.align, ok: b.para != 0,
 		}
 	}
@@ -822,14 +822,14 @@ func (c *Context) RichRangeRects(id ID, from, to int, dst [][4]float32) [][4]flo
 }
 
 // linkRects sets c.rects to the window rectangles of span i of the RichText
-// box b (its last layout).
-func (c *Context) linkRects(b *box, pv *text.ParaView, i int) {
+// box b, using the geometry belonging to pv's frame.
+func (c *Context) linkRects(b *box, pv *text.ParaView, i int, rp richPrev) {
 	sp := &pv.Spans[i]
-	c.rects = pv.RangeRects(int(sp.Off), int(sp.Off+sp.Len), b.rp.w, c.rects[:0])
-	ox, oy := b.rect[0]+b.rp.ox, b.rect[1]+b.rp.oy
+	c.rects = pv.RangeRects(int(sp.Off), int(sp.Off+sp.Len), rp.w, c.rects[:0])
+	ox, oy := b.rect[0]+rp.ox, b.rect[1]+rp.oy
 	for k := range c.rects {
 		r := &c.rects[k]
-		dx := alignDX(pv, pv.LineAt(r[1]+0.5), b.rp.w, b.rp.align)
+		dx := alignDX(pv, pv.LineAt(r[1]+0.5), rp.w, rp.align)
 		r[0], r[2] = r[0]+ox+dx, r[2]+ox+dx
 		r[1], r[3] = r[1]+oy, r[3]+oy
 	}
@@ -844,11 +844,12 @@ func (c *Context) richCursors(dst []CursorRegion, b *box, clip [4]float32) []Cur
 	}
 	// emit collects the regions of the frame it draws: its cached view
 	pv := c.richView(b, r)
+	rp := richPrev{w: max(b.rect[2]-b.rect[0]-b.padSum(0), 0), ox: b.pad[0], oy: b.pad[1], align: b.align}
 	for i := range pv.Spans {
 		if pv.Spans[i].Flags&spanHit == 0 {
 			continue
 		}
-		c.linkRects(b, &pv, i)
+		c.linkRects(b, &pv, i, rp)
 		for _, q := range c.rects {
 			if q = intersect(q, clip); !empty(q) {
 				dst = append(dst, CursorRegion{Rect: q, Cursor: CursorPointer})
@@ -876,7 +877,7 @@ func (c *Context) semLinks(dst *SemTree, b *box, rec *semRec) {
 		if sp.Flags&spanHit == 0 || len(dst.Nodes) >= MaxSemNodes {
 			continue
 		}
-		c.linkRects(b, &pv, i)
+		c.linkRects(b, &pv, i, b.rp)
 		var bounds [4]float32
 		for k, q := range c.rects {
 			if k == 0 {
