@@ -766,7 +766,7 @@ func (p *pane) trimBuffers() {
 	if cap(p.rc.filter.bits) > (limit+63)/64 {
 		p.rc.filter = rowFilter{}
 	}
-	if cap(p.rc.tab.h) > max(4*p.rc.tab.n, 1024) {
+	if cap(p.rc.tab.h) > max(4*withSlack(p.v.ts.Sel.Count()+2), 1024) {
 		p.rc.tab = nameMap{}
 	}
 }

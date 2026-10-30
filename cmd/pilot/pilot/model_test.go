@@ -60,24 +60,26 @@ func TestSimulationPaneWorkIgnoresWallTime(t *testing.T) {
 }
 
 func TestSmallerDirectoryReleasesReconcileScratch(t *testing.T) {
+	const n = 1_000_000
 	p := newPane(1, nil, "/")
 	l := new(fs.Listing)
-	FillSynth(l, 100000, 0)
+	FillSynth(l, n, 0)
 	fs.Sort(l, fs.SortName, false)
 	p.install("/large", l, 0, "")
 	settle(t, p)
+	p.v.ts.Sel.SelectAll(len(l.Entries))
 	next := new(fs.Listing)
-	FillSynth(next, 100000, 1)
+	FillSynth(next, n, 1)
 	fs.Sort(next, fs.SortName, false)
 	p.startReconcile(next, 0)
 	settle(t, p)
-	if cap(p.rc.m) < 100000 || cap(p.v.rows) < 100000 {
+	if cap(p.rc.m) < n || cap(p.v.rows) < n || cap(p.rc.tab.h) < n {
 		t.Fatal("scratch not grown")
 	}
 	p.install("/small", listing(fs.SortName, false, dirItems...), 0, "")
 	settle(t, p)
-	if cap(p.rc.m) > 65536 || cap(p.rc.rows) > 65536 || cap(p.v.rows) > 65536 {
-		t.Fatalf("large scratch kept: map=%d back=%d rows=%d", cap(p.rc.m), cap(p.rc.rows), cap(p.v.rows))
+	if cap(p.rc.m) > 65536 || cap(p.rc.rows) > 65536 || cap(p.v.rows) > 65536 || cap(p.rc.tab.h) > 1024 {
+		t.Fatalf("large scratch kept: map=%d back=%d rows=%d names=%d", cap(p.rc.m), cap(p.rc.rows), cap(p.v.rows), cap(p.rc.tab.h))
 	}
 }
 
