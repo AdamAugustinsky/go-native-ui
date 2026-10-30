@@ -363,6 +363,7 @@ func (p *pane) install(dir string, l *fs.Listing, lease uint32, sel string) {
 	p.pendSel = findName(l, sel)
 	p.scrollRow, p.scrollOff = 0, 0
 	p.topEntry, p.topRow, p.reveal = -1, 0, -1
+	p.trimBuffers()
 	p.startRows()
 }
 
@@ -740,7 +741,34 @@ func (p *pane) swapIn() {
 		p.scrollRow, p.scrollOff = rc.topRow, rc.topFrac
 	}
 	p.release(old, oldLease)
+	p.trimBuffers()
 	p.msg = ""
+}
+
+// trimBuffers releases an exceptional directory's model scratch when the
+// working listing shrinks. Ordinary refreshes retain slack, so warmed frame
+// work does not allocate. No job may still be using these buffers.
+func (p *pane) trimBuffers() {
+	n := len(p.v.l.Entries)
+	limit := max(4*withSlack(n), 64<<10)
+	if cap(p.v.rows) > limit {
+		p.v.rows = append([]uint32(nil), p.v.rows...)
+	}
+	if cap(p.rc.rows) > limit {
+		p.rc.rows = nil
+	}
+	if cap(p.rc.m) > limit {
+		p.rc.m = nil
+	}
+	if cap(p.rowFilter.bits) > (limit+63)/64 {
+		p.rowFilter = rowFilter{}
+	}
+	if cap(p.rc.filter.bits) > (limit+63)/64 {
+		p.rc.filter = rowFilter{}
+	}
+	if cap(p.rc.tab.h) > max(4*p.rc.tab.n, 1024) {
+		p.rc.tab = nameMap{}
+	}
 }
 
 // work advances the pane's background-style work for one frame and reports

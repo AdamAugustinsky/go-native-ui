@@ -59,6 +59,28 @@ func TestSimulationPaneWorkIgnoresWallTime(t *testing.T) {
 	}
 }
 
+func TestSmallerDirectoryReleasesReconcileScratch(t *testing.T) {
+	p := newPane(1, nil, "/")
+	l := new(fs.Listing)
+	FillSynth(l, 100000, 0)
+	fs.Sort(l, fs.SortName, false)
+	p.install("/large", l, 0, "")
+	settle(t, p)
+	next := new(fs.Listing)
+	FillSynth(next, 100000, 1)
+	fs.Sort(next, fs.SortName, false)
+	p.startReconcile(next, 0)
+	settle(t, p)
+	if cap(p.rc.m) < 100000 || cap(p.v.rows) < 100000 {
+		t.Fatal("scratch not grown")
+	}
+	p.install("/small", listing(fs.SortName, false, dirItems...), 0, "")
+	settle(t, p)
+	if cap(p.rc.m) > 65536 || cap(p.rc.rows) > 65536 || cap(p.v.rows) > 65536 {
+		t.Fatalf("large scratch kept: map=%d back=%d rows=%d", cap(p.rc.m), cap(p.rc.rows), cap(p.v.rows))
+	}
+}
+
 // fakeSrc is a Source that records requests; the tests deliver the results. It
 // numbers requests and leases like fs.Service and counts the Release calls that
 // the Service would ignore (a lease that is not the one handed out).
