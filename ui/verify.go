@@ -9,7 +9,7 @@ import (
 	"gonativeui/text"
 )
 
-// Invariants of a finished frame (D-pending (ui-dst)). Context.Verify checks
+// Invariants of a finished frame (D90). Context.Verify checks
 // what must hold after End whatever the app built or the input was: the box
 // tree's links, the keyed box cache against the tree, finite rectangles that
 // are not inside out, scroll offsets inside their content, and the carets and

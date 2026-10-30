@@ -1315,7 +1315,7 @@ The theme setting is read from the portal, not from dconf's file: the file is a 
 
 **Not covered:** native AppKit delivery (activation, input methods, accessibility object identity, menus), real system sleep and driver resets, real watchers and network, arbitrary concurrent interleavings of worker goroutines (the barrier serializes them), and Windows and Linux at run time. Two isolated runs under default scheduling saw one unattributed 32 B or 112 B allocation on a warmed frame; neither recurred with one processor, and the cause (a runtime timer heap is the likely one) is not proven.
 
-## D-pending (ui-dst). A seeded simulated user, frame invariants, and assertions behind a build tag (2026-10-30)
+## D90. A seeded simulated user, frame invariants, and assertions behind a build tag (2026-10-30)
 
 **Decision.** D89's simulator gets an input generator and per-frame invariants, in the manner of TigerBeetle's VOPR and TigerStyle and of Turso's deterministic testing of its SQLite rewrite: one u64 seed drives the run, a failure prints the seed and the command that replays it, and the same seed replays to the same trace hash.
 - **`app.SimUser`** sends one seeded action per step on the virtual 60 Hz clock: pointer moves, clicks (right, middle, double, triple), drags, wheel notches and trackpad gestures with phases and momentum, keys with modifiers and repeats, typed text in several scripts with combining marks, emoji sequences, controls and invalid UTF-8, press-and-hold replacements, compositions that commit, cancel or lose the window focus, ⌘C/⌘X/⌘V/⌘A/⌘Z with a seeded clipboard, window focus changes, resizes and scales from 1× to 3× (never below `Config.MinWidth`/`MinHeight`). It never sends `EvClose`, ⌘Q or ⌘W.

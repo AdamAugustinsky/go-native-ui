@@ -167,7 +167,7 @@ func simAudit(s *Sim, allowed func(ui.Finding) bool) error {
 // SimInvariants checks each finished frame's ui invariants
 // (ui.Context.Verify: the tree's links, the keyed box cache, finite
 // rectangles, scroll offsets in their content, text-field carets and
-// selections; D-pending (ui-dst)).
+// selections; D90).
 func SimInvariants(s *Sim) error {
 	for _, v := range s.windows {
 		if v.closed || v.frames <= v.verified {

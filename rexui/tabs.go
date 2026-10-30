@@ -952,8 +952,7 @@ func (t *TabsBuild) EndTab(cell *TabCell) {
 		c.NextRole(ui.RoleButton)
 		c.NextSemName(str.CloseTab)
 		// The ✕ is centred in its circle: its raster is not the circle's
-		// size (at 2× it sat 2 pt off; the UI simulator's audit, D-pending
-		// (ui-dst)).
+		// size (at 2× it sat 2 pt off; the UI simulator's audit, D90).
 		c.NextJustify(ui.JustifyCenter)
 		c.NextCross(ui.CrossCenter)
 		cb := c.BoxKeyed(flags, ck, nil)

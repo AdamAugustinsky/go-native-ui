@@ -379,7 +379,7 @@ func TestNestedPopupsFormAStack(t *testing.T) {
 
 // A popup opened while nothing had the focus takes it, and gives it up when it
 // closes: the focus must not go on naming the popup's boxes, which no longer
-// exist (found by a focus invariant of the UI simulator's, D-pending (ui-dst)).
+// exist (found by a focus invariant of the UI simulator's, D90).
 func TestPopupOpenedWithoutFocusLeavesNone(t *testing.T) {
 	for _, gaps := range []bool{false, true} { // a focusable item, or the popup itself
 		r := newOvRig(t)

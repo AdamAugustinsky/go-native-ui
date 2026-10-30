@@ -18,7 +18,7 @@ import (
 	"gonativeui/ui"
 )
 
-// The simulated user (app.SimUser, D-pending (ui-dst)): one seed drives a
+// The simulated user (app.SimUser, D90): one seed drives a
 // stream of clicks, drags, keys, text, compositions, scrolls, resizes and
 // scale changes into real widget trees on the virtual 60 Hz clock, and
 // app.SimInvariants (with the layout audit and the frame-cause check) runs

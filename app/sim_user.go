@@ -9,7 +9,7 @@ import (
 )
 
 // SimUser is a seeded stream of native-shaped input for a simulated window
-// (D-pending (ui-dst)): pointer moves, clicks, double clicks and drags, wheel
+// (D90): pointer moves, clicks, double clicks and drags, wheel
 // and trackpad scrolls with phases and momentum, keys with modifiers, typed
 // text in several scripts, input-method compositions that commit, cancel or
 // lose the focus, press-and-hold replacements, pastes, window focus changes,

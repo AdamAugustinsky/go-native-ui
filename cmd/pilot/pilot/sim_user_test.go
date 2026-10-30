@@ -23,7 +23,7 @@ func pilotNarrowColumns(f ui.Finding) bool {
 }
 
 // TestPilotSimUser drives Pilot on its synthetic folders with the simulated
-// user (app.SimUser, D-pending (ui-dst)): clicks, drags, keys, the filter
+// user (app.SimUser, D90): clicks, drags, keys, the filter
 // field with text and compositions, scrolls, resizes and scale changes, with
 // app.SimInvariants after every step and the pane model checked at the end.
 // The environment selects the seeds as in app/simtests/ui (TestSimUser):
