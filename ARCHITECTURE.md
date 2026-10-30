@@ -285,7 +285,8 @@ Raster(face FaceID, glyph GlyphID, sizePx float32, subpixelX uint8, out *GlyphBi
 On top, shared by every backend:
 
 - **Run cache:** keyed by (hash of bytes, font, size). It stores
-  pointer-free glyph arrays in a slab with clock eviction. File names are
+  pointer-free glyph arrays in a slab; a full cache keeps the runs of
+  recent access epochs and drops the rest (D86). File names are
   shaped once, mostly on workers, and prefetched for a listing as it loads.
   Shaping off the main thread assumes CoreText's immutable objects and the
   DirectWrite shared factory are thread-safe. Phase 2 verifies this per
@@ -351,8 +352,8 @@ On top, shared by every backend:
   the name.
 - **Handles, not pointers:** `type ListingID uint32`, `EntryIdx uint32`,
   `TextureID uint16`, with generation bits where reuse is possible.
-- **Frame scratch:** two byte arenas (current and previous frame, for
-  prev-frame hit testing) that reset each frame. Typed slices are carved
+- **Frame scratch:** one byte arena that resets each frame; hit testing
+  against the last layout reads the rects kept in each box (D86). Typed slices are carved
   from them with `unsafe.Slice` only for pointer-free types. No dependency
   on `GOEXPERIMENT=arenas`.
 - **Steady state allocates nothing.** A test harness runs warmed-up,
