@@ -34,6 +34,11 @@ import (
 
 const userSteps = 300
 
+// userWorkerTimeout is the real-time watchdog on the app's workers at each
+// barrier: a loaded CI runner (Windows arm64 on WARP) can take more than the
+// default five seconds without anything being stuck. A hang still fails.
+const userWorkerTimeout = time.Minute
+
 type userTarget struct {
 	name   string
 	w, h   int
@@ -143,7 +148,7 @@ func runUser(tg userTarget, seed uint64, steps int) (hash uint64, err error) {
 	if err != nil {
 		return 0, err
 	}
-	s, err := app.NewSim(cfg, tg.w, tg.h, 1, b, app.SimOptions{Seed: seed, Checks: tg.checks})
+	s, err := app.NewSim(cfg, tg.w, tg.h, 1, b, app.SimOptions{Seed: seed, Checks: tg.checks, WorkerTimeout: userWorkerTimeout})
 	if err != nil {
 		return 0, err
 	}

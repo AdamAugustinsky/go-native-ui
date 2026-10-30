@@ -39,7 +39,10 @@ func TestPilotSimUser(t *testing.T) {
 		pilotSimMust(t, err)
 	}
 	pilotSimChecks = []app.SimCheck{app.SimAuditAllowing(pilotNarrowColumns), app.SimOwedFrames, app.SimInvariants}
-	defer func() { pilotSimChecks = nil }()
+	// The watchdog bounds native work in real time; a loaded runner (Windows
+	// arm64 on WARP) takes over five seconds at a barrier. A hang still fails.
+	pilotSimWorkerTimeout = time.Minute
+	defer func() { pilotSimChecks, pilotSimWorkerTimeout = nil, 0 }()
 	run := func(seed uint64) {
 		t.Helper()
 		start := time.Now()
