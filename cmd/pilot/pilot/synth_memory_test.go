@@ -77,12 +77,14 @@ func TestLargeTwoPaneServiceReuse(t *testing.T) {
 	for range 8 {
 		round()
 	}
-	// One processor, as fs's relist gate: under a loaded test run, a parked
-	// worker can make the runtime start a thread, which ReadMemStats counts.
-	old := runtime.GOMAXPROCS(1)
-	defer runtime.GOMAXPROCS(old)
-	if n := testing.AllocsPerRun(5, round); n != 0 {
-		t.Fatalf("warm large two-pane service: %v allocations", n)
+	// Attributed, as the other gates here: under a loaded test run a parked
+	// worker can make the runtime start a thread, which is not ours (D27).
+	if n, sites := oursDuring(func() {
+		for range 5 {
+			round()
+		}
+	}); n != 0 {
+		t.Fatalf("warm large two-pane service: %d allocations of ours:\n%s", n, sites)
 	}
 	for _, r := range held {
 		s.Release(r.Listing, r.Lease)
