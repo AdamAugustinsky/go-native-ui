@@ -254,6 +254,12 @@ func (c *Context) DebugAnimating(out []Key) int {
 			n++
 		}
 	}
+	if n == 0 && c.settledKey != 0 { // the frame owed for an animation's final value
+		if len(out) > 0 {
+			out[0] = c.settledKey
+		}
+		n = 1
+	}
 	return n
 }
 

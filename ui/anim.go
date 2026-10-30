@@ -114,6 +114,7 @@ func approach(v *float32, target, rate float32) bool {
 // animateBoxes steps hot_t, active_t and focus_t of the boxes built this
 // frame and drops the animation values nobody asked for.
 func (c *Context) animateBoxes() {
+	c.settledKey = 0
 	for _, id := range c.order {
 		b := &c.boxes[id]
 		if b.prevTooltip && !b.tooltip {
@@ -131,8 +132,10 @@ func (c *Context) animateBoxes() {
 				t = 1
 			}
 			prev := b.hotT
-			if approach(&b.hotT, t, c.rHot) || b.hotT != prev {
+			if approach(&b.hotT, t, c.rHot) {
 				c.animating = true
+			} else if b.hotT != prev { // it arrived: Build sees the final value next frame
+				c.animating, c.settledKey = true, b.key
 			}
 		}
 		if b.flags&ActiveAnimation != 0 {
@@ -141,8 +144,10 @@ func (c *Context) animateBoxes() {
 				t = 1
 			}
 			prev := b.activeT
-			if approach(&b.activeT, t, c.rActive) || b.activeT != prev {
+			if approach(&b.activeT, t, c.rActive) {
 				c.animating = true
+			} else if b.activeT != prev { // it arrived: Build sees the final value next frame
+				c.animating, c.settledKey = true, b.key
 			}
 		}
 		if b.flags&FocusAnimation != 0 {
@@ -151,8 +156,10 @@ func (c *Context) animateBoxes() {
 				t = 1
 			}
 			prev := b.focusT
-			if approach(&b.focusT, t, c.rFocus) || b.focusT != prev {
+			if approach(&b.focusT, t, c.rFocus) {
 				c.animating = true
+			} else if b.focusT != prev { // it arrived: Build sees the final value next frame
+				c.animating, c.settledKey = true, b.key
 			}
 		}
 	}

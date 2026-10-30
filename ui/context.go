@@ -289,6 +289,7 @@ type Context struct {
 
 	// animation (see anim.go)
 	animating             bool
+	settledKey            Key // a box whose animation reached its target this frame (DebugAnimating)
 	rHot, rActive, rFocus float32
 	rScroll               float32
 	av                    []animEnt
