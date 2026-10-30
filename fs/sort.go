@@ -2,6 +2,7 @@ package fs
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"slices"
 	"time"
@@ -42,8 +43,10 @@ func arenaFits32(used, add uint64) bool {
 
 // sorter is the recycled scratch of one Sort call.
 type sorter struct {
-	keys []byte   // folded keys of all names, back to back
-	off  []uint32 // key of entry i is keys[off[i]:off[i+1]]
+	keys  []byte   // folded keys of all names, back to back
+	off   []uint32 // key of entry i is keys[off[i]:off[i+1]]
+	pairs []namePair
+	bits  []uint64
 }
 
 var (
@@ -111,6 +114,7 @@ func Sort(l *Listing, key SortKey, desc bool) {
 }
 
 func (s *sorter) sort(l *Listing, key SortKey, desc bool) {
+	l.sorted = false
 	n := len(l.Entries)
 	if !arenaFits32(0, uint64(n)) { // Order holds uint32 indices
 		l.Order = l.Order[:0]
@@ -127,6 +131,7 @@ func (s *sorter) sort(l *Listing, key SortKey, desc bool) {
 		l.Order[i] = uint32(i)
 	}
 	if n < 2 {
+		l.sorted, l.sortKey, l.desc = true, key, desc
 		return
 	}
 	if !s.buildKeys(l) { // the keys do not fit 32-bit offsets: leave the order as listed
@@ -136,7 +141,12 @@ func (s *sorter) sort(l *Listing, key SortKey, desc bool) {
 		return
 	}
 	c := cmpCtx{l: l, s: s, key: key, desc: desc}
-	slices.SortFunc(l.Order, c.cmp)
+	if key == SortName {
+		s.sortNames(&c)
+	} else {
+		slices.SortFunc(l.Order, c.cmp)
+	}
+	l.sorted, l.sortKey, l.desc = true, key, desc
 }
 
 // buildKeys folds every name into s.keys; false if the keys outgrow the
@@ -286,4 +296,43 @@ func cmpExt(a, b []byte) int {
 		}
 	}
 	return cmp3(uint32(len(ea)), uint32(len(eb)))
+}
+
+// namePair keeps the directory bit and the first 63 key bits beside the index.
+// Full keys resolve prefix ties, including short keys and the dropped low bit.
+type namePair struct {
+	prefix uint64
+	index  uint32
+}
+
+func (s *sorter) sortNames(c *cmpCtx) {
+	n := len(c.l.Entries)
+	if cap(s.pairs) < n {
+		s.pairs = make([]namePair, n)
+	}
+	s.pairs = s.pairs[:n]
+	for i := range s.pairs {
+		var b [8]byte
+		copy(b[:], s.keys[s.off[i]:s.off[i+1]])
+		p := binary.BigEndian.Uint64(b[:]) >> 1
+		if c.desc {
+			p ^= (1 << 63) - 1
+		}
+		if !isDirEntry(&c.l.Entries[i]) {
+			p |= 1 << 63
+		}
+		s.pairs[i] = namePair{p, uint32(i)}
+	}
+	slices.SortFunc(s.pairs, func(a, b namePair) int {
+		if a.prefix < b.prefix {
+			return -1
+		}
+		if a.prefix > b.prefix {
+			return 1
+		}
+		return c.cmp(a.index, b.index)
+	})
+	for i, p := range s.pairs {
+		c.l.Order[i] = p.index
+	}
 }
