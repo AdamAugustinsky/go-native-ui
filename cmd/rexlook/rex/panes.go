@@ -4,6 +4,7 @@ import (
 	"gonativeui/theme"
 	rextheme "gonativeui/theme/rex"
 	"gonativeui/ui"
+	"gonativeui/widget/workspace"
 )
 
 const (
@@ -31,23 +32,28 @@ var paneTitles = [...]paneTitle{
 	kindShell: {"fish ~/Sites/rex-snake", icTabTerm},
 }
 
-// work is the area the panes live in, in pixels.
+// work is the area the panes live in, in pixels: the window less the pane
+// profile's inset (7.5 pt in Rex), under the titlebar band.
 func (r *Rex) work() [4]float32 {
 	s := r.Scale
 	W, H := float32(r.lastW), float32(r.lastH)
-	return [4]float32{theme.Snap(7.5 * s), theme.Snap(45.5 * s), W - theme.Snap(7.5*s), H - theme.Snap(7.5*s)}
+	in := theme.Snap(r.th.Surface(theme.SurfacePane, false).Inset)
+	return [4]float32{in, theme.Snap(45.5 * s), W - in, H - in}
 }
 
+// gutters are the pane profile's gutter between panes side by side, and
+// half a point more between stacked ones, as the reference has them.
 func (r *Rex) gutters() gutters {
 	s := r.Scale
-	return gutters{x: theme.Snap(7 * s), y: theme.Snap(7.5 * s), minW: 150 * s, minH: 100 * s}
+	g := r.th.Surface(theme.SurfacePane, false).Gutter
+	return gutters{x: theme.Snap(g), y: theme.Snap(g + 0.5*s), minW: 150 * s, minH: 100 * s}
 }
 
 func (r *Rex) drawPanes(c *ui.Context) {
 	t := &r.tabs[r.active]
 	work := r.work()
 	g := r.gutters()
-	t.layout(work, &g)
+	t.layout(work, &g, r.Scale)
 
 	initial := float32(1)
 	if r.switchN > 0 {
@@ -55,16 +61,16 @@ func (r *Rex) drawPanes(c *ui.Context) {
 	}
 	fade := c.AnimateValueFrom(ui.KeyN(keyFade, uint64(r.switchN)), initial, 1, fadeRate)
 	anyMax := float32(0)
-	if t.max != 0 {
+	if t.max() != 0 {
 		anyMax = 1
 	}
 	anyMax = c.AnimateValue(ui.KeyN(keyAnyT, uint64(t.uid)), anyMax, maxRate)
 
 	// Displayed rectangle, focus and opacity of each pane.
 	var (
-		ord     [maxPanes]int8
+		ord     [workspace.MaxPanes]int8
 		n       int
-		ft, opa [maxPanes]float32
+		ft, opa [workspace.MaxPanes]float32
 	)
 	gk := float32(instantRate)
 	if r.glide {
@@ -76,11 +82,11 @@ func (r *Rex) drawPanes(c *ui.Context) {
 		if !p.used {
 			continue
 		}
-		isMax := p.uid == t.max
+		isMax := p.uid == t.max()
 		if !isMax && anyMax >= 1 {
 			continue // hidden behind the maximised pane
 		}
-		tr := t.rects[slot]
+		tr := t.rect(int8(slot))
 		var d [4]float32
 		for i := 0; i < 4; i++ {
 			key := ui.KeyN(ui.KeyN(keyGlide, uint64(p.uid)), uint64(i))
@@ -106,7 +112,7 @@ func (r *Rex) drawPanes(c *ui.Context) {
 		r.disp[slot] = d
 
 		foc := float32(0)
-		if t.focus == p.uid {
+		if t.focus() == p.uid {
 			foc = 1
 		}
 		ft[slot] = c.AnimateValue(ui.KeyN(keyFocus, uint64(p.uid)), foc, dimRate)
@@ -129,7 +135,7 @@ func (r *Rex) drawPanes(c *ui.Context) {
 	}
 	// The maximised pane goes last.
 	for i := 0; i < n; i++ {
-		if t.panes[ord[i]].uid == t.max {
+		if t.panes[ord[i]].uid == t.max() {
 			ord[i], ord[n-1] = ord[n-1], ord[i]
 			break
 		}
@@ -143,7 +149,7 @@ func (r *Rex) drawPanes(c *ui.Context) {
 	for _, slot := range ord[:n] {
 		r.drawPane(c, t, slot, r.disp[slot], ft[slot], opa[slot])
 	}
-	if t.max == 0 && anyMax < 0.001 {
+	if t.max() == 0 && anyMax < 0.001 {
 		r.drawDividers(c, t)
 	}
 	c.PopOpacity()
@@ -152,7 +158,7 @@ func (r *Rex) drawPanes(c *ui.Context) {
 // surface describes the pane in slot, drawn at r.disp[slot], to the chrome.
 func (r *Rex) surface(t *tab, slot int8, ft, opa float32) theme.Surface {
 	d := r.disp[slot]
-	return theme.Surface{Key: paneKey(t.panes[slot].uid), Slot: int(slot), Rect: d, Focus: ft, Opacity: opa, Top: d[1] <= r.work()[1]+0.5}
+	return theme.Surface{Key: t.paneKey(t.panes[slot].uid), Slot: int(slot), Rect: d, Focus: ft, Opacity: opa, Top: d[1] <= r.work()[1]+0.5}
 }
 
 // drawPane builds one pane: its fill (white when focused, a translucent
@@ -162,15 +168,16 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 	k := r.K
 	p := &t.panes[slot]
 	w, h := d[2]-d[0], d[3]-d[1]
-	key := paneKey(p.uid)
+	key := t.paneKey(p.uid)
 
 	s := r.surface(t, slot, ft, opa)
+	pt := paneTitles[p.kind]
+	t.ws.NextPane(c, workspace.PaneID(p.uid), pt.title) // the pane's box, which BeginSurface builds first
 	kg := r.th.Chrome.BeginSurface(c, r.th, s)
 
 	// Header: process icon and title; the buttons only on the focused pane.
 	hc := 36.5 * k
 	titleCol := r.col(theme.MixRGB(0x606064, 0x202228, ft), theme.MixRGB(0xA3A7B6, 0xE6E8EF, ft))
-	pt := paneTitles[p.kind]
 	r.IconAt(c, &kg, pt.icon, 39*k, hc, titleCol)
 	avail := w - 62*k - theme.Lerp(20*k, 206*k, ft)
 	if avail > 4 {
@@ -193,7 +200,7 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 			case btnClose:
 				enabled = enabled && r.canClose()
 			}
-			r.HeaderButton(c, holderKey(p.uid, b), icons[b], headerButtons[b], w-dx[b]*k, hc+k, 28*k, enabled)
+			r.HeaderButton(c, holderKey(t, p.uid, b), icons[b], headerButtons[b], w-dx[b]*k, hc+k, 28*k, enabled)
 		}
 		c.PopOpacity()
 	}
@@ -216,13 +223,13 @@ func (r *Rex) drawPane(c *ui.Context, t *tab, slot int8, d [4]float32, ft, opa f
 	r.th.Chrome.EndSurface(c, r.th, s, kg)
 }
 
-// drawDividers builds the grab areas of the gutters between panes (theme.Chrome.Divider).
+// drawDividers builds the grab areas of the gutters between panes
+// (theme.Chrome.Divider), each a divider for the keyboard and the
+// accessibility tree (workspace.Layout.NextDivider).
 func (r *Rex) drawDividers(c *ui.Context, t *tab) {
-	for i := range t.nodes {
-		n := &t.nodes[i]
-		if !n.used || n.leaf {
-			continue
-		}
-		r.th.Chrome.Divider(c, r.th, divKey(n.uid), n.axis, n.rect, n.gut)
+	for i := 0; i < t.ws.NumDividers(); i++ {
+		d := t.ws.Divider(i)
+		t.ws.NextDivider(c, &d)
+		r.th.Chrome.Divider(c, r.th, d.Key, d.Axis, d.Rect, d.Gutter)
 	}
 }

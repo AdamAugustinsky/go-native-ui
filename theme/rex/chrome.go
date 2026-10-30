@@ -82,7 +82,7 @@ func (ch *chrome) SurfaceShadow(c *ui.Context, r *theme.Resolved, s theme.Surfac
 	a2 := theme.Lerp(theme.Lerp(0.035, 0.22, r.T), theme.Lerp(0.05, 0.30, r.T), ft)
 	c.PushOpacity(s.Opacity)
 	theme.At(c, d[0], d[1], d[2]-d[0], d[3]-d[1])
-	c.NextRadius(r.Px.RadiusLarge)
+	c.NextRadius(paneRadius(r))
 	c.NextShadows(
 		ui.Shadow{OffY: 1 * kk, Sigma: 1.5 * kk, Color: theme.ColA(rgb, a1)},
 		ui.Shadow{OffY: 3 * kk, Sigma: 5 * kk, Color: theme.ColA(rgb, a2)})
@@ -101,7 +101,7 @@ func (ch *chrome) drawFill(c *ui.Context, r *theme.Resolved, s theme.Surface, kg
 	d, ft := s.Rect, s.Focus
 	// the glass samples the background where the surface is in the window
 	win := [4]float32{d[0] + s.Origin[0], d[1] + s.Origin[1], d[2] + s.Origin[0], d[3] + s.Origin[1]}
-	m.Update(&ch.fld, win, r.Px.RadiusLarge)
+	m.Update(&ch.fld, win, paneRadius(r))
 	to := r.Pal.Surface | 0xFF
 	for i := 0; i < m.n; i++ {
 		cell := &m.cells[i]
@@ -120,7 +120,7 @@ func (ch *chrome) drawFill(c *ui.Context, r *theme.Resolved, s theme.Surface, kg
 func (ch *chrome) BeginSurface(c *ui.Context, r *theme.Resolved, s theme.Surface) theme.KeyGen {
 	ch.ensure(c, r)
 	kk := r.Scale / 2
-	rad := r.Px.RadiusLarge
+	rad := paneRadius(r)
 	lw := r.Px.BorderW
 	d, ft := s.Rect, s.Focus
 	w, h := d[2]-d[0], d[3]-d[1]
@@ -183,7 +183,7 @@ func (ch *chrome) BeginSurface(c *ui.Context, r *theme.Resolved, s theme.Surface
 // the hairline, along the sides and round the corners but not along the flat
 // top and bottom) and closes the pane BeginSurface opened.
 func (ch *chrome) EndSurface(c *ui.Context, r *theme.Resolved, s theme.Surface, kg theme.KeyGen) {
-	rad := r.Px.RadiusLarge
+	rad := paneRadius(r)
 	lw := r.Px.BorderW
 	d, ft := s.Rect, s.Focus
 	w, h := d[2]-d[0], d[3]-d[1]
@@ -197,8 +197,15 @@ func (ch *chrome) EndSurface(c *ui.Context, r *theme.Resolved, s theme.Surface, 
 	}
 	theme.At(c, 0, 0, w, h)
 	c.NextRadius(rad)
-	c.NextBorder(tone(r, 0x5C5E60, 0xFFFFFF, 0.25, 0.11, 1), lw)
-	c.NextBorderSides(ui.SideLeft | ui.SideRight)
+	if r.Settings.IncreaseContrast {
+		// the pane's profile outlines it all round, in a colour that holds
+		// its contrast (theme.SurfaceProfile)
+		p := r.Surface(theme.SurfacePane, false)
+		c.NextBorder(p.Stroke, max(lw, p.StrokeW))
+	} else {
+		c.NextBorder(tone(r, 0x5C5E60, 0xFFFFFF, 0.25, 0.11, 1), lw)
+		c.NextBorderSides(ui.SideLeft | ui.SideRight)
+	}
 	c.BoxKeyed(ui.DrawBorder|fl, kg.Next(), nil)
 	c.Pop()
 	c.PopOpacity()
@@ -206,7 +213,7 @@ func (ch *chrome) EndSurface(c *ui.Context, r *theme.Resolved, s theme.Surface, 
 
 // Divider builds the grab area of the gutter, at least DividerGrab wide
 // across it, with the resize cursor, and the slim handle shown while the
-// pointer is on it or it is dragged.
+// pointer is on it, it is dragged, or it has the keyboard focus.
 func (ch *chrome) Divider(c *ui.Context, r *theme.Resolved, key ui.Key, axis ui.Axis, rect, gut [4]float32) ui.ID {
 	s := r.Scale
 	g := gut
@@ -225,6 +232,9 @@ func (ch *chrome) Divider(c *ui.Context, r *theme.Resolved, key ui.Key, axis ui.
 		x0, x1 = theme.Snap(x0-grow), theme.Snap(x1+grow)
 	}
 	show := max(c.HotTOf(key), c.ActiveTOf(key))
+	if c.FocusVisible() {
+		show = max(show, c.FocusTOf(key)) // a divider focused from the keyboard shows where it is
+	}
 	theme.At(c, x0, y0, x1-x0, y1-y0)
 	c.NextCursor(cur)
 	id := c.BoxKeyed(ui.Clickable|ui.HotAnimation|ui.ActiveAnimation|fl, key, nil)
@@ -242,6 +252,10 @@ func (ch *chrome) Divider(c *ui.Context, r *theme.Resolved, key ui.Key, axis ui.
 	}
 	return id
 }
+
+// paneRadius is the corner radius of a pane: its surface profile's, which
+// follows the app's density (theme.Resolved.SetDensity).
+func paneRadius(r *theme.Resolved) float32 { return r.Surface(theme.SurfacePane, false).Radius }
 
 // strBytes views s as bytes without copying.
 func strBytes(s string) []byte { return unsafe.Slice(unsafe.StringData(s), len(s)) }

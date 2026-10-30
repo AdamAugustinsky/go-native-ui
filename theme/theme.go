@@ -103,6 +103,9 @@ type Theme struct {
 	Materials [NumMaterials]MaterialSpec
 	// Window is the window-level geometry in points; zero takes MacWindow.
 	Window WindowSpec
+	// Surfaces are the surface roles (Resolved.Surface); zero takes
+	// MacSurfaces.
+	Surfaces [NumSurfaceRoles]SurfaceSpec
 	// NewChrome makes the Chrome of one window; it is called by Resolve.
 	NewChrome func() Chrome
 }
@@ -192,6 +195,16 @@ type Resolved struct {
 	own       [NumRoles]bool // Theme.Own
 	motion    Motion         // the theme's, before Reduce Motion
 	materials [NumMaterials]MaterialSpec
+
+	// The surface profiles (surface.go): the specs, the density, the
+	// profiles of an active and an inactive window, and what they were
+	// resolved for; mixes counts Mix's calls.
+	surfSpecs [NumSurfaceRoles]SurfaceSpec
+	density   Density
+	surfaces  [NumSurfaceRoles][2]SurfaceProfile
+	surfKey   surfaceKey
+	surfOK    bool
+	mixes     uint32
 }
 
 // SetAccent makes the theme's accent light in light mode and dark in dark,
@@ -296,6 +309,7 @@ func (t *Theme) resolveTokens(r *Resolved, ts TextSystem, scale float32) {
 		r.Elevations[i] = e.scaled(scale)
 	}
 	r.materials = orDefault(t.Materials, MacMaterials)
+	r.surfSpecs = orDefault(t.Surfaces, MacSurfaces)
 	r.Window = orDefault(t.Window, MacWindow).scaled(scale)
 	r.applySystem()
 }
@@ -315,6 +329,7 @@ func orDefault[T comparable](v, def T) T {
 func (r *Resolved) Mix(t float32) {
 	t = Clamp01(t)
 	r.T = t
+	r.mixes++
 	switch t {
 	case 0:
 		r.Pal, r.Colors = r.pal[0], r.roles[0]

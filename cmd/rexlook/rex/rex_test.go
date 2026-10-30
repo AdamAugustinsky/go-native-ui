@@ -9,6 +9,7 @@ import (
 	"gonativeui/theme"
 	rextheme "gonativeui/theme/rex"
 	"gonativeui/ui"
+	"gonativeui/widget/workspace"
 )
 
 // These tests drive the scene over a fake text system (no fonts, no GPU), so
@@ -63,10 +64,22 @@ func (h *hrn) blank(slot int) (float32, float32) {
 	return d[2] - 30*h.x.K, d[3] - 30*h.x.K
 }
 
-func (h *hrn) rootDivider() (rect [4]float32, n int8) {
+// rootDivider is the divider of the tree's root split (the layout's first).
+func (h *hrn) rootDivider() (rect [4]float32, d workspace.Divider) {
+	d = h.cur().ws.Divider(0)
+	return d.Gutter, d
+}
+
+// dividerY is a stacked split's divider.
+func (h *hrn) dividerY() workspace.Divider {
 	t := h.cur()
-	n = t.root
-	return t.nodes[n].gut, n
+	for i := 0; i < t.ws.NumDividers(); i++ {
+		if d := t.ws.Divider(i); d.Axis == ui.AxisY {
+			return d
+		}
+	}
+	h.t.Fatal("no stacked split")
+	return workspace.Divider{}
 }
 
 func inside(r, outer [4]float32) bool {
@@ -106,7 +119,7 @@ func TestInitialLayout(t *testing.T) {
 	if h.x.active != 0 || h.x.nTabs != 3 || h.cur().numPanes() != 3 {
 		t.Errorf("initial state: tab %d of %d, %d panes", h.x.active, h.x.nTabs, h.cur().numPanes())
 	}
-	if h.cur().focus != h.cur().panes[h.paneSlot(kindAgent)].uid {
+	if h.cur().focus() != h.cur().panes[h.paneSlot(kindAgent)].uid {
 		t.Error("the agent pane starts focused")
 	}
 	if h.c.Animating() {
@@ -142,8 +155,8 @@ func (h *hrn) checkLayout(wPt, hPt int, scale float32) {
 			continue
 		}
 		r := h.rectOf(i)
-		if tab.rects[i] != r {
-			h.t.Errorf("%dx%dpt@%v: pane %d displayed at %v, laid out at %v (stale during resize)", wPt, hPt, scale, i, r, tab.rects[i])
+		if tab.rect(int8(i)) != r {
+			h.t.Errorf("%dx%dpt@%v: pane %d displayed at %v, laid out at %v (stale during resize)", wPt, hPt, scale, i, r, tab.rect(int8(i)))
 		}
 		if !inside(r, work) || r[2]-r[0] < 1 || r[3]-r[1] < 1 {
 			h.t.Errorf("%dx%dpt@%v: pane %d at %v outside the work area %v", wPt, hPt, scale, i, r, work)
@@ -156,15 +169,12 @@ func (h *hrn) checkLayout(wPt, hPt int, scale float32) {
 		rects = append(rects, r)
 	}
 	// Every split keeps its gutter.
-	for i := range tab.nodes {
-		n := &tab.nodes[i]
-		if !n.used || n.leaf {
-			continue
-		}
-		g := n.gut
+	for i := 0; i < tab.ws.NumDividers(); i++ {
+		n := tab.ws.Divider(i)
+		g := n.Gutter
 		want := gt.x
 		got := g[2] - g[0]
-		if n.axis == ui.AxisY {
+		if n.Axis == ui.AxisY {
 			want, got = gt.y, g[3]-g[1]
 		}
 		if got != want {
@@ -189,7 +199,7 @@ func TestLayoutCrowded(t *testing.T) {
 	h := newHarness(t, 600, 400, 2)
 	for i := 0; i < 12; i++ {
 		tab := h.cur()
-		slot := tab.slotOf(tab.focus)
+		slot := tab.slotOf(tab.focus())
 		axis := ui.AxisX
 		if i%2 == 1 {
 			axis = ui.AxisY
@@ -214,73 +224,48 @@ func (r *Rex) splitFocus(t *tab, slot int8, axis ui.Axis) {
 
 // ---- tree ----
 
+// The scene's panes follow its layout: a split shares the pane's room with
+// the first keeping the ratio asked, a close gives it back, the scene's
+// state goes with the pane's slot, and the tab holds at most maxPanes.
 func TestTreeSplitAndClose(t *testing.T) {
 	var tb tab
-	tb.setRoot(1, kindShell, 100)
+	tb.setRoot(1, kindShell)
 	if tb.closeLeaf(0) {
 		t.Fatal("the last pane cannot be closed")
 	}
-	np := tb.splitLeaf(0, ui.AxisX, 0.5, 2, kindGit, 101, 102)
-	if np < 0 || tb.numPanes() != 2 {
+	np := tb.splitLeaf(0, ui.AxisX, 0.5, 2, kindGit)
+	if np < 0 || tb.numPanes() != 2 || tb.panes[np].kind != kindGit {
 		t.Fatal("split failed")
 	}
 	g := &gutters{x: 10, y: 10, minW: 100, minH: 50}
-	tb.layout([4]float32{0, 0, 410, 200}, g)
-	if tb.rects[0] != [4]float32{0, 0, 200, 200} || tb.rects[np] != [4]float32{210, 0, 410, 200} {
-		t.Errorf("halves: %v %v", tb.rects[0], tb.rects[np])
+	tb.layout([4]float32{0, 0, 410, 200}, g, 1)
+	if tb.rect(0) != [4]float32{0, 0, 200, 200} || tb.rect(np) != [4]float32{210, 0, 410, 200} {
+		t.Errorf("halves: %v %v", tb.rect(0), tb.rect(np))
 	}
 	// Splitting the second pane stacks it inside its half.
-	nn := tb.splitLeaf(np, ui.AxisY, 0.5, 3, kindSnake, 103, 104)
-	tb.layout([4]float32{0, 0, 410, 200}, g)
-	if tb.rects[np] != [4]float32{210, 0, 410, 95} || tb.rects[nn] != [4]float32{210, 105, 410, 200} {
-		t.Errorf("stacked: %v %v", tb.rects[np], tb.rects[nn])
+	nn := tb.splitLeaf(np, ui.AxisY, 0.3, 3, kindSnake)
+	tb.layout([4]float32{0, 0, 410, 200}, g, 1)
+	if tb.rect(np) != [4]float32{210, 0, 410, 57} || tb.rect(nn) != [4]float32{210, 67, 410, 200} {
+		t.Errorf("stacked: %v %v", tb.rect(np), tb.rect(nn))
 	}
 	// Closing the first pane gives its space to the other column.
-	tb.focus = 1
-	if !tb.closeLeaf(0) {
+	if !tb.closeLeaf(0) || tb.panes[0].used {
 		t.Fatal("close failed")
 	}
-	tb.layout([4]float32{0, 0, 410, 200}, g)
-	if tb.rects[np] != [4]float32{0, 0, 410, 95} || tb.rects[nn] != [4]float32{0, 105, 410, 200} {
-		t.Errorf("after close: %v %v", tb.rects[np], tb.rects[nn])
+	tb.layout([4]float32{0, 0, 410, 200}, g, 1)
+	if tb.rect(np) != [4]float32{0, 0, 410, 57} || tb.rect(nn) != [4]float32{0, 67, 410, 200} {
+		t.Errorf("after close: %v %v", tb.rect(np), tb.rect(nn))
 	}
-	if tb.focus != tb.panes[np].uid {
-		t.Errorf("focus %d after closing the focused pane, want its sibling %d", tb.focus, tb.panes[np].uid)
+	if tb.focus() != tb.panes[np].uid {
+		t.Errorf("focus %d after closing the focused pane, want its sibling %d", tb.focus(), tb.panes[np].uid)
 	}
-	// The tab holds at most maxPanes.
 	for tb.numPanes() < maxPanes {
-		if tb.splitLeaf(np, ui.AxisX, 0.5, uint32(10+tb.numPanes()), kindShell, uint32(200+tb.numPanes()), uint32(300+tb.numPanes())) < 0 {
+		if tb.splitLeaf(np, ui.AxisX, 0.5, uint32(10+tb.numPanes()), kindShell) < 0 {
 			t.Fatal("split below the limit failed")
 		}
 	}
-	if tb.splitLeaf(np, ui.AxisX, 0.5, 99, kindShell, 98, 97) >= 0 {
+	if tb.splitLeaf(np, ui.AxisX, 0.5, 99, kindShell) >= 0 {
 		t.Error("split beyond the limit succeeded")
-	}
-}
-
-func TestDragSplitRespectsMinimums(t *testing.T) {
-	var tb tab
-	tb.setRoot(1, kindShell, 100)
-	tb.splitLeaf(0, ui.AxisX, 0.5, 2, kindGit, 101, 102)
-	g := &gutters{x: 10, y: 10, minW: 100, minH: 50}
-	work := [4]float32{0, 0, 410, 200}
-	tb.layout(work, g)
-	root := tb.root
-	tb.nodes[root].press = tb.nodes[root].ratio
-	tb.dragSplit(root, 37)
-	tb.layout(work, g)
-	if got := tb.rects[0][2]; got != 237 {
-		t.Errorf("dragged by 37: first pane ends at %v, want 237", got)
-	}
-	tb.dragSplit(root, -5000)
-	tb.layout(work, g)
-	if got := tb.rects[0][2]; got != 100 {
-		t.Errorf("dragged far left: %v, want the minimum 100", got)
-	}
-	tb.dragSplit(root, 5000)
-	tb.layout(work, g)
-	if got := tb.rects[1][2] - tb.rects[1][0]; got != 100 {
-		t.Errorf("dragged far right: second pane %v wide, want the minimum 100", got)
 	}
 }
 
@@ -439,7 +424,7 @@ func TestFocusSwitchAnimatesDimming(t *testing.T) {
 	h.in.SetButton(ui.ButtonLeft, true, 1)
 	h.frame()
 	h.in.SetButton(ui.ButtonLeft, false, 0)
-	if h.cur().focus != h.cur().panes[snakeSlot].uid {
+	if h.cur().focus() != h.cur().panes[snakeSlot].uid {
 		t.Fatal("pressing a pane does not focus it")
 	}
 	h.frame()
@@ -547,14 +532,7 @@ func TestDragVerticalDivider(t *testing.T) {
 
 func TestDragHorizontalDivider(t *testing.T) {
 	h := newHarness(t, WindowWidthPt, WindowHeightPt, 2)
-	tab := h.cur()
-	var n int8 = -1
-	for i := range tab.nodes {
-		if tab.nodes[i].used && !tab.nodes[i].leaf && tab.nodes[i].axis == ui.AxisY {
-			n = int8(i)
-		}
-	}
-	g := tab.nodes[n].gut
+	g := h.dividerY().Gutter
 	cx, cy := (g[0]+g[2])/2, (g[1]+g[3])/2
 	agent, git := h.paneSlot(kindAgent), h.paneSlot(kindGit)
 	y1 := h.rectOf(agent)[3]
@@ -606,7 +584,7 @@ func TestSplitMaximiseClose(t *testing.T) {
 	if a[0] != old[0] || s[2] != old[2] || a[1] != old[1] || s[3] != old[3] || s[0]-a[2] != 14 {
 		t.Errorf("split: agent %v, new pane %v, was %v", a, s, old)
 	}
-	if h.cur().focus != h.cur().panes[shell].uid {
+	if h.cur().focus() != h.cur().panes[shell].uid {
 		t.Error("the new pane does not take focus")
 	}
 	if math.Abs(float64((a[2]-a[0])-(s[2]-s[0]))) > 15 {
@@ -623,11 +601,11 @@ func TestSplitMaximiseClose(t *testing.T) {
 	h.checkLayout(WindowWidthPt, WindowHeightPt, 2)
 
 	// Maximise the focused pane: it grows to the work area, animated.
-	uid := h.cur().focus
+	uid := h.cur().focus()
 	fslot := int(h.cur().slotOf(uid))
 	before := h.rectOf(fslot)
 	h.click(h.btn(fslot, btnMax))
-	if h.cur().max != uid {
+	if h.cur().max() != uid {
 		t.Fatal("maximise did not take")
 	}
 	sawMid := false
@@ -648,8 +626,8 @@ func TestSplitMaximiseClose(t *testing.T) {
 	// Restore.
 	h.click(h.btn(fslot, btnMax))
 	h.settle()
-	if h.cur().max != 0 || h.rectOf(fslot) != before {
-		t.Errorf("restore: max %d, pane at %v, was %v", h.cur().max, h.rectOf(fslot), before)
+	if h.cur().max() != 0 || h.rectOf(fslot) != before {
+		t.Errorf("restore: max %d, pane at %v, was %v", h.cur().max(), h.rectOf(fslot), before)
 	}
 
 	// Close the focused pane: its sibling takes the space and the focus.
@@ -658,14 +636,14 @@ func TestSplitMaximiseClose(t *testing.T) {
 	if h.cur().numPanes() != 4 {
 		t.Fatalf("%d panes after a close", h.cur().numPanes())
 	}
-	if h.cur().focus == uid || h.cur().slotOf(h.cur().focus) < 0 {
-		t.Errorf("focus %d after closing %d", h.cur().focus, uid)
+	if h.cur().focus() == uid || h.cur().slotOf(h.cur().focus()) < 0 {
+		t.Errorf("focus %d after closing %d", h.cur().focus(), uid)
 	}
 	h.checkLayout(WindowWidthPt, WindowHeightPt, 2)
 
 	// Back to the reference arrangement by closing the two extra panes.
 	for h.cur().numPanes() > 3 {
-		fs := int(h.cur().slotOf(h.cur().focus))
+		fs := int(h.cur().slotOf(h.cur().focus()))
 		h.click(h.btn(fs, btnClose))
 		h.settle()
 	}
@@ -681,7 +659,7 @@ func TestButtonsOnlyOnFocusedPane(t *testing.T) {
 	if h.cur().numPanes() != 3 {
 		t.Fatalf("an unfocused pane's close button closed it")
 	}
-	if h.cur().focus != h.cur().panes[git].uid {
+	if h.cur().focus() != h.cur().panes[git].uid {
 		t.Error("the click did not focus the pane")
 	}
 }
@@ -711,12 +689,7 @@ func TestCursorHints(t *testing.T) {
 	g, _ := h.rootDivider()
 	check("vertical divider", (g[0]+g[2])/2, (g[1]+g[3])/2, ui.CursorResizeEW)
 	check("vertical divider, grab margin", g[0]-3, (g[1]+g[3])/2, ui.CursorResizeEW)
-	var hg [4]float32
-	for i := range h.cur().nodes {
-		if n := &h.cur().nodes[i]; n.used && !n.leaf && n.axis == ui.AxisY {
-			hg = n.gut
-		}
-	}
+	hg := h.dividerY().Gutter
 	check("horizontal divider", (hg[0]+hg[2])/2, (hg[1]+hg[3])/2, ui.CursorResizeNS)
 }
 
@@ -918,16 +891,13 @@ func TestDividerGrabArea(t *testing.T) {
 		h := newHarness(t, WindowWidthPt, WindowHeightPt, scale)
 		regs := h.c.CursorRegions(nil)
 		found := 0
-		for i := range h.cur().nodes {
-			n := &h.cur().nodes[i]
-			if !n.used || n.leaf {
-				continue
-			}
+		for i := 0; i < h.cur().ws.NumDividers(); i++ {
+			n := h.cur().ws.Divider(i)
 			want, ax := ui.CursorResizeEW, 0
-			if n.axis == ui.AxisY {
+			if n.Axis == ui.AxisY {
 				want, ax = ui.CursorResizeNS, 1
 			}
-			cx, cy := centre(n.gut)
+			cx, cy := centre(n.Gutter)
 			var got [4]float32
 			ok := false
 			for _, r := range regs {
@@ -936,18 +906,18 @@ func TestDividerGrabArea(t *testing.T) {
 				}
 			}
 			if !ok {
-				t.Fatalf("scale %v: no %v region over the gutter %v", scale, want, n.gut)
+				t.Fatalf("scale %v: no %v region over the gutter %v", scale, want, n.Gutter)
 			}
 			found++
 			if w := got[ax+2] - got[ax]; w < 8*scale {
 				t.Errorf("scale %v: grab area %v pt across, want at least 8", scale, w/scale)
 			}
-			if mid, gm := (got[ax]+got[ax+2])/2, (n.gut[ax]+n.gut[ax+2])/2; mid < gm-1 || mid > gm+1 {
-				t.Errorf("scale %v: grab area %v is not centred on the gutter %v", scale, got, n.gut)
+			if mid, gm := (got[ax]+got[ax+2])/2, (n.Gutter[ax]+n.Gutter[ax+2])/2; mid < gm-1 || mid > gm+1 {
+				t.Errorf("scale %v: grab area %v is not centred on the gutter %v", scale, got, n.Gutter)
 			}
 			other := 1 - ax
-			if got[other] > n.rect[other]+1 || got[other+2] < n.rect[other+2]-1 {
-				t.Errorf("scale %v: grab area %v does not span the split %v", scale, got, n.rect)
+			if got[other] > n.Rect[other]+1 || got[other+2] < n.Rect[other+2]-1 {
+				t.Errorf("scale %v: grab area %v does not span the split %v", scale, got, n.Rect)
 			}
 		}
 		if found != 2 {

@@ -125,9 +125,9 @@ func TestScriptsExercise(t *testing.T) {
 			lightAgain++
 		}
 		tb := x.cur()
-		if tb.focus != lastFocus {
+		if tb.focus() != lastFocus {
 			focusChanges++
-			lastFocus = tb.focus
+			lastFocus = tb.focus()
 		}
 		if x.active != lastTab {
 			tabChanges++
@@ -135,13 +135,11 @@ func TestScriptsExercise(t *testing.T) {
 		}
 		maxSeen = max(maxSeen, tb.numPanes())
 		minSeen = min(minSeen, tb.numPanes())
-		if tb.max != 0 {
+		if tb.max() != 0 {
 			maximised++
 		}
-		for i := range tb.nodes {
-			if n := &tb.nodes[i]; n.used && !n.leaf {
-				ratios[n.ratio] = true
-			}
+		for i := 0; i < tb.ws.NumDividers(); i++ {
+			ratios[tb.ws.Divider(i).Share] = true
 		}
 	}
 	s := &tscript{script: script{x: h.x, in: &h.in, modes: true}, frame: track}

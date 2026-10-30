@@ -73,7 +73,7 @@ func (s *script) pane(i int) [4]float32 {
 
 func (s *script) focused() [4]float32 {
 	t := s.x.cur()
-	return s.x.disp[t.slotOf(t.focus)]
+	return s.x.disp[t.slotOf(t.focus())]
 }
 
 // step sets the input of one frame of the pointer/focus/drag script (900
@@ -109,8 +109,7 @@ func (s *script) step() {
 			s.up()
 		}
 	case f >= 520 && f < 700: // drag the divider between the columns right and left
-		t := x.cur()
-		g := t.nodes[t.root].gut
+		g := x.cur().ws.Divider(0).Gutter // the root's
 		switch {
 		case f == 520:
 			s.dragX, s.dragY = (g[0]+g[2])/2, (g[1]+g[3])/2
@@ -125,9 +124,9 @@ func (s *script) step() {
 	case f >= 700 && f < 780: // the horizontal divider
 		t := x.cur()
 		var g [4]float32
-		for i := range t.nodes {
-			if n := &t.nodes[i]; n.used && !n.leaf && n.axis == ui.AxisY {
-				g = n.gut
+		for i := 0; i < t.ws.NumDividers(); i++ {
+			if d := t.ws.Divider(i); d.Axis == ui.AxisY {
+				g = d.Gutter
 			}
 		}
 		switch {
