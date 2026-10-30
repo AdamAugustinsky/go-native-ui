@@ -327,23 +327,7 @@ func (s *Sim) draw(v *simWindow, now int64) error {
 	if s.allocs {
 		runtime.ReadMemStats(&s.stats[0])
 	}
-	_, dirty := a.tr.take()
-	a.tr.in.Time = now
-	a.settle = false
-	a.UI.SetSystemAppearance(s.appearance)
-	a.build(a.w, a.h, a.frameDT(now))
-	a.drawPlaceholders()
-	a.syncText(v, now)
-	v.ax.Sync()
-	why := a.arm(false, a.UI.Animating(), dirty, now)
-	if s.opts.Render {
-		a.R.RenderToRGBA(a.w, a.h, a.cfg.Clear, &a.list, v.pixels.Pix)
-	}
-	a.owedWhy, a.more = why, why != 0
-	a.p.drawn(a.more)
-	a.frames++
-	v.frames++
-	a.lastDrawT = now
+	why := s.frame(v, now)
 	if s.allocs {
 		runtime.ReadMemStats(&s.stats[1])
 		if n := s.stats[1].Mallocs - s.stats[0].Mallocs; n != 0 {
@@ -360,6 +344,30 @@ func (s *Sim) draw(v *simWindow, now int64) error {
 		v.cause = SimContinuation
 	}
 	return nil
+}
+
+// frame is the measured part of draw: the frame the app would draw, without
+// the simulator's own hashing and trace.
+func (s *Sim) frame(v *simWindow, now int64) (why owedMask) {
+	a := v.a
+	_, dirty := a.tr.take()
+	a.tr.in.Time = now
+	a.settle = false
+	a.UI.SetSystemAppearance(s.appearance)
+	a.build(a.w, a.h, a.frameDT(now))
+	a.drawPlaceholders()
+	a.syncText(v, now)
+	v.ax.Sync()
+	why = a.arm(false, a.UI.Animating(), dirty, now)
+	if s.opts.Render {
+		a.R.RenderToRGBA(a.w, a.h, a.cfg.Clear, &a.list, v.pixels.Pix)
+	}
+	a.owedWhy, a.more = why, why != 0
+	a.p.drawn(a.more)
+	a.frames++
+	v.frames++
+	a.lastDrawT = now
+	return why
 }
 
 func (v *simWindow) RequestFrame() {
@@ -459,8 +467,9 @@ func (s *Sim) CheckAllocations(on bool) {
 }
 
 // drawAllocations attributes what the frames drawn since the last
-// attribution allocated: the sites of ours under (*Sim).draw, or "" if every
-// allocation was the runtime's or made off the draw (a worker, an event). The
+// attribution allocated: the sites of ours under (*Sim).frame, or "" if every
+// allocation was the runtime's or made off the frame (a worker, an event, the
+// simulator's trace). The
 // collection it needs runs only after a frame allocated.
 func (s *Sim) drawAllocations() string {
 	runtime.GC()
@@ -471,7 +480,7 @@ func (s *Sim) drawAllocations() string {
 	for _, site := range sites {
 		// A stack the profile cut at 32 frames may hide the draw: count it.
 		if site.Class == allocsite.Ours && (len(site.Stack) >= 32 || slices.ContainsFunc(site.Stack, func(f string) bool {
-			return strings.HasPrefix(f, "gonativeui/app.(*Sim).draw ")
+			return strings.HasPrefix(f, "gonativeui/app.(*Sim).frame ")
 		})) {
 			ours = append(ours, site)
 		}
