@@ -367,6 +367,41 @@ type simFlat struct {
 	held          [][]byte
 }
 
+type simConverging struct{ overflow bool }
+
+func (b simConverging) Build(c *ui.Context) {
+	c.NextSize(ui.Pct(1), ui.Pct(1))
+	p := c.Box(0, "parent")
+	r := c.Rect(p)
+	c.Push(p)
+	w := float32(200)
+	if !b.overflow && r[2] > r[0] {
+		w = r[2] - r[0]
+	}
+	c.NextSize(ui.Px(w), ui.Px(20))
+	c.NextBG(0xff0000ff)
+	c.Box(ui.DrawBackground, "child")
+	c.Pop()
+}
+
+func TestSimAuditConvergesAndRejectsSettledOverflow(t *testing.T) {
+	for _, overflow := range []bool{false, true} {
+		t.Run(fmt.Sprint(overflow), func(t *testing.T) {
+			s, err := NewSim(Config{}, 100, 100, 1, simConverging{overflow}, SimOptions{})
+			simMust(t, err)
+			defer s.Close()
+			err = s.Advance(time.Second)
+			if overflow {
+				if err == nil || !strings.Contains(err.Error(), "overflow") {
+					t.Fatalf("settled overflow: %v", err)
+				}
+			} else {
+				simMust(t, err)
+			}
+		})
+	}
+}
+
 func (b *simFlat) Build(c *ui.Context) {
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.NextBG(0x202020ff)

@@ -130,10 +130,11 @@ func (s *Sim) FrameHash(id int) (draw, sem uint64) { v := s.windows[id]; return 
 // measurements are explicit checkpoints (Memory and CheckAllocations).
 type SimCheck func(*Sim) error
 
-// SimAudit checks the real layout audit of each finished window.
+// SimAudit checks the real layout audit once the previous-layout reads have
+// converged. UI bounds convergence itself; a settled overflow still fails.
 func SimAudit(s *Sim) error {
 	for _, v := range s.windows {
-		if !v.closed && v.frames > v.audited {
+		if !v.closed && v.frames > v.audited && !v.a.more {
 			if f := v.a.UI.Audit(nil); len(f) > 0 {
 				return fmt.Errorf("window %d layout: %s", v.id, f[0].String())
 			}

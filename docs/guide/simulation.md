@@ -67,8 +67,8 @@ records; `TraceHash` excludes real-time measurements and heap observations.
 Replay is comparable on the same host and font/OS environment; native text
 versions and external data can change the result.
 
-The default `SimCheck`s require a clean layout audit and a cause for every
-frame. Custom checks run after every step, and failures include the seed,
+The default `SimCheck`s require a clean layout audit after the UI's bounded
+layout convergence and a cause for every frame. Custom checks run after every step, and failures include the seed,
 step, virtual time and recent trace. Use these checkpoints as well:
 
 - `CheckAllocations(true)` enables exact per-frame `runtime.ReadMemStats`
