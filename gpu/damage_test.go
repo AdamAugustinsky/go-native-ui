@@ -84,6 +84,13 @@ func checkDamage(t *testing.T, a, b *DrawList, writes []TextureWrite, d *Damage)
 	if d.Full {
 		return
 	}
+	for i := 0; i < d.N; i++ {
+		for j := i + 1; j < d.N; j++ {
+			if overlaps(d.Rects[i], d.Rects[j]) {
+				t.Fatalf("damage rectangles %v and %v overlap: a partial frame would blend them twice", d.Rects[i], d.Rects[j])
+			}
+		}
+	}
 	for i := range b.Quads {
 		x0, y0, x1, y1, ok := backdropRegion(&b.Quads[i], dmW, dmH)
 		if b.Quads[i].Mode != ModeBackdrop || !ok {

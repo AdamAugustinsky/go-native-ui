@@ -1381,4 +1381,10 @@ So a partial frame drawn into a retained back buffer and copied to the drawable 
 - **Bounds:** `quadBounds` is tested case by case against `vs_main`.
 - **Cost:** 10,000 quads with one change diff in about 0.17 ms, with no allocations once the buffers have grown.
 
-**Not done:** the retained back buffer, a scissored and LoadAction-Load `Encode`, the copy to the drawable, skipping the present of an empty frame, recording `TextureWrite`s in `Upload`/`Stage`/`FreeTexture`/imports, and a debug mode that compares each partial frame with a full one.
+**Partial frames on Metal.** `Renderer.EncodeDamaged` draws a frame into a retained back buffer (`NewBackBuffer`: private BGRA8, render target and shader read) and copies it to the drawable. A `Full` damage is the old whole-frame `Encode`. Otherwise:
+- **Clear:** each rectangle is set to the clear colour by blits from a 256×256 tile cleared by a LoadAction Clear pass, so its bytes are exactly a cleared target's.
+- **Draw:** the list is encoded once per rectangle with LoadAction Load and the rectangle as scissor. Every pass binds the same texture slots, since the GPU reads the one instance copy after encoding: a backdrop outside the scissor still splits the pass.
+- **Texture writes:** `NewTexture`, `FreeTexture`, `Upload`, `Stage`, `StageYUV` and new pixel-buffer imports note what they wrote in a fixed log of 1024 entries. `TextureWrites(since)` returns those since a serial, or `complete == false` when the log has dropped some, and the caller then resets its tracker. The Linux and Windows backends report `false` always, so they keep drawing whole frames.
+- **Checked:** `TestPartialFramesMatchWholeFrames` draws each frame both ways on the GPU (300 random lists of 6 frames, 4 clear colours including a translucent one, real textures and staged writes between frames) and compares every byte; runs of 1,500 and 2,200 lists also matched. `TestPartialFramesOfAWindow` does the same on a 1280×800 window with a pane, its shadow, 400 glyphs and a backdrop band: a caret, a glyph, a quad under the band and an unchanged frame.
+
+**Not done:** using it in `app/frame.go` (a tracker per surface, the back buffer's lifetime and live resize), skipping the present of an empty frame, a debug mode that compares each partial frame with a full one in the app, and the other backends.

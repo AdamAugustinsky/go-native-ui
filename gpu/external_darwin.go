@@ -355,7 +355,9 @@ func (r *Renderer) ImportPixelBuffer(pb uintptr, turns int) (TextureID, error) {
 		w:      int32(w), h: int32(h),
 		format: YUVNV12, space: sp, turns: uint8(turns & 3),
 	}
-	return r.importID(k), nil
+	id := r.importID(k)
+	r.texLog.note(id, 0, 0, 0, 0) // a new frame under a reused id
+	return id, nil
 }
 
 // cvTexture is a CVMetalTextureRef of plane plane of pb (0 on failure).

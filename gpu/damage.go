@@ -325,42 +325,31 @@ func (t *DamageTracker) finish(cur []Quad, w, h int) Damage {
 			t.regs = append(t.regs, reg)
 		}
 	}
+	// Three rules, applied together until none changes anything: a
+	// backdrop region the damage reaches lies in one rectangle with all that
+	// crosses it; rectangles are disjoint (a partial frame draws each one's
+	// quads again: a pixel in two would be blended twice); there are at most
+	// MaxDamageRects (the pair that adds least area is joined). Each change
+	// joins rectangles or grows one, so it ends.
 	for changed := true; changed; {
-		changed = false
-		for _, reg := range t.regs {
-			merged, hits, first := reg, 0, [4]int32{}
-			keep := t.raw[:0]
-			for _, r := range t.raw {
-				if overlaps(r, reg) {
-					if hits == 0 {
-						first = r
+		changed = t.takeRegions()
+		if t.disjoin() {
+			changed = true
+		}
+		if len(t.raw) > MaxDamageRects {
+			bi, bj, cost := 0, 1, int64(math.MaxInt64)
+			for i := range t.raw {
+				for j := i + 1; j < len(t.raw); j++ {
+					u := union(t.raw[i], t.raw[j])
+					if c := area(u) - area(t.raw[i]) - area(t.raw[j]); c < cost {
+						bi, bj, cost = i, j, c
 					}
-					merged, hits = union(merged, r), hits+1
-				} else {
-					keep = append(keep, r)
 				}
 			}
-			if hits == 0 {
-				continue
-			}
-			// one rectangle that already holds the region: nothing changes
-			changed = changed || hits > 1 || !contains(first, reg)
-			t.raw = append(keep, merged)
+			t.raw[bi] = union(t.raw[bi], t.raw[bj])
+			t.raw = slices.Delete(t.raw, bj, bj+1)
+			changed = true
 		}
-	}
-	// merge to MaxDamageRects, joining the pair that adds least area
-	for len(t.raw) > MaxDamageRects {
-		bi, bj, cost := 0, 1, int64(math.MaxInt64)
-		for i := range t.raw {
-			for j := i + 1; j < len(t.raw); j++ {
-				u := union(t.raw[i], t.raw[j])
-				if c := area(u) - area(t.raw[i]) - area(t.raw[j]); c < cost {
-					bi, bj, cost = i, j, c
-				}
-			}
-		}
-		t.raw[bi] = union(t.raw[bi], t.raw[bj])
-		t.raw = slices.Delete(t.raw, bj, bj+1)
 	}
 	var sum int64
 	for _, r := range t.raw {
@@ -372,6 +361,53 @@ func (t *DamageTracker) finish(cur []Quad, w, h int) Damage {
 	}
 	d.N = copy(d.Rects[:], t.raw)
 	return d
+}
+
+// takeRegions makes each backdrop region a rectangle reaches one
+// rectangle with all that crosses it, and reports whether that changed
+// anything.
+func (t *DamageTracker) takeRegions() bool {
+	changed := false
+	for _, reg := range t.regs {
+		merged, hits, first := reg, 0, [4]int32{}
+		keep := t.raw[:0]
+		for _, r := range t.raw {
+			if overlaps(r, reg) {
+				if hits == 0 {
+					first = r
+				}
+				merged, hits = union(merged, r), hits+1
+			} else {
+				keep = append(keep, r)
+			}
+		}
+		if hits == 0 {
+			continue
+		}
+		// one rectangle that already holds the region: nothing changes
+		changed = changed || hits > 1 || !contains(first, reg)
+		t.raw = append(keep, merged)
+	}
+	return changed
+}
+
+// disjoin joins overlapping rectangles until none overlap, and reports
+// whether it joined any.
+func (t *DamageTracker) disjoin() (any bool) {
+	for joined := true; joined; {
+		joined = false
+		for i := 0; i < len(t.raw); i++ {
+			for j := i + 1; j < len(t.raw); j++ {
+				if overlaps(t.raw[i], t.raw[j]) {
+					t.raw[i] = union(t.raw[i], t.raw[j])
+					t.raw = slices.Delete(t.raw, j, j+1)
+					joined, any = true, true
+					j = i // the grown rectangle may reach ones already passed
+				}
+			}
+		}
+	}
+	return any
 }
 
 // quadBounds is the part of a w×h target quad q's geometry covers, in whole
@@ -491,4 +527,55 @@ func grow32(b []int32, n int) []int32 {
 		b = make([]int32, n)
 	}
 	return b[:n]
+}
+
+// texLogMax bounds the texture-write log: past it the older half is
+// dropped, and a tracker that had not read them redraws in full.
+const texLogMax = 1024
+
+// textureLog records the writes to a renderer's textures, each under a
+// serial, for the damage trackers of the windows it draws (TextureWrites).
+type textureLog struct {
+	ents  []texLogEnt
+	next  uint64 // the serial of the next write
+	first uint64 // the oldest serial still kept
+}
+
+type texLogEnt struct {
+	serial uint64
+	w      TextureWrite
+}
+
+// note records a write to texture t: the texel rectangle (x, y, w, h), or
+// the whole texture when w is 0.
+func (l *textureLog) note(t TextureID, x, y, w, h int) {
+	var r [4]int32
+	if w > 0 && h > 0 {
+		r = [4]int32{int32(x), int32(y), int32(x + w), int32(y + h)}
+	}
+	if l.ents == nil {
+		l.ents = make([]texLogEnt, 0, texLogMax) // once: the log never grows past it
+	}
+	if len(l.ents) == texLogMax {
+		half := texLogMax / 2
+		l.first = l.ents[half].serial
+		l.ents = l.ents[:copy(l.ents, l.ents[half:])]
+	}
+	l.ents = append(l.ents, texLogEnt{l.next, TextureWrite{t, r}})
+	l.next++
+}
+
+// since appends to dst the writes from serial on and returns them with the
+// serial to pass next time; complete is false when some of them were
+// dropped (the caller then draws the whole frame).
+func (l *textureLog) since(serial uint64, dst []TextureWrite) ([]TextureWrite, uint64, bool) {
+	if serial < l.first {
+		return dst, l.next, false
+	}
+	for i := range l.ents {
+		if l.ents[i].serial >= serial {
+			dst = append(dst, l.ents[i].w)
+		}
+	}
+	return dst, l.next, true
 }

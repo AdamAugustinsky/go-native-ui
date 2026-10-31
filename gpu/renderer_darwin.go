@@ -70,6 +70,9 @@ var (
 	rsSetTAddress  = objc.Sel("setTAddressMode:")
 	rsRPD          = objc.Sel("renderPassDescriptor")
 	rsSetLoad      = objc.Sel("setLoadAction:")
+	rsSetScissor   = objc.Sel("setScissorRect:")
+	rsCopyTex      = objc.Sel("copyFromTexture:toTexture:")
+	rsCopyRegion   = objc.Sel("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:")
 	rsSetStore     = objc.Sel("setStoreAction:")
 	rsSetClear     = objc.Sel("setClearColor:")
 	rsSetTexture   = objc.Sel("setTexture:")
@@ -111,6 +114,12 @@ var (
 	pinnedBytes *byte      // keeps an Upload source on the heap for the duration of the call
 	copySize    [3]uintptr // MTLSize and MTLOrigin of a staged copy, for arm64 (passed by reference)
 	copyOrigin  [3]uintptr
+	// MTLScissorRect of a partial frame's pass, and the MTLOrigin and
+	// MTLSize of a clear tile's copy (clearRects)
+	scissorWords [4]uintptr
+	tileSrc      [3]uintptr
+	tileSize     [3]uintptr
+	tileDst      [3]uintptr
 )
 
 func loadMetal() error {
@@ -208,6 +217,19 @@ type Renderer struct {
 	bd                backdropKit
 	bindings          [3 + runTextures]objc.ID // stable memory for setFragmentTextures:withRange:
 	destroyed         bool
+
+	// texLog records the texture writes for partial frames (damage.go,
+	// TextureWrites); partial holds the frame's damage while Encode draws
+	// a partial frame (EncodeDamaged), sc the rectangle being drawn.
+	texLog  textureLog
+	partial *Damage
+	sc      [4]uintptr // MTLScissorRect: x, y, width, height
+	// clear tiles a partial frame's damaged rectangles are reset from
+	// (clearRects), and the colour they hold
+	clearTile   objc.ID
+	clearTileRP objc.ID
+	clearOf     [4]float32
+	clearOK     bool
 }
 
 // NewRenderer builds the pipeline on an existing device and command queue,
@@ -327,6 +349,7 @@ func (r *Renderer) NewTexture(kind TextureKind, w, h int) TextureID {
 	i, id := r.addTexture(r.newMTLTexture(kind, w, h), kind)
 	r.texW[i], r.texH[i] = w, h
 	r.ids.addBytes(i, texBytes(kind, w, h))
+	r.texLog.note(id, 0, 0, 0, 0)
 	return id
 }
 
@@ -360,6 +383,7 @@ func (r *Renderer) FreeTexture(t TextureID) {
 	if !ok || i == 0 || (r.kinds[i] == texYUV && !r.xtex[i].owned) { // an import is the renderer's to end
 		return
 	}
+	r.texLog.note(t, 0, 0, 0, 0)
 	// Poll once when a batch of frees begins. Collect at the safe point (or
 	// the next Encode) retires the rest, even if no further free follows.
 	collect := len(r.retiring) == 0
@@ -526,6 +550,7 @@ func (r *Renderer) Upload(t TextureID, x, y, w, h int, pixels []byte, stride int
 	if stride < w*bpp || len(pixels) < (h-1)*stride+w*bpp {
 		panic("gpu: Upload: pixels too short for region")
 	}
+	r.texLog.note(t, x, y, w, h)
 	// replaceRegion doesn't synchronise with the GPU: wait until frames
 	// already submitted have stopped sampling the texture.
 	r.waitSubmitted(i)
@@ -566,6 +591,7 @@ func (r *Renderer) Stage(t TextureID, x, y, w, h int, pixels []byte, stride int)
 	if r.kinds[i] == TexRGBA8 {
 		bpp = 4
 	}
+	r.texLog.note(t, x, y, w, h)
 	r.stage(t, 0, x, y, w, h, pixels, stride, bpp, "gpu: Stage: pixels too short for region")
 }
 
@@ -822,6 +848,33 @@ func (r *Renderer) Encode(cmdBuf, target uintptr, width, height int, clear [4]fl
 	objc.Send1(r.color0, rsSetTexture, target)
 	F.Reset().Arg(uintptr(r.color0)).Arg(uintptr(rsSetClear)).
 		ArgRect(float64(clear[0]), float64(clear[1]), float64(clear[2]), float64(clear[3])).Call(objc.MsgSend)
+	if d := r.partial; d != nil {
+		// a partial frame (EncodeDamaged): the target keeps the previous
+		// frame and is drawn again only inside each damaged rectangle
+		objc.Send1(r.color0, rsSetLoad, 1) // Load
+		for _, rc := range d.Rects[:d.N] {
+			r.sc = [4]uintptr{uintptr(rc[0]), uintptr(rc[1]), uintptr(rc[2] - rc[0]), uintptr(rc[3] - rc[1])}
+			r.encodeRun(cmdBuf, target, width, height, list, quads, inst, s, blur, pre)
+		}
+		r.sc = [4]uintptr{}
+		objc.Send1(r.color0, rsSetLoad, 2) // Clear
+	} else {
+		r.encodeRun(cmdBuf, target, width, height, list, quads, inst, s, blur, pre)
+	}
+	objc.Send1(r.color0, rsSetTexture, 0)
+	if blur {
+		objc.Send1(r.bd.loadCol0, rsSetTexture, 0)
+	}
+	if r.ext.nPending > 0 {
+		r.leaseImports(s, cmdBuf)
+	}
+	F.Call1(objc.PoolPop, pool)
+}
+
+// encodeRun encodes the main pass (one, or several split by backdrops) of
+// the frame's quads, already in slot s, inside r.sc when a partial frame
+// sets it.
+func (r *Renderer) encodeRun(cmdBuf, target uintptr, width, height int, list *DrawList, quads, inst []Quad, s *ringSlot, blur bool, pre int) {
 	enc := r.beginPass(cmdBuf, r.rpd, s, r.textures[0])
 
 	// Shape quads join the open run. Plain textures share a small table;
@@ -843,6 +896,21 @@ nextQuad:
 			}
 			if i > runStart {
 				r.draw(enc, runStart, i-runStart)
+			}
+			if r.sc[2] > 0 && !r.scissorMeets(q, width, height) {
+				// a partial frame's rectangle it draws nothing in: no blur,
+				// but the pass splits here as for one drawn, so the texture
+				// table restarts at the same quads in every rectangle's pass
+				// (the slots are written into the frame's one instance copy,
+				// which the GPU reads after all of them are encoded)
+				objc.Send(enc, rsEndEncoding)
+				objc.Send1(r.bd.loadCol0, rsSetTexture, target)
+				enc = r.beginPass(cmdBuf, r.bd.load, s, r.bd.tex[0])
+				bound, yuv = 0, false
+				ntex = 0
+				objc.Send2(enc, rsSetFTexture, uintptr(r.textures[0]), 0)
+				runStart = i + 1
+				continue
 			}
 			objc.Send(enc, rsEndEncoding)
 			b := list.Backdrops[q.Tex]
@@ -889,20 +957,27 @@ nextQuad:
 		r.draw(enc, runStart, len(quads)-runStart)
 	}
 	objc.Send(enc, rsEndEncoding)
-	objc.Send1(r.color0, rsSetTexture, 0)
-	if blur {
-		objc.Send1(r.bd.loadCol0, rsSetTexture, 0)
+}
+
+// scissorMeets reports whether backdrop q draws or reads anything inside
+// r.sc: a backdrop elsewhere is not blurred again in a partial frame.
+func (r *Renderer) scissorMeets(q *Quad, width, height int) bool {
+	b := quadBounds(q, width, height)
+	if x0, y0, x1, y1, ok := backdropRegion(q, width, height); ok {
+		b = union(b, [4]int32{int32(x0), int32(y0), int32(x1), int32(y1)})
 	}
-	if r.ext.nPending > 0 {
-		r.leaseImports(s, cmdBuf)
-	}
-	F.Call1(objc.PoolPop, pool)
+	sc := [4]int32{int32(r.sc[0]), int32(r.sc[1]), int32(r.sc[0] + r.sc[2]), int32(r.sc[1] + r.sc[3])}
+	return overlaps(b, sc)
 }
 
 // beginPass begins an encoder of the main pass with descriptor rpd (its
 // target set) and binds the quad pipeline and slot s's instances.
 func (r *Renderer) beginPass(cmdBuf uintptr, rpd objc.ID, s *ringSlot, texture objc.ID) objc.ID {
 	enc := objc.Send1(objc.ID(cmdBuf), rsEncoder, uintptr(rpd))
+	if r.sc[2] > 0 {
+		scissorWords = r.sc
+		objc.Send1(enc, rsSetScissor, uintptr(unsafe.Pointer(&scissorWords)))
+	}
 	objc.Send1(enc, rsSetPipeline, uintptr(r.pipeline))
 	objc.Send3(enc, rsSetVBuffer, uintptr(s.buf), 0, 0)
 	objc.Send3(enc, rsSetFBuffer, uintptr(s.buf), 0, 0)
@@ -1148,6 +1223,11 @@ func (r *Renderer) Destroy() {
 		r.waker = 0
 	}
 	r.destroyExternal()
+	if r.clearTile != 0 {
+		objc.Release(r.clearTile)
+		objc.Release(r.clearTileRP)
+		r.clearTile, r.clearTileRP = 0, 0
+	}
 	for _, t := range r.textures {
 		if t != 0 {
 			objc.Release(t)
@@ -1177,4 +1257,108 @@ func (r *Renderer) InstanceCapacity() int {
 		n += r.slots[i].quads
 	}
 	return n
+}
+
+// TextureWrites appends to dst the texture writes (Upload, Stage, StageYUV,
+// NewTexture, FreeTexture, ImportPixelBuffer) made since serial, for a
+// DamageTracker, and returns the serial to pass next time; complete is
+// false when the log no longer holds them all (draw the frame whole).
+func (r *Renderer) TextureWrites(since uint64, dst []TextureWrite) ([]TextureWrite, uint64, bool) {
+	return r.texLog.since(since, dst)
+}
+
+// Partial frames (damage.go, D92). A window keeps a back buffer of its
+// size (NewBackBuffer) that holds its last frame; each frame draws into it
+// only where the frame's Damage says it changed, and copies it whole to the
+// window's drawable, whose contents Metal does not keep from frame to frame.
+
+// clearTileSize is the side of the tile a partial frame's damaged
+// rectangles are reset from.
+const clearTileSize = 256
+
+// NewBackBuffer makes a w×h back buffer for EncodeDamaged (a private BGRA8
+// render target the backdrops can read): about 4 bytes a pixel of GPU
+// memory, 27 MB at 3360×2040. ReleaseBackBuffer frees it.
+func (r *Renderer) NewBackBuffer(w, h int) uintptr {
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	d := objc.Send4(clsTexDesc, rsTexDesc, mtlBGRA8Unorm, uintptr(w), uintptr(h), 0)
+	objc.Send1(d, rsSetUsage, 1|4) // ShaderRead | RenderTarget
+	objc.Send1(d, rsSetStorage, 2) // Private
+	return uintptr(objc.Send1(r.device, rsNewTexture, uintptr(d)))
+}
+
+// ReleaseBackBuffer frees a back buffer of NewBackBuffer's once the frames
+// that use it are done (Metal keeps it until then).
+func (r *Renderer) ReleaseBackBuffer(b uintptr) {
+	if b != 0 {
+		objc.Release(objc.ID(b))
+	}
+}
+
+// EncodeDamaged encodes list as Encode does, into back (a back buffer of
+// NewBackBuffer's, of the target's size, holding the previous frame drawn
+// into it) where d says the frame changed, the whole of it when d is Full,
+// and then copies back to target (a drawable; none when 0 or back). A
+// frame with no damage only copies. Every pixel it leaves is the same as a
+// whole frame's would be: d must be a DamageTracker's for this back buffer.
+func (r *Renderer) EncodeDamaged(cmdBuf, target, back uintptr, width, height int, clear [4]float32, list *DrawList, d *Damage) {
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	if d.Full {
+		r.Encode(cmdBuf, back, width, height, clear, list)
+	} else {
+		if d.N > 0 {
+			r.clearRects(cmdBuf, back, clear, d)
+		}
+		r.partial = d
+		r.Encode(cmdBuf, back, width, height, clear, list)
+		r.partial = nil
+	}
+	if target != 0 && target != back {
+		blit := objc.Send(objc.ID(cmdBuf), rsBlitEncoder)
+		objc.Send2(blit, rsCopyTex, back, target)
+		objc.Send(blit, rsEndEncoding)
+	}
+}
+
+// clearRects resets d's rectangles of back to clear, from a tile that
+// Metal's own clear filled, so they hold exactly what a whole frame's
+// LoadActionClear writes (a colour with alpha 0 included, which no blended
+// quad could write).
+func (r *Renderer) clearRects(cmdBuf, back uintptr, clear [4]float32, d *Damage) {
+	if r.clearTile == 0 {
+		t := objc.Send4(clsTexDesc, rsTexDesc, mtlBGRA8Unorm, clearTileSize, clearTileSize, 0)
+		objc.Send1(t, rsSetUsage, 4)   // RenderTarget
+		objc.Send1(t, rsSetStorage, 2) // Private
+		r.clearTile = objc.Send1(r.device, rsNewTexture, uintptr(t))
+		r.clearTileRP = objc.Retain(objc.Send(clsRPD, rsRPD))
+		c0 := objc.Send1(objc.Send(r.clearTileRP, rsColorAttach), rsObjectAt, 0)
+		objc.Send1(c0, rsSetTexture, uintptr(r.clearTile))
+		objc.Send1(c0, rsSetLoad, 2)  // Clear
+		objc.Send1(c0, rsSetStore, 1) // Store
+		r.clearOK = false
+	}
+	if !r.clearOK || r.clearOf != clear {
+		c0 := objc.Send1(objc.Send(r.clearTileRP, rsColorAttach), rsObjectAt, 0)
+		objc.F.Reset().Arg(uintptr(c0)).Arg(uintptr(rsSetClear)).
+			ArgRect(float64(clear[0]), float64(clear[1]), float64(clear[2]), float64(clear[3])).Call(objc.MsgSend)
+		enc := objc.Send1(objc.ID(cmdBuf), rsEncoder, uintptr(r.clearTileRP))
+		objc.Send(enc, rsEndEncoding)
+		r.clearOf, r.clearOK = clear, true
+	}
+	blit := objc.Send(objc.ID(cmdBuf), rsBlitEncoder)
+	for _, rc := range d.Rects[:d.N] {
+		for y := rc[1]; y < rc[3]; y += clearTileSize {
+			for x := rc[0]; x < rc[2]; x += clearTileSize {
+				tileSrc = [3]uintptr{0, 0, 0}
+				tileSize = [3]uintptr{uintptr(min(clearTileSize, rc[2]-x)), uintptr(min(clearTileSize, rc[3]-y)), 1}
+				tileDst = [3]uintptr{uintptr(x), uintptr(y), 0}
+				objc.F.Reset().Arg(uintptr(blit)).Arg(uintptr(rsCopyRegion)).Arg(uintptr(r.clearTile)).Arg(0).Arg(0).
+					Arg(uintptr(unsafe.Pointer(&tileSrc))).Arg(uintptr(unsafe.Pointer(&tileSize))).
+					Arg(back).Arg(0).Arg(0).Arg(uintptr(unsafe.Pointer(&tileDst))).Call(objc.MsgSend)
+			}
+		}
+	}
+	objc.Send(blit, rsEndEncoding)
 }
