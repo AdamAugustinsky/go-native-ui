@@ -422,16 +422,17 @@ func TestPoolReserve(t *testing.T) {
 			t.Fatalf("slot %d lost by Reserve", i)
 		}
 	}
-	var m0, m1 runtime.MemStats
-	runtime.ReadMemStats(&m0)
+	// The slices' storage, not the process's malloc count: other goroutines
+	// of the test binary allocate meanwhile (ed8cfe66; 6 "allocations" on
+	// Windows amd64, run 41181860454).
+	gen, live, free := unsafe.SliceData(p.gen), unsafe.SliceData(p.live), unsafe.SliceData(p.free)
 	for i := 0; i < 4000; i++ {
 		p.Alloc()
 	}
 	for i := uint32(0); i < 4003; i++ {
 		p.FreeIndex(i)
 	}
-	runtime.ReadMemStats(&m1)
-	if n := m1.Mallocs - m0.Mallocs; n != 0 {
-		t.Errorf("%d allocations growing to 4003 slots after Reserve(5000)", n)
+	if unsafe.SliceData(p.gen) != gen || unsafe.SliceData(p.live) != live || unsafe.SliceData(p.free) != free {
+		t.Error("growing to 4003 slots after Reserve(5000) got new storage")
 	}
 }
