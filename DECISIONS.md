@@ -1352,3 +1352,29 @@ Not converted, and why: real OS I/O (watchers, mtimes, files, sockets, the nativ
 **Found:** a data race in fs's service since 38db69c4: a relist read the size of its last listing from a slot that may already be released and filling on another worker (`go test -race -run '^TestServiceContendedLockDoesNotAllocate$' ./fs` failed 3 of 3). The size is recorded when the listing is delivered. CI does not run `-race`; it was seen while checking the converted tests with it.
 
 **Quarantine:** every quarantined test was read for a timing flake of ours. None is one (docs/QUARANTINE.md, "Checked on synctest-fuzz").
+
+## D93. Opaque covers: what a pane's opaque fill hides is not shaded (2026-10-31)
+
+**Decision.** A box can declare that its subtree paints its rect opaque before anything reads what is under it (`ui.Context.NextCover`). `End` records each cover in the draw list (`gpu.Cover`: the rect less its corners' reach and a pixel of edge, on whole pixels, and the index its quads begin at), then `gpu.CullCovered` rewrites the list:
+- **Dropped:** a quad drawn before a cover whose geometry (as `vs_main` builds it: fringe, shadow tail, clip, fade end) lies wholly under covers.
+- **Cut:** a quad partly under them becomes the same quad clipped to the pieces outside them (at most 8, else it stays whole). An integer clip edge has a coverage of exactly 0 or 1, so every pixel that shows is computed as before.
+- **Backdrops:** a cover whose quads begin after a backdrop hides nothing drawn before that backdrop, which reads it.
+- **Rex:** a pane declares a cover when its fill is opaque: focused, or the mesh over the field (no backdrop). Not when it is tiny, drawn at an opacity under 1 or in a fade (ui checks the last two).
+
+**Why.** The occlusion prototype (2026-10-30) inferred covers from single opaque quads and cut each hidden quad once. A pane's fill is a mesh of many cells, so the field, a window-wide tint and the pane shadows under it were cut around one cell at most, and the prototype saved little. A pane knows it is opaque; one cover per pane hides all of that.
+
+**Measured** (Zap's demo with Transparency off, a 3360×2040 px window, M1 MacBook Air):
+
+| | Before | With covers |
+|---|---|---|
+| Area shaded, chat (2 panes) | 4.24 windows | 1.67 windows |
+| Area shaded, split (3 panes) | 4.32 windows | 2.15 windows |
+| Soft shadow shading, chat | 1.86 windows | 0.15 windows |
+| Whole frame on the GPU, median (2 alternating runs, GPU shared) | 44–80 ms | 9–14 ms |
+
+**Checked.**
+- **GPU equality:** `TestCoveredQuadsCutMatchTheWholeList` renders random lists (shapes with radii, borders, shadows, capsules, textured quads, whole and fractional clips, fades, backdrops, quads hugging a cover's edges; covers over solid and rounded panes) before and after the cut, and every byte must match: 1,500 lists by default, 16,500 in longer runs (`GNUI_COVER_LISTS`). Shrinking the bounds by the fringe's pixel makes it fail.
+- **The contract on Rex:** `TestOpaquePanesCoverWhatIsUnderThem` draws, for each cover of the chrome scene, the quads from its start alone over a clear target and requires an alpha of 255 on every pixel of it (scale 1 and 2, light and dark, with and without a backdrop, three focus states).
+- **Cases:** `TestCullCoveredCases` (a fringe or a shadow's tail past a cover is kept, a cover after a backdrop or before the quad hides nothing, two panes over a field cut it into five pieces), `TestCoverCutsWhatIsUnderIt` (ui, at opacity 1 and 0.5), `TestCullCoveredAllocatesNothing`.
+
+**Not done:** covers for other opaque surfaces (sheets, popovers, the composer); the list's covers are dropped for a frame whose glyphs were dropped (`dropStaleGlyphs` moves the quads).

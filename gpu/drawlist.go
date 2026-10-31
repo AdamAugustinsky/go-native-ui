@@ -237,12 +237,15 @@ type DrawList struct {
 	// Backdrops are the recipes of the list's ModeBackdrop quads, each
 	// naming its own by index (Quad.Tex).
 	Backdrops []Backdrop
+	// Covers are the parts of the target the quads from some point on paint
+	// opaque, which hide what the quads before drew there (CullCovered).
+	Covers []Cover
 }
 
 // Reset empties the list and keeps its capacity, reserving space for a few
 // backdrops even before any are drawn.
 func (l *DrawList) Reset() {
-	l.Quads, l.Backdrops = l.Quads[:0], l.Backdrops[:0]
+	l.Quads, l.Backdrops, l.Covers = l.Quads[:0], l.Backdrops[:0], l.Covers[:0]
 	// Scroll edges can first appear together well after warm-up. Reserve
 	// eight recipes (320 bytes); larger lists still grow normally.
 	if cap(l.Backdrops) < 8 {
