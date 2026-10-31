@@ -172,3 +172,43 @@ func TestPartialFramesOfAWindow(t *testing.T) {
 func cloneList(l *DrawList) *DrawList {
 	return &DrawList{Quads: append([]Quad(nil), l.Quads...), Backdrops: append([]Backdrop(nil), l.Backdrops...)}
 }
+
+// Every call that changes a texture's texels is in TextureWrites: a partial
+// frame redraws what samples it only from there (a call's video frames come
+// through StageYUV).
+func TestEveryTextureWriteIsLogged(t *testing.T) {
+	r := newTestRenderer(t)
+	var serial uint64
+	var ws []TextureWrite
+	logged := func(what string, id TextureID) {
+		t.Helper()
+		var complete bool
+		ws, serial, complete = r.TextureWrites(serial, ws[:0])
+		if !complete {
+			t.Fatalf("%s: the log is incomplete", what)
+		}
+		for _, w := range ws {
+			if w.Tex == id {
+				return
+			}
+		}
+		t.Errorf("%s of texture %d is not in the log: %+v", what, id, ws)
+	}
+	_, serial, _ = r.TextureWrites(0, nil)
+	a := r.NewTexture(TexRGBA8, 8, 8)
+	logged("NewTexture", a)
+	r.Upload(a, 0, 0, 2, 2, make([]byte, 16), 8)
+	logged("Upload", a)
+	r.Stage(a, 2, 2, 2, 2, make([]byte, 16), 8)
+	logged("Stage", a)
+	y, err := r.NewYUVTexture(YUVI420, 8, 8, BT601Video)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logged("NewYUVTexture", y)
+	plane := make([]byte, 64)
+	r.StageYUV(y, &YUVImage{Y: plane, YStride: 8, U: plane, UStride: 4, V: plane, VStride: 4})
+	logged("StageYUV", y)
+	r.FreeTexture(a)
+	logged("FreeTexture", a)
+}
