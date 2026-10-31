@@ -99,7 +99,7 @@ func openGIF(data []byte) (*gifAnim, error) {
 					g.plays = n + 1
 				}
 			}
-			i += 2
+			i += 2 + gifTextHeader(label)
 			if !skip() {
 				return g.finish()
 			}
