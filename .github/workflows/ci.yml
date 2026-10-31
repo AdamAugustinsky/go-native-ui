@@ -189,8 +189,17 @@ jobs:
           echo "GNUI_REQUIRE_LIBGHOSTTY=1" >> "$GITHUB_ENV"
       - name: test (arm64, shard ${{ matrix.shard }}/2)
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE" | go run ./tools/testshard -shard ${{ matrix.shard }}/2) | go run ./tools/testtimes -title "macOS arm64, shard ${{ matrix.shard }}/2" -raw test-macos-${{ matrix.shard }}.json
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE|/widget/widgettest/live$" | go run ./tools/testshard -shard ${{ matrix.shard }}/2) | go run ./tools/testtimes -title "macOS arm64, shard ${{ matrix.shard }}/2" -raw test-macos-${{ matrix.shard }}.json
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      # widget/widgettest/live alone, after the rest (on shard 1): its
+      # two-window tests count the frames an idle window draws, and with the
+      # other live packages' windows opening beside them (the slowest first
+      # put them all at the start of shard 1) an idle window drew 1 or 2
+      # (TestWindowsPaceOnTheirOwn, TestTwoWindowsIdleAndAnimate, run
+      # 41173949926); unsharded, it had started when most packages were done.
+      - name: test widget/widgettest/live (alone)
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        run: go test -json -count=1 -skip "$QUARANTINE" ./widget/widgettest/live | go run ./tools/testtimes -title "macOS arm64, widget/widgettest/live" -raw test-macos-live.json
       # The steps below run once, on shard 2.
       - name: vendored go-text font test
         if: matrix.shard == 2
