@@ -193,7 +193,14 @@ func checkFuzzGIFReference(t *testing.T, g *gifAnim, data []byte) {
 	g.trim()
 	for i, m := range ref.Image {
 		if i > 0 {
-			switch ref.Disposal[i-1] {
+			// image/gif keeps the last graphic control's disposal for an image
+			// that has none of its own; GIF89a scopes it to the next image only,
+			// as Chromium and openGIF do (aabd16bef8061c7f).
+			disposal := ref.Disposal[i-1]
+			if !g.frames[i-1].hasGCE {
+				disposal = gif.DisposalNone
+			}
+			switch disposal {
 			case gif.DisposalBackground:
 				draw.Draw(canvas, ref.Image[i-1].Bounds(), image.Transparent, image.Point{}, draw.Src)
 			case gif.DisposalPrevious:
