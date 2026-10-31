@@ -131,6 +131,13 @@ func (t *DamageTracker) diff(l *DrawList, w, h int, writes []TextureWrite) Damag
 	t.raw = t.raw[:0]
 	t.oldOK = grow(t.oldOK, len(old))
 	t.newOK = grow(t.newOK, len(cur))
+	// matchMiddle's scratch at its bound for these lists (an entry per quad
+	// of either, an anchor per quad of cur at most), so that it grows only
+	// when the lists do and not as more of their quads differ.
+	t.ents = slices.Grow(t.ents[:0], len(old)+len(cur))
+	t.anchor = slices.Grow(t.anchor[:0], len(cur))
+	t.lisIdx = slices.Grow(t.lisIdx[:0], len(cur))
+	t.lisPre = grow32(t.lisPre, len(cur))
 	eq := func(o, n int) bool { return quadEq(&old[o], oldBds, &cur[n], curBds) }
 
 	// the common prefix and suffix
@@ -513,9 +520,13 @@ func contains(a, b [4]int32) bool {
 
 func area(r [4]int32) int64 { return int64(r[2]-r[0]) * int64(r[3]-r[1]) }
 
+// grow and grow32 return b with length n, reallocated only when n is past
+// its capacity, and then to twice that as append would: the counts creep up
+// as a list scrolls new content in, and a new array per new peak allocated
+// in the benches' measured frames (gpu.grow32, listbench and rexlook).
 func grow(b []bool, n int) []bool {
 	if cap(b) < n {
-		b = make([]bool, n)
+		b = make([]bool, n, max(n, 2*cap(b)))
 	}
 	b = b[:n]
 	clear(b)
@@ -524,7 +535,7 @@ func grow(b []bool, n int) []bool {
 
 func grow32(b []int32, n int) []int32 {
 	if cap(b) < n {
-		b = make([]int32, n)
+		b = make([]int32, n, max(n, 2*cap(b)))
 	}
 	return b[:n]
 }
