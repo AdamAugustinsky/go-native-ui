@@ -264,7 +264,8 @@ System32 (PHASE2-PLAN). GLSL 330 core / GLSL ES 300 text is compiled by
   - window chrome: custom on each OS.
 - Partial presents (dirty rects) are a later optimisation. A full redraw
   of a file-browser frame is cheap; the point is that idle frames are
-  never drawn.
+  never drawn. `gpu.DamageTracker` (D92) finds a frame's damage from
+  consecutive draw lists; drawing only the damage is the next step.
 
 ## 7. Text
 

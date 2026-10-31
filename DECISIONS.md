@@ -1352,3 +1352,33 @@ Not converted, and why: real OS I/O (watchers, mtimes, files, sockets, the nativ
 **Found:** a data race in fs's service since 38db69c4: a relist read the size of its last listing from a slot that may already be released and filling on another worker (`go test -race -run '^TestServiceContendedLockDoesNotAllocate$' ./fs` failed 3 of 3). The size is recorded when the listing is delivered. CI does not run `-race`; it was seen while checking the converted tests with it.
 
 **Quarantine:** every quarantined test was read for a timing flake of ours. None is one (docs/QUARANTINE.md, "Checked on synctest-fuzz").
+
+## D92. Damage from consecutive draw lists: the first step toward partial presents (2026-10-31)
+
+**Decision.** `gpu.DamageTracker` finds the part of a target that changed since the previous frame drawn into it, from the two draw lists, with no change to `ui` or to rendering yet. A frame's pixels are a function of its list, the texels its quads sample, its clear colour, its size and the renderer's epoch: `ui` bakes tint, opacity, clips, fades, shadows and meshes into the quads (`box.col`, `emit`). So a pixel whose ordered sequence of covering quads is unchanged keeps its colour.
+
+- **Matching:** a common subsequence of the two lists (common prefix and suffix, then quads unique in both middles kept in order by a longest increasing subsequence, then equal neighbours of each). A backdrop is matched by its recipe, not its index.
+- **Damage:** the union of the unmatched quads' bounds, old and new. The bounds are the vertex stage's geometry (pad, clip ± 0.5, fade end) rounded out. Matched textured quads whose UV rect, plus a texel for filtering, meets a `TextureWrite` since the last frame are damaged too.
+- **Backdrops:** a backdrop reads its whole region however little is redrawn around it. So damage that reaches where a backdrop draws or reads takes all of both, as one rectangle with whatever crosses it, until no rectangle crosses one it does not hold whole.
+- **Fallbacks:** the damage is merged to `MaxDamageRects` (8) rectangles, least area added first. Over 70% of the target, or on a first frame or a change of size, clear colour or epoch, it is `Full`.
+
+**Why now.** Measured on an M1 MacBook Air at 60 Hz (Zap, a 3360×2040 px window): a frame costs about 2 ms of CPU but shades 3–7× the window (translucent panes, two shadows each, a full-window field or scrim, text). An isolated frame costs about 18 ms of GPU while WindowServer shares the GPU, back-to-back frames queue, and input reaches the screen in a median of 89 ms. A keystroke or a caret blink changes a few hundred pixels.
+
+**Probe for the next step** (a scratch scissor and LoadAction hook on `Renderer.Encode`; a real Zap frame of 542 quads into a private 3360×2040 BGRA8 target; GPUStartTime..GPUEndTime, 30 runs):
+
+| Case | GPU |
+|---|---|
+| Full frame | 6.1–10.8 ms (min) |
+| A 1700×140 composer region under scissor, LoadAction Load | 0.29 ms |
+| A 6×44 caret | 0.03 ms (no per-tile floor) |
+| Blit of the whole target to another texture | 0.36 ms |
+
+So a partial frame drawn into a retained back buffer and copied to the drawable should cost about 0.8 ms for a keystroke.
+
+**Checked.**
+- **Brute force:** on a 64×48 target, each pixel's ordered sequence of covering quads, with a backdrop's output depending on all of its region and written texels counting as changed, must be equal outside the damage. It is checked over 12,000 random frames of random edits (insertions, removals, moves, recolours, nudges, duplicates, recipe changes and texture writes), and so must the backdrop rule.
+- **Fuzzing:** `FuzzDamage` runs the same check; 330k executions in 90 s found nothing, and it joins CI's fuzz job.
+- **Bounds:** `quadBounds` is tested case by case against `vs_main`.
+- **Cost:** 10,000 quads with one change diff in about 0.17 ms, with no allocations once the buffers have grown.
+
+**Not done:** the retained back buffer, a scissored and LoadAction-Load `Encode`, the copy to the drawable, skipping the present of an empty frame, recording `TextureWrite`s in `Upload`/`Stage`/`FreeTexture`/imports, and a debug mode that compares each partial frame with a full one.
