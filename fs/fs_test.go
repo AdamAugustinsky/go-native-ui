@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,27 +55,40 @@ func bigDirPath(tb testing.TB) string {
 			return
 		}
 		bigDir.path = dir
-		for i := 0; i < bigN; i++ {
-			name := fmt.Sprintf("IMG_%06d_%s.jpg", (i*7919)%bigN, []string{"holiday", "Family", "work", "scan", "Draft"}[i%5])
-			if i%20 == 0 {
-				name = fmt.Sprintf("folder %d", i)
-				if err = os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
-					break
+		// Several creators at once: one at a time, the 100k creates took
+		// 250 s of the Windows runner's test job, each waiting on the disk
+		// and the file system's filter drivers rather than on a CPU.
+		const creators = 16
+		errs := make([]error, creators)
+		var wg sync.WaitGroup
+		for c := range creators {
+			wg.Go(func() {
+				for i := c; i < bigN && errs[c] == nil; i += creators {
+					errs[c] = createBigEntry(dir, i)
 				}
-				continue
-			}
-			var f *os.File
-			if f, err = os.Create(filepath.Join(dir, name)); err != nil {
-				break
-			}
-			f.Close()
+			})
 		}
-		bigDir.err = err
+		wg.Wait()
+		bigDir.err = errors.Join(errs...)
 	})
 	if bigDir.err != nil {
 		tb.Fatal(bigDir.err)
 	}
 	return bigDir.path
+}
+
+// createBigEntry creates the big directory's entry i: every 20th a folder,
+// the others empty files named like a camera's.
+func createBigEntry(dir string, i int) error {
+	if i%20 == 0 {
+		return os.Mkdir(filepath.Join(dir, fmt.Sprintf("folder %d", i)), 0o755)
+	}
+	name := fmt.Sprintf("IMG_%06d_%s.jpg", (i*7919)%bigN, []string{"holiday", "Family", "work", "scan", "Draft"}[i%5])
+	f, err := os.Create(filepath.Join(dir, name))
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 func listOf(tb testing.TB, path string) *Listing {
