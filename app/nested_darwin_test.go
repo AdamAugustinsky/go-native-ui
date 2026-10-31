@@ -152,6 +152,10 @@ func runNestedChild(c string) {
 		runDrawablesChild() // drawables_darwin_test.go
 		return
 	}
+	if c == "damage" {
+		runDamageChild() // damage_darwin_test.go
+		return
+	}
 	if c == "panel" {
 		runPanelChild() // panel_darwin_test.go
 		return

@@ -173,6 +173,7 @@ jobs:
           ./qr FuzzQREncode
           ./highlight FuzzHighlighters
           ./img FuzzImageParsers
+          ./gpu FuzzDamage
           ./fs FuzzFileNamePipeline
           ./platform FuzzPasteDropPaths
           ./app/prefs FuzzPrefsFile

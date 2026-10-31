@@ -66,12 +66,15 @@ func TestIdleWindowGivesBackDrawables(t *testing.T) {
 }
 
 // drawablesBuilder draws the frames its driver asks for and records the
-// IOSurface of the last frame drawn.
+// IOSurface of the last frame presented: a frame that changed nothing is
+// not (gpu.Surface.SkipFrame), and the screen keeps the one before.
 type drawablesBuilder struct {
 	a           *App
 	start       atomic.Int32  // frames the driver asks for
 	want        int           // frames left of the current burst
-	last        atomic.Uint32 // the last frame's IOSurface ID
+	last        atomic.Uint32 // the last presented frame's IOSurface ID
+	cand        uint32        // the latest frame's, presented unless the surface skipped it (main thread)
+	skipped     int           // the surface's skipped frames when it was built
 	done        chan struct{} // a burst is drawn
 	trimAtFrame uint64        // trim generation when the latest frame was built (main thread)
 }
@@ -82,8 +85,10 @@ func (b *drawablesBuilder) Init(a *App) error { b.a = a; return nil }
 
 func (b *drawablesBuilder) Build(c *ui.Context) {
 	b.trimAtFrame = b.a.Win.DebugState().Trims
+	b.settle()
 	if t := b.a.fr.Target; t != 0 && ioSurfaceGetID != 0 { // every frame's, a burst's or not (a resize, a wake)
-		b.last.Store(uint32(objc.F.Call1(ioSurfaceGetID, uintptr(objc.Send(objc.ID(t), objc.Sel("iosurface"))))))
+		b.cand = uint32(objc.F.Call1(ioSurfaceGetID, uintptr(objc.Send(objc.ID(t), objc.Sel("iosurface")))))
+		b.skipped = b.a.Surf.Skipped
 	}
 	if n := b.start.Swap(0); n > 0 {
 		b.want = int(n)
@@ -96,6 +101,15 @@ func (b *drawablesBuilder) Build(c *ui.Context) {
 	} else {
 		b.done <- struct{}{}
 	}
+}
+
+// settle records the latest frame's drawable as the last presented one
+// unless the surface skipped it. Main thread, between frames.
+func (b *drawablesBuilder) settle() {
+	if b.cand != 0 && b.a.Surf.Skipped == b.skipped {
+		b.last.Store(b.cand)
+	}
+	b.cand = 0
 }
 
 // drawableSurfaces lists the process's CAMetalLayer drawables as vmmap
@@ -216,6 +230,7 @@ func runDrawablesChild() {
 				if ready {
 					frameTrim = b.trimAtFrame
 					ids, sizes, err = drawableSurfaces()
+					b.settle()
 					last = b.last.Load()
 				}
 			})
