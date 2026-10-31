@@ -16,6 +16,17 @@ var diffTextSeeds = []string{
 	"❤️ 1️⃣ 👍🏽", "a\xffb\xe6\x97c", "\xed\xa0\x80\x80\xff\xcc\x81",
 }
 
+// warmDiffFonts shapes every seed in each font before a target's watchdog
+// runs, so the system's first load of a fallback font (Devanagari in a bold
+// face took 10-14 s on a loaded Windows arm64 runner) is not timed as layout.
+func warmDiffFonts(s *System, fonts ...FontKey) {
+	for _, f := range fonts {
+		for _, seed := range diffTextSeeds {
+			s.Shape(f, []byte(seed))
+		}
+	}
+}
+
 // A watchdog catches unexpectedly superlinear work without timing individual
 // native calls. Size caps below bound oracle work too; these are deliberately
 // generous on the shared host, not performance benchmark assertions.

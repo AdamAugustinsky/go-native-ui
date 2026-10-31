@@ -99,3 +99,13 @@ Runs: R1 [40633691026](https://github.com/AdamAugustinsky/go-native-ui/actions/r
 - `TestSystemIconsWindowsConcurrent` (img, Windows): the failing step is traced and logged by the test (`failed decode steps`). It passed on both Windows jobs in each run. No COM race was found by reading `sysicon_windows.go` either.
 - `TestPackageWithoutAppleIdentity` (cmd/gnui, macOS): the hdiutil race is retried in `gnui` since a5a206e.
 - `TestEditorNestedLoopDraws`, `TestEditorUndoRedo`, `TestEditorMarkedTextSubmission`, `TestStallOfAHiddenWindowSkipsAndSaysWhy`, `TestRunKeepsDesignatedRequirement`, `TestScrollEventsThroughTheQueue`, `TestVListEditFrameBudget` (macOS): they failed "under contention" or about one run in five before the benches moved to their own job; they passed on the macOS test job in R2 and R3 and passed repeatedly where they could be run here (`TestScrollEventsThroughTheQueue` 300 of 300, `TestRunKeepsDesignatedRequirement` 10 of 10, `TestVListEditFrameBudget` 5 of 5). Two CI runs of a test that failed one in five is weak evidence.
+
+## Checked on synctest-fuzz (2026-10-30)
+
+Each quarantined test was read for a timing flake in our own Go code, which
+`testing/synctest` could make deterministic. None is one; all stay quarantined.
+
+- `TestClientClose` (app/ws, macOS): the darwin path's ordering holds. The pong's completion goes to a one-slot buffered channel, `closedCh` closes only after `cancelWithCloseCode:reason:`, and release waits for completion. What remains is a pong slower than `closeWait` (1 s) on a loaded runner, after which NSURLSession drops the close frame of a task cancelled just after it opened (ae4a96f). The pure-Go peer's close paths (the Linux client and the test server) are now tested exactly in bubbles (`app/ws/peer_synctest_test.go`).
+- `TestGreenButtonWaitsForNativeReadiness` (app, macOS): AppKit sent willEnterFullScreen and never didEnterFullScreen while our loop kept drawing. The OS transition, or the pump's interaction with it; not a Go timer.
+- `TestPanelHidesOnDeactivate` (platform, macOS) and `TestLivePalette` (app/hotkey, Windows): activation and foreground ownership between processes.
+- The Windows file dialog tests: the common item dialog's own modal loop.

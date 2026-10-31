@@ -114,6 +114,7 @@ type idState struct {
 	latest        int32
 	latestLease   uint32
 	latestPath    string
+	latestN       int // entries of the latest listing when delivered; its slot may be reused since
 	syncReq       uint64
 	syncGen       uint64
 	running       bool
@@ -663,7 +664,7 @@ func (s *Service) worker(i int) {
 		startSeq := s.seq
 		want := 0 // a relist expects about as many entries as the last listing
 		if st.latest >= 0 && st.latestPath == path {
-			want = len(s.all[st.latest].Entries)
+			want = st.latestN // not the slot's own: released, another worker may be filling it
 		}
 		l, slot := s.getListingLocked(want)
 		s.mu.Unlock()
@@ -697,7 +698,7 @@ func (s *Service) worker(i int) {
 			s.freeSlotLocked(slot)
 		} else {
 			st.running = false
-			st.latest, st.latestLease, st.latestPath = slot, s.lease[slot], path
+			st.latest, st.latestLease, st.latestPath, st.latestN = slot, s.lease[slot], path, len(l.Entries)
 			if source == nil {
 				st.lastPath, st.lastMT, st.lastSeq, st.lastOK = path, mt, startSeq, mtOK && l.Err == nil
 				s.gapLocked(st)

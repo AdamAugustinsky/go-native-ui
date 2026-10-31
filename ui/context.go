@@ -184,7 +184,7 @@ type Context struct {
 	prevOrder            []ID
 	scrollBoxes          []ID // scroll boxes of the last completed build
 	reserved, trimFrames int
-	frLow, fmtLow        int
+	frTrim, fmtTrim      scratchTrim
 	cuts                 []truncCache
 	cutPool              *core.Pool
 	root                 ID
@@ -303,6 +303,8 @@ type Context struct {
 	wakeNs int64
 
 	st settleState // the build's reads of the previous layout (settle.go)
+
+	vfy verifyState // what Verify keeps of the frame (verify.go)
 
 	shownWatch []shownWatch // WatchShown's boxes of this frame, checked after layout
 	// deadlines (deadline.go) are the named one-shot deadlines in force.
@@ -531,8 +533,8 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	}
 	old := c.scale
 	c.w, c.h, c.scale, c.dt = widthPx, heightPx, scale, dt
-	trimScratch(c.fr.Cur(), &c.frLow)
-	trimScratch(&c.fmtA, &c.fmtLow)
+	trimScratch(c.fr.Cur(), &c.frTrim)
+	trimScratch(&c.fmtA, &c.fmtTrim)
 	c.fr.Reset()
 	c.fmtA.Reset()
 	c.prevOrder, c.order = c.order, c.prevOrder[:0]
@@ -557,6 +559,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.modalIdx = c.topModal()
 	c.claimed, c.cmdTaken, c.activated, c.altTaken = 0, 0, 0, false
 	c.fieldBuilt, c.pasteReq, c.pasteTag = false, false, 0
+	c.verifyBegin()
 	for i := 0; i < c.nCarry; i++ { // edit actions the previous frame could not give its field
 		c.in.PushEdit(c.carry[i])
 	}
@@ -631,18 +634,35 @@ func (c *Context) rescaleScroll(r float64) {
 	}
 }
 
+// scratchTrim is what trimScratch keeps of one scratch arena.
+type scratchTrim struct {
+	low     int // consecutive frames below a quarter of the capacity
+	trimmed int // the capacity the last trim left, until the arena grows past it
+	floor   int // the capacity it grew back to after a trim
+}
+
 // trimScratch gives a peak buffer back after sixty frames below a quarter
-// of its capacity, with room for twice the recent demand.
-func trimScratch(a *core.Arena, low *int) {
+// of its capacity, with room for twice the recent demand. An arena that grows
+// back after a trim is in a cycle of peaks and rests (a session, then a
+// pause): it keeps what it grew back to, or every rest would trim it and every
+// peak grow it again (the notes bench on Linux, where all twelve measured
+// sessions did). That floor lapses after a minute of 60 Hz frames of low use.
+func trimScratch(a *core.Arena, t *scratchTrim) {
+	if t.trimmed > 0 && a.Cap() > t.trimmed {
+		t.floor, t.trimmed = a.Cap(), 0
+	}
 	n := max(1024, 2*a.Len())
 	if n >= a.Cap()/4 {
-		*low = 0
+		t.low = 0
 		return
 	}
-	*low++
-	if *low == 60 {
+	t.low++
+	if t.low >= 3600 {
+		t.floor = 0
+	}
+	if t.low%60 == 0 && max(n, t.floor) < a.Cap()/4 {
 		a.Trim(n)
-		*low = 0
+		t.trimmed = a.Cap()
 	}
 }
 

@@ -13,10 +13,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
 	"gonativeui/app"
+	"gonativeui/core"
 	"gonativeui/platform"
 )
 
@@ -309,51 +311,53 @@ func TestEvictOldest(t *testing.T) {
 // is stored: it waits for a record to free (the dispatcher delivering), is
 // stored, and only then is the system told.
 func TestResponseWaitsForARecord(t *testing.T) {
-	f, s := fresh(t, Options{})
-	keys := fillSlots(t, f, MaxResponses, "")
-	for i, k := range keys { // every slot's record holds an undelivered response
-		if !stored(k, ActionClick, nil, []byte(fmt.Sprintf("u%d", i))) {
-			t.Fatal(i)
+	bubble(t, func(t *testing.T) {
+		f, s := fresh(t, Options{})
+		keys := fillSlots(t, f, MaxResponses, "")
+		for i, k := range keys { // every slot's record holds an undelivered response
+			if !stored(k, ActionClick, nil, []byte(fmt.Sprintf("u%d", i))) {
+				t.Fatal(i)
+			}
 		}
-	}
-	for i := range nSpare { // and every spare: responses to notes of an earlier run
-		if !stored(uint64(1)<<40|uint64(i+1), ActionClick, nil, []byte("spare")) {
-			t.Fatal(i)
+		for i := range nSpare { // and every spare: responses to notes of an earlier run
+			if !stored(uint64(1)<<40|uint64(i+1), ActionClick, nil, []byte("spare")) {
+				t.Fatal(i)
+			}
 		}
-	}
-	p := respond(uint64(1)<<41, 1, []byte("waits"), []byte("parked-ud"))
-	if p == nil {
-		t.Fatal("stored with every record taken")
-	}
-	var acks, storedAtAck atomic.Uint64
-	p.ack = func() {
-		storedAtAck.Store(slots.stored.Load())
-		acks.Add(1)
-	}
-	p.drop = func() { t.Error("given up") }
-	p.wait()
-	time.Sleep(20 * time.Millisecond)
-	if acks.Load() != 0 || ReadStats().Parked != 1 {
-		t.Fatalf("answered (%d) before it was stored; %+v", acks.Load(), ReadStats())
-	}
-	s.reset()
-	waitUntil(t, "the parked response", func() bool { return acks.Load() == 1 })
-	want := uint64(MaxResponses + nSpare + 1)
-	if storedAtAck.Load() != want {
-		t.Fatalf("answered with %d responses stored, want %d", storedAtAck.Load(), want)
-	}
-	var found bool
-	for _, r := range s.responses() {
-		if string(r.UserData) == "parked-ud" {
-			found = string(r.Reply) == "waits" && r.Action == 1
+		p := respond(uint64(1)<<41, 1, []byte("waits"), []byte("parked-ud"))
+		if p == nil {
+			t.Fatal("stored with every record taken")
 		}
-	}
-	if !found {
-		t.Fatalf("the parked response was not delivered: %d delivered", len(s.responses()))
-	}
-	if st := ReadStats(); st.Parked != 0 || st.Stored != want || st.Late != nSpare+1 {
-		t.Fatalf("stats %+v", st)
-	}
+		var acks, storedAtAck atomic.Uint64
+		p.ack = func() {
+			storedAtAck.Store(slots.stored.Load())
+			acks.Add(1)
+		}
+		p.drop = func() { t.Error("given up") }
+		p.wait()
+		synctest.Wait() // the retry goroutine has tried, and waits for a record
+		if acks.Load() != 0 || ReadStats().Parked != 1 {
+			t.Fatalf("answered (%d) before it was stored; %+v", acks.Load(), ReadStats())
+		}
+		s.reset()
+		waitUntil(t, "the parked response", func() bool { return acks.Load() == 1 })
+		want := uint64(MaxResponses + nSpare + 1)
+		if storedAtAck.Load() != want {
+			t.Fatalf("answered with %d responses stored, want %d", storedAtAck.Load(), want)
+		}
+		var found bool
+		for _, r := range s.responses() {
+			if string(r.UserData) == "parked-ud" {
+				found = string(r.Reply) == "waits" && r.Action == 1
+			}
+		}
+		if !found {
+			t.Fatalf("the parked response was not delivered: %d delivered", len(s.responses()))
+		}
+		if st := ReadStats(); st.Parked != 0 || st.Stored != want || st.Late != nSpare+1 {
+			t.Fatalf("stats %+v", st)
+		}
+	})
 }
 
 // A slot is freed when its response is delivered (not before), and at once
@@ -1423,80 +1427,103 @@ func TestLastDrainEndsParking(t *testing.T) {
 // last drain waits for it all the same, or an answer could come after the
 // drain, or not before the check that none is left.
 func TestLastDrainWaitsForTheAnswerOfTheRetry(t *testing.T) {
-	f, _ := fresh(t, Options{})
-	for i, k := range fillSlots(t, f, MaxResponses, "") {
-		if !stored(k, ActionClick, nil, nil) {
-			t.Fatal(i)
+	bubble(t, func(t *testing.T) {
+		f, _ := fresh(t, Options{})
+		for i, k := range fillSlots(t, f, MaxResponses, "") {
+			if !stored(k, ActionClick, nil, nil) {
+				t.Fatal(i)
+			}
 		}
-	}
-	for i := range nSpare {
-		if !stored(uint64(1)<<40|uint64(i+1), ActionClick, nil, nil) {
-			t.Fatal(i)
+		for i := range nSpare {
+			if !stored(uint64(1)<<40|uint64(i+1), ActionClick, nil, nil) {
+				t.Fatal(i)
+			}
 		}
-	}
-	p := respond(uint64(1)<<41, 1, nil, []byte("parked"))
-	if p == nil {
-		t.Fatal("stored with every record taken")
-	}
-	answering, release := make(chan struct{}), make(chan struct{})
-	var acks atomic.Int32
-	p.ack, p.drop = func() { close(answering); <-release; acks.Add(1) }, func() {}
-	p.wait()
-	waitUntil(t, "the retry stored it", func() bool {
+		p := respond(uint64(1)<<41, 1, nil, []byte("parked"))
+		if p == nil {
+			t.Fatal("stored with every record taken")
+		}
+		answering, release := make(chan struct{}), make(chan struct{})
+		var acks atomic.Int32
+		p.ack, p.drop = func() { close(answering); <-release; acks.Add(1) }, func() {}
+		p.wait()
+		waitUntil(t, "the retry stored it", func() bool {
+			select {
+			case <-answering:
+				return true
+			default:
+				return false
+			}
+		})
+		if retrying() {
+			t.Fatal("the retry goroutine still holds a list that is empty")
+		}
+		returned := make(chan bool)
+		go func() { returned <- lastDrain(true) }()
+		synctest.Wait() // the last drain is blocked, or has returned
 		select {
-		case <-answering:
-			return true
+		case <-returned:
+			t.Fatal("the last drain returned while the retry goroutine was still answering")
 		default:
-			return false
+		}
+		close(release)
+		if <-returned || acks.Load() != 1 {
+			t.Fatalf("after the answer: answered %d", acks.Load())
 		}
 	})
-	if retrying() {
-		t.Fatal("the retry goroutine still holds a list that is empty")
-	}
-	returned := make(chan bool)
-	go func() { returned <- lastDrain(true) }()
-	select {
-	case <-returned:
-		t.Fatal("the last drain returned while the retry goroutine was still answering")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(release)
-	if <-returned || acks.Load() != 1 {
-		t.Fatalf("after the answer: answered %d", acks.Load())
-	}
 }
 
 // A parked response that cannot be stored even in the last drain (no record
 // frees before its time is up) is given up when the gate closes, once; the
 // retry goroutine is stopped.
 func TestLastDrainGivesUpWhatCannotBeStored(t *testing.T) {
-	f, _ := fresh(t, Options{})
-	fillSlots(t, f, MaxResponses, "") // every slot's record reserved for a note
-	var held []Ticket
-	for range nSpare { // and every spare, by something that never completes
-		tk, err := slots.spares.Reserve(0)
-		if err != nil {
-			t.Fatal(err)
+	bubble(t, func(t *testing.T) {
+		f, _ := fresh(t, Options{})
+		fillSlots(t, f, MaxResponses, "") // every slot's record reserved for a note
+		var held []Ticket
+		for range nSpare { // and every spare, by something that never completes
+			tk, err := slots.spares.Reserve(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			held = append(held, tk)
 		}
-		held = append(held, tk)
-	}
-	defer func() {
-		for _, tk := range held {
-			slots.spares.Cancel(tk)
+		defer func() {
+			for _, tk := range held {
+				slots.spares.Cancel(tk)
+			}
+		}()
+		p := respond(uint64(1)<<41, 1, nil, []byte("never"))
+		if p == nil {
+			t.Fatal("stored with every record taken")
 		}
-	}()
-	p := respond(uint64(1)<<41, 1, nil, []byte("never"))
-	if p == nil {
-		t.Fatal("stored with every record taken")
-	}
-	var acks, drops atomic.Int32
-	p.ack, p.drop = func() { acks.Add(1) }, func() { drops.Add(1) }
-	p.wait()
-	if !retrying() {
-		t.Fatal("no retries")
-	}
-	platform.FlushApp()
-	if st := ReadStats(); acks.Load() != 0 || drops.Load() != 1 || st.LostAtExit != 1 || st.Parked != 0 || retrying() {
-		t.Fatalf("answered %d, given up %d, retrying %v, stats %+v", acks.Load(), drops.Load(), retrying(), st)
-	}
+		var acks, drops atomic.Int32
+		p.ack, p.drop = func() { acks.Add(1) }, func() { drops.Add(1) }
+		p.wait()
+		if !retrying() {
+			t.Fatal("no retries")
+		}
+		platform.FlushApp()
+		if st := ReadStats(); acks.Load() != 0 || drops.Load() != 1 || st.LostAtExit != 1 || st.Parked != 0 || retrying() {
+			t.Fatalf("answered %d, given up %d, retrying %v, stats %+v", acks.Load(), drops.Load(), retrying(), st)
+		}
+	})
+}
+
+// bubble runs f in a testing/synctest bubble, where time is fake and
+// synctest.Wait returns once the service's goroutines are all blocked. The
+// retry goroutine's channels are made in the bubble and must not outlive it:
+// when it has ended (every goroutine of a bubble has), they are dropped, or the
+// next test's last drain or record release would use them from outside.
+// Tests whose posts spawn workers (attachments, listings) stay out of bubbles:
+// the workers WaitGroup is the package's, and joins the first bubble that adds
+// to it for good.
+func bubble(t *testing.T, f func(t *testing.T)) {
+	t.Helper()
+	core.UseSynctestForTesting(t)
+	synctest.Test(t, f)
+	parking.mu.Lock()
+	parking.ended = nil
+	parking.mu.Unlock()
+	parking.wake.Store(nil)
 }

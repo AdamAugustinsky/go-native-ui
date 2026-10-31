@@ -150,88 +150,94 @@ func TestServiceReleaseLease(t *testing.T) {
 // Finding 6: Cancel left the queued job executable, and a worker then
 // listed the cancelled path under the new request number.
 func TestServiceCancelQueued(t *testing.T) {
-	h := newHarness(t)
-	h.s.List(10, "block:ten", SortName, false)
-	h.s.List(11, "block:eleven", SortName, false)
-	waitFor(t, "workers busy", 2*time.Second, func() bool { return h.fs.started.Load() >= 2 })
-	h.s.List(1, "n:3:cancelled", SortName, false)
-	h.s.Cancel(1)
-	close(h.fs.gate)
-	for i := 0; i < 2; i++ {
-		r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultListing })
-		if r.ID == 1 {
-			t.Fatalf("the cancelled request was delivered: %+v", r)
+	bubble(t, func(t *testing.T) {
+		h := newHarness(t)
+		h.s.List(10, "block:ten", SortName, false)
+		h.s.List(11, "block:eleven", SortName, false)
+		waitFor(t, "workers busy", 2*time.Second, func() bool { return h.fs.started.Load() >= 2 })
+		h.s.List(1, "n:3:cancelled", SortName, false)
+		h.s.Cancel(1)
+		close(h.fs.gate)
+		for i := 0; i < 2; i++ {
+			r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultListing })
+			if r.ID == 1 {
+				t.Fatalf("the cancelled request was delivered: %+v", r)
+			}
+			h.s.Release(r.Listing, r.Lease)
 		}
+		h.expectNone(100 * time.Millisecond)
+		if c := h.fs.calls.Load(); c != 2 {
+			t.Errorf("listed %d times, want 2: the cancelled job must not run", c)
+		}
+		// The id works again afterwards, once.
+		h.s.List(1, "n:4:again", SortName, false)
+		r := h.await(2*time.Second, isListing(1))
+		checkFake(t, r.Listing, "n:4:again")
 		h.s.Release(r.Listing, r.Lease)
-	}
-	h.expectNone(100 * time.Millisecond)
-	if c := h.fs.calls.Load(); c != 2 {
-		t.Errorf("listed %d times, want 2: the cancelled job must not run", c)
-	}
-	// The id works again afterwards, once.
-	h.s.List(1, "n:4:again", SortName, false)
-	r := h.await(2*time.Second, isListing(1))
-	checkFake(t, r.Listing, "n:4:again")
-	h.s.Release(r.Listing, r.Lease)
-	h.expectNone(60 * time.Millisecond)
-	if c := h.fs.calls.Load(); c != 3 {
-		t.Errorf("listed %d times, want 3", c)
-	}
+		h.expectNone(60 * time.Millisecond)
+		if c := h.fs.calls.Load(); c != 3 {
+			t.Errorf("listed %d times, want 3", c)
+		}
+	})
 }
 
 // Finding 7: a failure of a replaced watch must not clear the new one, and
 // events of the old watch must not be applied to the replacement.
 func TestServiceWatchGenerations(t *testing.T) {
 	t.Run("old add fails after replacement", func(t *testing.T) {
-		h := newHarness(t)
-		gate := make(chan struct{})
-		var started atomic.Int64
-		h.w.addFn = func(id uint32, path string) error {
-			if path == "/old" {
-				started.Add(1)
-				<-gate
-				return errors.New("old watch failed")
+		bubble(t, func(t *testing.T) {
+			h := newHarness(t)
+			gate := make(chan struct{})
+			var started atomic.Int64
+			h.w.addFn = func(id uint32, path string) error {
+				if path == "/old" {
+					started.Add(1)
+					<-gate
+					return errors.New("old watch failed")
+				}
+				return nil
 			}
-			return nil
-		}
-		h.s.List(1, "n:2:a", SortName, false)
-		r := h.await(2*time.Second, isListing(1))
-		h.s.Release(r.Listing, r.Lease)
-		h.s.Watch(1, "/old")
-		waitFor(t, "old add to start", 2*time.Second, func() bool { return started.Load() == 1 })
-		h.s.Watch(1, "/new")
-		close(gate)
-		waitFor(t, "new add", 2*time.Second, func() bool {
-			added, _ := h.w.snapshot()
-			return len(added) == 1 && added[0] == "1=/new"
+			h.s.List(1, "n:2:a", SortName, false)
+			r := h.await(2*time.Second, isListing(1))
+			h.s.Release(r.Listing, r.Lease)
+			h.s.Watch(1, "/old")
+			waitFor(t, "old add to start", 2*time.Second, func() bool { return started.Load() == 1 })
+			h.s.Watch(1, "/new")
+			close(gate)
+			waitFor(t, "new add", 2*time.Second, func() bool {
+				added, _ := h.w.snapshot()
+				return len(added) == 1 && added[0] == "1=/new"
+			})
+			h.expectNone(100 * time.Millisecond) // the old failure is moot: no ResultWatchError
+			h.w.emit(Change{1, ChangeDir})       // and the new watch is live
+			r = h.await(2*time.Second, isListing(1))
+			if !r.Refresh {
+				t.Error("not a refresh")
+			}
+			h.s.Release(r.Listing, r.Lease)
 		})
-		h.expectNone(100 * time.Millisecond) // the old failure is moot: no ResultWatchError
-		h.w.emit(Change{1, ChangeDir})       // and the new watch is live
-		r = h.await(2*time.Second, isListing(1))
-		if !r.Refresh {
-			t.Error("not a refresh")
-		}
-		h.s.Release(r.Listing, r.Lease)
 	})
 	t.Run("old gone is not applied to the replacement", func(t *testing.T) {
-		h := newHarness(t)
-		h.s.Watch(1, "/a")
-		waitFor(t, "watch", 2*time.Second, func() bool { return h.watchAdded(1) })
-		gate := make(chan struct{})
-		h.w.mu.Lock()
-		h.w.addGate = gate
-		h.w.mu.Unlock()
-		h.w.emit(Change{1, ChangeGone}) // pending in the old watch
-		h.s.Watch(1, "/b")              // replaces it before the UI polled
-		h.expectNone(80 * time.Millisecond)
-		close(gate)
-		waitFor(t, "second watch", 2*time.Second, func() bool { return h.watchAdded(2) })
-		h.s.List(1, "n:2:x", SortName, false)
-		r := h.await(2*time.Second, isListing(1))
-		h.s.Release(r.Listing, r.Lease)
-		h.w.emit(Change{1, ChangeDir}) // the replacement still works
-		r = h.await(2*time.Second, isListing(1))
-		h.s.Release(r.Listing, r.Lease)
+		bubble(t, func(t *testing.T) {
+			h := newHarness(t)
+			h.s.Watch(1, "/a")
+			waitFor(t, "watch", 2*time.Second, func() bool { return h.watchAdded(1) })
+			gate := make(chan struct{})
+			h.w.mu.Lock()
+			h.w.addGate = gate
+			h.w.mu.Unlock()
+			h.w.emit(Change{1, ChangeGone}) // pending in the old watch
+			h.s.Watch(1, "/b")              // replaces it before the UI polled
+			h.expectNone(80 * time.Millisecond)
+			close(gate)
+			waitFor(t, "second watch", 2*time.Second, func() bool { return h.watchAdded(2) })
+			h.s.List(1, "n:2:x", SortName, false)
+			r := h.await(2*time.Second, isListing(1))
+			h.s.Release(r.Listing, r.Lease)
+			h.w.emit(Change{1, ChangeDir}) // the replacement still works
+			r = h.await(2*time.Second, isListing(1))
+			h.s.Release(r.Listing, r.Lease)
+		})
 	})
 }
 
@@ -239,102 +245,110 @@ func TestServiceWatchGenerations(t *testing.T) {
 // after ResultGone.
 func TestServiceGoneInvalidatesListing(t *testing.T) {
 	t.Run("same path", func(t *testing.T) {
-		h := newHarness(t)
-		h.s.Watch(1, "block:x")
-		waitFor(t, "watch", 2*time.Second, func() bool { return h.watchAdded(1) })
-		h.s.List(1, "block:x", SortName, false)
-		waitFor(t, "list to start", 2*time.Second, func() bool { return h.fs.started.Load() == 1 })
-		h.w.emit(Change{1, ChangeGone})
-		r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultGone })
-		if r.ID != 1 {
-			t.Fatalf("%+v", r)
-		}
-		close(h.fs.gate) // the running listing finishes now
-		h.expectNone(150 * time.Millisecond)
+		bubble(t, func(t *testing.T) {
+			h := newHarness(t)
+			h.s.Watch(1, "block:x")
+			waitFor(t, "watch", 2*time.Second, func() bool { return h.watchAdded(1) })
+			h.s.List(1, "block:x", SortName, false)
+			waitFor(t, "list to start", 2*time.Second, func() bool { return h.fs.started.Load() == 1 })
+			h.w.emit(Change{1, ChangeGone})
+			r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultGone })
+			if r.ID != 1 {
+				t.Fatalf("%+v", r)
+			}
+			close(h.fs.gate) // the running listing finishes now
+			h.expectNone(150 * time.Millisecond)
+		})
 	})
 	t.Run("other path stands", func(t *testing.T) {
-		h := newHarness(t)
-		h.s.Watch(1, "/a")
-		waitFor(t, "watch", 2*time.Second, func() bool { return h.watchAdded(1) })
-		h.s.List(1, "block:y", SortName, false) // navigating elsewhere
-		waitFor(t, "list to start", 2*time.Second, func() bool { return h.fs.started.Load() == 1 })
-		h.w.emit(Change{1, ChangeGone})
-		h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultGone })
-		close(h.fs.gate)
-		r := h.await(2*time.Second, isListing(1))
-		checkFake(t, r.Listing, "n:3:y")
-		h.s.Release(r.Listing, r.Lease)
+		bubble(t, func(t *testing.T) {
+			h := newHarness(t)
+			h.s.Watch(1, "/a")
+			waitFor(t, "watch", 2*time.Second, func() bool { return h.watchAdded(1) })
+			h.s.List(1, "block:y", SortName, false) // navigating elsewhere
+			waitFor(t, "list to start", 2*time.Second, func() bool { return h.fs.started.Load() == 1 })
+			h.w.emit(Change{1, ChangeGone})
+			h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultGone })
+			close(h.fs.gate)
+			r := h.await(2*time.Second, isListing(1))
+			checkFake(t, r.Listing, "n:3:y")
+			h.s.Release(r.Listing, r.Lease)
+		})
 	})
 	t.Run("queued", func(t *testing.T) {
-		h := newHarness(t)
-		h.s.List(10, "block:ten", SortName, false)
-		h.s.List(11, "block:eleven", SortName, false)
-		waitFor(t, "workers busy", 2*time.Second, func() bool { return h.fs.started.Load() >= 2 })
-		h.s.Watch(1, "n:3:q")
-		waitFor(t, "watch", 2*time.Second, func() bool { return h.watchAdded(1) })
-		h.s.List(1, "n:3:q", SortName, false) // queued behind the busy workers
-		h.w.emit(Change{1, ChangeGone})
-		h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultGone })
-		close(h.fs.gate)
-		for i := 0; i < 2; i++ {
-			r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultListing })
-			if r.ID == 1 {
-				t.Fatalf("listing of a gone directory delivered: %+v", r)
+		bubble(t, func(t *testing.T) {
+			h := newHarness(t)
+			h.s.List(10, "block:ten", SortName, false)
+			h.s.List(11, "block:eleven", SortName, false)
+			waitFor(t, "workers busy", 2*time.Second, func() bool { return h.fs.started.Load() >= 2 })
+			h.s.Watch(1, "n:3:q")
+			waitFor(t, "watch", 2*time.Second, func() bool { return h.watchAdded(1) })
+			h.s.List(1, "n:3:q", SortName, false) // queued behind the busy workers
+			h.w.emit(Change{1, ChangeGone})
+			h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultGone })
+			close(h.fs.gate)
+			for i := 0; i < 2; i++ {
+				r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultListing })
+				if r.ID == 1 {
+					t.Fatalf("listing of a gone directory delivered: %+v", r)
+				}
+				h.s.Release(r.Listing, r.Lease)
 			}
-			h.s.Release(r.Listing, r.Lease)
-		}
-		h.expectNone(100 * time.Millisecond)
+			h.expectNone(100 * time.Millisecond)
+		})
 	})
 }
 
 // Finding 5: Open must not block the caller, reports failures through Poll,
 // and Close must not wait for a stuck open.
 func TestServiceOpen(t *testing.T) {
-	h := newHarness(t)
-	gate := make(chan struct{})
-	var calls atomic.Int64
-	h.s.openFn = func(path string) error {
-		calls.Add(1)
-		switch path {
-		case "stuck":
-			<-gate
+	bubble(t, func(t *testing.T) {
+		h := newHarness(t)
+		gate := make(chan struct{})
+		var calls atomic.Int64
+		h.s.openFn = func(path string) error {
+			calls.Add(1)
+			switch path {
+			case "stuck":
+				<-gate
+				return nil
+			case "bad":
+				return &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
+			}
 			return nil
-		case "bad":
-			return &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
 		}
-		return nil
-	}
-	t0 := time.Now()
-	h.s.Open(1, "stuck")
-	h.s.Open(2, "fine")
-	h.s.Open(3, "bad")
-	if d := time.Since(t0); d > 50*time.Millisecond {
-		t.Fatalf("Open blocked the caller for %v", d)
-	}
-	r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultOpenError })
-	if r.ID != 3 || !errors.Is(r.Err, os.ErrNotExist) {
-		t.Fatalf("open error %+v", r)
-	}
-	h.expectNone(60 * time.Millisecond) // the successful open and the stuck one report nothing
+		t0 := time.Now()
+		h.s.Open(1, "stuck")
+		h.s.Open(2, "fine")
+		h.s.Open(3, "bad")
+		if d := time.Since(t0); d > 50*time.Millisecond {
+			t.Fatalf("Open blocked the caller for %v", d)
+		}
+		r := h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultOpenError })
+		if r.ID != 3 || !errors.Is(r.Err, os.ErrNotExist) {
+			t.Fatalf("open error %+v", r)
+		}
+		h.expectNone(60 * time.Millisecond) // the successful open and the stuck one report nothing
 
-	// The number of opens in flight is bounded.
-	for i := 0; i < maxOpens+2; i++ {
-		h.s.Open(9, "stuck")
-	}
-	r = h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultOpenError })
-	if r.ID != 9 || r.Err == nil {
-		t.Fatalf("overflow open: %+v", r)
-	}
+		// The number of opens in flight is bounded.
+		for i := 0; i < maxOpens+2; i++ {
+			h.s.Open(9, "stuck")
+		}
+		r = h.await(2*time.Second, func(r Result) bool { return r.Kind == ResultOpenError })
+		if r.ID != 9 || r.Err == nil {
+			t.Fatalf("overflow open: %+v", r)
+		}
 
-	done := make(chan struct{})
-	go func() { h.s.Close(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Close hangs on a stuck open")
-	}
-	close(gate)
-	h.s.Open(1, "again") // after Close: ignored, no panic
+		done := make(chan struct{})
+		go func() { h.s.Close(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Close hangs on a stuck open")
+		}
+		close(gate)
+		h.s.Open(1, "again") // after Close: ignored, no panic
+	})
 }
 
 func TestArenaFits32(t *testing.T) {
@@ -389,51 +403,58 @@ func TestSortTooLarge(t *testing.T) {
 
 // Close does not hang on a listing or a watch setup that never returns.
 func TestServiceCloseBounded(t *testing.T) {
-	old := closeWait
-	closeWait = 200 * time.Millisecond
-	defer func() { closeWait = old }()
-	h := newHarness(t)
-	gate := make(chan struct{})
-	defer close(gate)
-	h.w.addFn = func(uint32, string) error { <-gate; return nil }
-	h.s.List(1, "block:x", SortName, false) // the fake's gate is never closed
-	h.s.Watch(2, "/stuck")
-	waitFor(t, "stuck work", 2*time.Second, func() bool { return h.fs.started.Load() == 1 })
-	done := make(chan struct{})
-	go func() { h.s.Close(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Close hangs on stuck file system work")
-	}
+	bubble(t, func(t *testing.T) {
+		old := closeWait
+		closeWait = 200 * time.Millisecond
+		defer func() { closeWait = old }()
+		h := newHarness(t)
+		gate := make(chan struct{})
+		defer close(gate)
+		h.w.addFn = func(uint32, string) error { <-gate; return nil }
+		// The fake's gate stays shut until Close has returned, then opens: a
+		// bubble ends only when its goroutines do.
+		defer close(h.fs.gate)
+		h.s.List(1, "block:x", SortName, false)
+		h.s.Watch(2, "/stuck")
+		waitFor(t, "stuck work", 2*time.Second, func() bool { return h.fs.started.Load() == 1 })
+		done := make(chan struct{})
+		go func() { h.s.Close(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Close hangs on stuck file system work")
+		}
+	})
 }
 
 // A watcher whose construction outlives a bounded Close is closed, not leaked.
 func TestServiceClosesAWatcherCreatedAfterClose(t *testing.T) {
-	old := closeWait
-	closeWait = 100 * time.Millisecond
-	defer func() { closeWait = old }()
-	fs := &fakeFS{gate: make(chan struct{})}
-	w := &fakeWatcher{}
-	gate, building := make(chan struct{}), make(chan struct{})
-	s := newService(func() {}, fs.list, func(func()) (watcher, error) {
-		close(building)
-		<-gate
-		return w, nil
-	}, 20*time.Millisecond)
-	s.Watch(1, "/late")
-	<-building
-	s.Close() // gives up on the stuck construction after closeWait
-	close(gate)
-	waitFor(t, "the late watcher closed", 2*time.Second, func() bool {
+	bubble(t, func(t *testing.T) {
+		old := closeWait
+		closeWait = 100 * time.Millisecond
+		defer func() { closeWait = old }()
+		fs := &fakeFS{gate: make(chan struct{})}
+		w := &fakeWatcher{}
+		gate, building := make(chan struct{}), make(chan struct{})
+		s := newService(func() {}, fs.list, func(func()) (watcher, error) {
+			close(building)
+			<-gate
+			return w, nil
+		}, 20*time.Millisecond)
+		s.Watch(1, "/late")
+		<-building
+		s.Close() // gives up on the stuck construction after closeWait
+		close(gate)
+		waitFor(t, "the late watcher closed", 2*time.Second, func() bool {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			return w.closed
+		})
 		w.mu.Lock()
-		defer w.mu.Unlock()
-		return w.closed
+		added := len(w.added)
+		w.mu.Unlock()
+		if added != 0 {
+			t.Errorf("the late watcher was used after Close: %d adds", added)
+		}
 	})
-	w.mu.Lock()
-	added := len(w.added)
-	w.mu.Unlock()
-	if added != 0 {
-		t.Errorf("the late watcher was used after Close: %d adds", added)
-	}
 }

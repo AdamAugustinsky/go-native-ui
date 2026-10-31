@@ -48,6 +48,8 @@ func (r *Ring[T]) Cap() int { return len(r.buf) }
 // TryPush enqueues v and reports false, without blocking, if the ring is
 // full.
 func (r *Ring[T]) TryPush(v T) bool {
+	// Each turn either claims, finds the ring full or sees another producer's
+	// claim; the loop is unbounded only under unbounded contention.
 	for {
 		pos := r.head.Load()
 		s := &r.buf[pos&r.mask]
@@ -71,6 +73,10 @@ func (r *Ring[T]) TryPush(v T) bool {
 // ready (later messages wait behind it).
 func (r *Ring[T]) Pop() (v T, ok bool) {
 	pos := r.tail
+	if Assertions {
+		// Producers claim at most a ring's worth past the consumer.
+		Assert(r.head.Load()-pos <= uint64(len(r.buf)), "ring: more claimed than the ring holds")
+	}
 	s := &r.buf[pos&r.mask]
 	if s.seq.Load() != pos+1 {
 		return v, false

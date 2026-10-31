@@ -27,7 +27,7 @@ type SimOptions struct {
 	Tick          time.Duration // zero: 60 Hz
 	WorkerTimeout time.Duration // REAL time, zero: five seconds per barrier
 	Render        bool          // render pixels as well as building real text/atlas/draw lists
-	Checks        []SimCheck    // nil: SimAudit and SimOwedFrames
+	Checks        []SimCheck    // nil: SimAudit, SimOwedFrames and SimInvariants
 	MaxSteps      int           // per Advance; zero: one million, bounds runaway frame loops
 }
 
@@ -76,6 +76,7 @@ type simWindow struct {
 	frames            int
 	audited           int
 	auditPending      int
+	verified          int // the frames SimInvariants has checked
 }
 
 // NewSim opens window zero. Further windows share its text system and GPU.
@@ -103,7 +104,7 @@ func NewSim(cfg Config, w, h int, scale float32, b Builder, opts SimOptions) (s 
 		s.opts.MaxSteps = 1000000
 	}
 	if s.opts.Checks == nil {
-		s.opts.Checks = []SimCheck{SimAudit, SimOwedFrames}
+		s.opts.Checks = []SimCheck{SimAudit, SimOwedFrames, SimInvariants}
 	}
 	defer func() {
 		if p := recover(); p != nil {

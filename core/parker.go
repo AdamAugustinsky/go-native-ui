@@ -45,10 +45,11 @@ type Parker struct {
 	sys parkerSys     // the operating-system object (parker_unix.go, parker_windows.go)
 }
 
-// NewParker returns a Parker with no token.
+// NewParker returns a Parker with no token. Under UseSynctestForTesting it
+// uses the channel.
 func NewParker() *Parker {
 	p := new(Parker)
-	if !p.sys.open() {
+	if synctestMode.Load() != 0 || !p.sys.open() {
 		p.ch = make(chan struct{}, 1)
 	}
 	return p

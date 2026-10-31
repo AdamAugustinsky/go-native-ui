@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -76,36 +77,38 @@ func within(t *testing.T, d time.Duration, what string, f func()) {
 // 6. Encoding runs outside the lock Get, Set and Update take, on a private copy:
 // the foreground neither waits for a slow encoder nor leaks into the snapshot.
 func TestForegroundIsNotBlockedByASlowSave(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "p.json")
-	s, _ := Open(p, slowSettings{Theme: "one", M: map[string]int{"a": 1}}, Options{Debounce: time.Hour})
-	s.Set(slowSettings{S: slow{1}, Theme: "one", M: map[string]int{"a": 1}})
-	armGate(t)
-	flushed := make(chan error, 1)
-	go func() { flushed <- s.Flush() }()
-	select {
-	case <-slowGate.started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the save never started encoding")
-	}
-	within(t, 2*time.Second, "foreground access during a save", func() {
-		_ = s.Get()
-		s.Update(func(v *slowSettings) { v.Theme = "two"; v.M["b"] = 2 }) // in place, on the live map
-		s.Set(s.Get())
+	synctest.Test(t, func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "p.json")
+		s, _ := Open(p, slowSettings{Theme: "one", M: map[string]int{"a": 1}}, Options{Debounce: time.Hour})
+		s.Set(slowSettings{S: slow{1}, Theme: "one", M: map[string]int{"a": 1}})
+		armGate(t)
+		flushed := make(chan error, 1)
+		go func() { flushed <- s.Flush() }()
+		select {
+		case <-slowGate.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the save never started encoding")
+		}
+		within(t, 2*time.Second, "foreground access during a save", func() {
+			_ = s.Get()
+			s.Update(func(v *slowSettings) { v.Theme = "two"; v.M["b"] = 2 }) // in place, on the live map
+			s.Set(s.Get())
+		})
+		openGate()
+		if err := <-flushed; err != nil {
+			t.Fatal(err)
+		}
+		b := read(t, p)
+		if strings.Contains(b, `"two"`) || strings.Contains(b, `"b"`) {
+			t.Errorf("the snapshot saw changes made after it was taken:\n%s", b)
+		}
+		if err := s.Flush(); err != nil { // the changes made meanwhile are saved next
+			t.Fatal(err)
+		}
+		if b := read(t, p); !strings.Contains(b, `"two"`) || !strings.Contains(b, `"b": 2`) {
+			t.Errorf("the later changes were lost:\n%s", b)
+		}
 	})
-	openGate()
-	if err := <-flushed; err != nil {
-		t.Fatal(err)
-	}
-	b := read(t, p)
-	if strings.Contains(b, `"two"`) || strings.Contains(b, `"b"`) {
-		t.Errorf("the snapshot saw changes made after it was taken:\n%s", b)
-	}
-	if err := s.Flush(); err != nil { // the changes made meanwhile are saved next
-		t.Fatal(err)
-	}
-	if b := read(t, p); !strings.Contains(b, `"two"`) || !strings.Contains(b, `"b": 2`) {
-		t.Errorf("the later changes were lost:\n%s", b)
-	}
 }
 
 func read(t *testing.T, p string) string {
@@ -212,23 +215,25 @@ func TestCloseQuiescesSaves(t *testing.T) {
 
 // 9. OnError runs without the save lock: it can call back into the store.
 func TestOnErrorMayCallTheStore(t *testing.T) {
-	dir := t.TempDir()
-	blocker := filepath.Join(dir, "blocker")
-	var calls atomic.Int32
-	var s *Store[settings]
-	s, _ = Open(filepath.Join(blocker, "p.json"), defaults, Options{Debounce: time.Millisecond, OnError: func(err error) {
-		if calls.Add(1) == 1 {
-			s.Flush() // takes the save lock
-			s.Err()
-			s.Get()
-		}
-	}})
-	os.WriteFile(blocker, []byte("a file"), 0o600) // fails only the save, not the initial read
-	s.Update(func(v *settings) { v.Theme = "dark" })
-	within(t, 5*time.Second, "a save whose OnError calls Flush", func() {
-		for calls.Load() < 2 { // the save and the nested Flush both fail
-			time.Sleep(time.Millisecond)
-		}
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		blocker := filepath.Join(dir, "blocker")
+		var calls atomic.Int32
+		var s *Store[settings]
+		s, _ = Open(filepath.Join(blocker, "p.json"), defaults, Options{Debounce: time.Millisecond, OnError: func(err error) {
+			if calls.Add(1) == 1 {
+				s.Flush() // takes the save lock
+				s.Err()
+				s.Get()
+			}
+		}})
+		os.WriteFile(blocker, []byte("a file"), 0o600) // fails only the save, not the initial read
+		s.Update(func(v *settings) { v.Theme = "dark" })
+		within(t, 5*time.Second, "a save whose OnError calls Flush", func() {
+			for calls.Load() < 2 { // the save and the nested Flush both fail
+				time.Sleep(time.Millisecond)
+			}
+		})
 	})
 }
 

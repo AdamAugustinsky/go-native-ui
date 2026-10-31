@@ -71,9 +71,9 @@ const (
 	// and the only flow child of a capsule (a box whose corners are rounded by
 	// half its shorter side, less a pixel) or of a box with RoleButton, when
 	// that child is an icon (an image, or text of one glyph) and the box draws
-	// no text: the icon's image box, or its glyph box (the glyph's advance by
-	// the font's ascent and descent), must have its centre on the box's centre
-	// on both axes. With no flow child, a lone icon layered over the box
+	// no text and is not a text field: the icon's image box, or its glyph box
+	// (the glyph's advance by the font's ascent and descent), must have its
+	// centre on the box's centre on both axes. With no flow child, a lone icon layered over the box
 	// (floating, through wrappers that draw nothing, beside layers that only
 	// paint) is checked the same way.
 	AuditCentre
@@ -485,8 +485,10 @@ func (c *Context) auditCentre(dst []Finding, p ID, tol float32) []Finding {
 			}
 		}
 	}
-	// a capsule or a button with one icon in it
-	if pb.flags&DrawText != 0 && pb.txt.Len > 0 {
+	// a capsule or a button with one icon in it; a text field's text (a
+	// capsule search field holding one character, say) is placed by the
+	// field, not centred
+	if pb.flags&DrawText != 0 && pb.txt.Len > 0 || pb.field {
 		return dst
 	}
 	var only ID

@@ -76,6 +76,30 @@ func TestDuplicateKeysPreserveDerivation(t *testing.T) {
 	}
 }
 
+// A workload of peaks and rests (a scripted session, then a pause) trims the
+// frame scratch once, in a rest, and from then on keeps what the next peak
+// grew it back to: neither the rests nor the peaks allocate. Before, every rest
+// trimmed it and every peak grew it again.
+func TestScratchTrimDoesNotCycle(t *testing.T) {
+	h := newHarness(t, 400, 300)
+	peak := func(c *Context) { c.fr.Cur().Alloc(64 << 10) }
+	rest := func(c *Context) { c.BoxKeyed(0, 1, nil) }
+	cycle := func() {
+		h.frame(peak)
+		for range 100 {
+			h.frame(rest)
+		}
+	}
+	cycle()
+	if c := h.c.fr.Cur().Cap(); c >= 64<<10 {
+		t.Fatalf("the rest did not trim the scratch: capacity %d", c)
+	}
+	cycle() // its peak grows the scratch back, which the rests now keep
+	if n := testing.AllocsPerRun(5, cycle); n != 0 {
+		t.Fatalf("a cycle of a peak and a rest allocates %g times (capacity %d)", n, h.c.fr.Cur().Cap())
+	}
+}
+
 func TestTrimRetainsKeyedStateAndWarmCapacity(t *testing.T) {
 	h := newHarness(t, 400, 300)
 	h.frame(func(c *Context) {
