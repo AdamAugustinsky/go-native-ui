@@ -465,14 +465,18 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: turn off Defender's real-time scan
-        # It scans every file the build and the tests write: creating the fs
-        # tests' 100k files took 250 s of the job with it on (#30). The runner
-        # is thrown away after the job.
+      - name: turn off Defender's real-time scan and 8.3 names
+        # Defender scans every file the build and the tests write (windows-11-arm
+        # refuses to turn it off). NTFS gives every new file an 8.3 short name
+        # too, which in one directory of similar names gets slower with each:
+        # the fs tests' 100k files took 250-330 s to create with it on (#30).
+        # The runner is thrown away after the job.
         shell: pwsh
         run: |
           try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop; "real-time scan off: $((Get-MpPreference).DisableRealtimeMonitoring)" }
           catch { "real-time scan left as it was: $_" }
+          fsutil.exe 8dot3name set 1
+          fsutil.exe 8dot3name query
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
@@ -508,7 +512,7 @@ jobs:
           foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') { "$n after: $(@(Get-Process $n -ErrorAction SilentlyContinue).Count)" }
       - name: test (shard ${{ matrix.shard }}/2)
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE|/app/webview$" | go run ./tools/testshard -shard ${{ matrix.shard }}/2) | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, shard ${{ matrix.shard }}/2" -raw test-windows-${{ matrix.arch }}-${{ matrix.shard }}.json
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE|/app/webview$|/cmd/vlistbench$" | go run ./tools/testshard -shard ${{ matrix.shard }}/2) | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, shard ${{ matrix.shard }}/2" -raw test-windows-${{ matrix.arch }}-${{ matrix.shard }}.json
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       # app/webview alone, after the rest (on shard 2): WebView2's engine (a
       # browser and its renderer, GPU and utility processes) and its focused
@@ -519,6 +523,14 @@ jobs:
       - name: test app/webview (alone)
         if: ${{ !cancelled() && matrix.shard == 2 }}
         run: go test -json -count=1 -skip "$QUARANTINE" ./app/webview | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, app/webview" -raw test-windows-webview-${{ matrix.arch }}.json
+      # cmd/vlistbench alone too (on shard 2): TestTimelineSession's sessions
+      # allocate nothing only while each takes under 30 s, as a list frees its
+      # idle rebuild buffer after 30 s (widget/base's vlBackIdleNs); beside
+      # shard 1's heaviest packages a session took ~38 s on arm64 and
+      # reallocated the 78 MB buffer every time (run 41174503139).
+      - name: test cmd/vlistbench (alone)
+        if: ${{ !cancelled() && matrix.shard == 2 }}
+        run: go test -json -count=1 -skip "$QUARANTINE" ./cmd/vlistbench | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, cmd/vlistbench" -raw test-windows-vlistbench-${{ matrix.arch }}.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

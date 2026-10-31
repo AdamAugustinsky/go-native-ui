@@ -84,8 +84,7 @@ var seconds = map[string]map[string]float64{
 		"gonativeui/cmd/chromedemo/demo":  210,
 		"gonativeui/cmd/imgbench":         175,
 		"gonativeui/cmd/gnui":             165,
-		"gonativeui/cmd/vlistbench":       165,
-		"gonativeui/fs":                   150, // 560 when its 100k files were created one at a time
+		"gonativeui/fs":                   60, // an estimate: 330-560 while NTFS made 8.3 names for its 100k files
 		"gonativeui/examples/notes/notes": 125,
 		"gonativeui/app":                  110,
 		"gonativeui/tools/rexui":          100,
