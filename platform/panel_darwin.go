@@ -18,7 +18,8 @@ import (
 //
 // Showing (showPanel): a NonActivating panel (a recording bar) is ordered
 // front without becoming key, so the window the user is typing in keeps the
-// keyboard, and it cannot become key (canBecomeKeyWindow NO). Any other
+// keyboard, and it cannot become key (canBecomeKeyWindow NO), unless it is
+// KeyWhileInactive: it becomes key then, the app left inactive. Any other
 // panel (a palette) activates the app and becomes key, as a3-kb's palette
 // does; HideOnDeactivate is then AppKit's hidesOnDeactivate, which needs
 // the app to have been active. Hide is orderOut:, as for any window.
@@ -69,10 +70,11 @@ func registerPanel(d *objc.ClassDef) {
 }
 
 // panelCanBecomeKey is GNUIPanel's canBecomeKeyWindow: YES for an open panel
-// that takes the keyboard, NO for a NonActivating one (and a closed one).
+// that takes the keyboard, NO for a NonActivating one unless
+// KeyWhileInactive (and a closed one).
 func panelCanBecomeKey(c *ffi.CB) {
 	w := panelKind.window(objc.ID(c.Int(0)))
-	c.RetBool(w != nil && !w.panel.NonActivating)
+	c.RetBool(w != nil && (!w.panel.NonActivating || w.panel.KeyWhileInactive))
 }
 
 // configurePanel applies the Panel's fields to the new GNUIPanel (Open).
@@ -104,9 +106,20 @@ func (w *Window) configurePanel() {
 // showPanel is Show for a panel.
 func (w *Window) showPanel() {
 	w.attachPanel() // a child panel: placed and ordered over its parent
-	if w.panel.NonActivating {
+	switch {
+	case w.panel.NonActivating && w.panel.KeyWhileInactive:
+		// Key with the app left as it is: the panel's style
+		// (NSWindowStyleMaskNonactivatingPanel) lets it become key while
+		// the app stays inactive, so no other window of the app comes
+		// forward.
+		objc.Send1(w.win, selMakeKeyFront, 0)
 		objc.Send(w.win, selOrderFrontRegardless)
-	} else {
+		if !objc.SendBool(w.win, selIsKeyWindow) {
+			w.focus(false)
+		}
+	case w.panel.NonActivating:
+		objc.Send(w.win, selOrderFrontRegardless)
+	default:
 		// The app activates first, so that the panel becomes the key window
 		// of an active app (hidesOnDeactivate needs one). From a hotkey's
 		// press the system lets it take the front.
