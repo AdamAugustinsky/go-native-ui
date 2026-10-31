@@ -266,6 +266,9 @@ System32 (PHASE2-PLAN). GLSL 330 core / GLSL ES 300 text is compiled by
   damage, which `gpu.DamageTracker` finds from consecutive draw lists,
   into a back buffer it copies to the drawable, and does not present a
   frame that changed nothing (D92).
+- What an opaque pane hides is not shaded: the pane declares a cover
+  (`ui.Context.NextCover`), and `gpu.CullCovered` drops or cuts, along
+  whole pixels, the quads drawn under it before it (D93).
 
 ## 7. Text
 

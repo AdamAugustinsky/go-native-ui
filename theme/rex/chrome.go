@@ -132,6 +132,11 @@ func (ch *chrome) BeginSurface(c *ui.Context, r *theme.Resolved, s theme.Surface
 	}
 	theme.At(c, d[0], d[1], w, h)
 	c.NextRadius(rad)
+	// An opaque fill (the focused colour, or the mesh over the field) hides
+	// what the window drew under the pane: its shadows, the field, tints.
+	if !tiny && (ft >= 1 || !flat) {
+		c.NextCover()
+	}
 	pb := c.BoxKeyed(flags, s.Key, nil)
 	c.Push(pb)
 	kg := theme.KeyGen{Base: ui.KeyN(s.Key, 500)}
