@@ -12,8 +12,13 @@ name: ci
 # test, delete its name from the job's QUARANTINE. A job with nothing
 # quarantined has no QUARANTINE and no -skip (an empty regexp skips every test).
 #
-# Job time (#30): macOS and Windows each run as two jobs side by side, the
-# tests and the windowed benches, so neither waits for the other. The test
+# Job time (#30): macOS and Windows each run their tests and their windowed
+# benches as separate jobs side by side, so neither waits for the other. The
+# tests are cut in two shards by tools/testshard, which deals the packages out
+# by their usual time on the OS and lists the slowest first (go test starts
+# them in that order): on macOS and Windows each shard is a job of its own; on
+# Linux, where the shared suite runs with no display and so the same on either
+# backend, the x11 job runs shard 1 and the Wayland job shard 2. The test
 # steps run `go test -json` through tools/testtimes, which prints the log as
 # usual and ends with a table of the slowest packages and tests (in the job
 # summary too); the raw stream is the tests-* artifact.
@@ -182,11 +187,15 @@ jobs:
           if-no-files-found: ignore
 
   macos:
-    name: macOS arm64 (Metal)
+    name: macOS arm64 (Metal) tests ${{ matrix.shard }}/2
     if: inputs.only == '' || inputs.only == 'macos'
     runs-on: macos-15
-    # phase 8's live suites (webview, panels, capture, ws) took the job to 24-25 min
+    # phase 8's live suites (webview, panels, capture, ws) took the unsharded job to 24-25 min
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     env:
       QUARANTINE: '^(TestGreenButtonWaitsForNativeReadiness|TestClientClose|TestPanelHidesOnDeactivate)$'
     steps:
@@ -226,12 +235,25 @@ jobs:
             done
           fi
           echo "GNUI_REQUIRE_LIBGHOSTTY=1" >> "$GITHUB_ENV"
-      - name: test (arm64)
+      - name: test (arm64, shard ${{ matrix.shard }}/2)
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE") | go run ./tools/testtimes -title "macOS arm64" -raw test-macos.json
-          go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE|/widget/widgettest/live$" | go run ./tools/testshard -shard ${{ matrix.shard }}/2) | go run ./tools/testtimes -title "macOS arm64, shard ${{ matrix.shard }}/2" -raw test-macos-${{ matrix.shard }}.json
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      # widget/widgettest/live alone, after the rest (on shard 1): its
+      # two-window tests count the frames an idle window draws, and with the
+      # other live packages' windows opening beside them (the slowest first
+      # put them all at the start of shard 1) an idle window drew 1 or 2
+      # (TestWindowsPaceOnTheirOwn, TestTwoWindowsIdleAndAnimate, run
+      # 41173949926); unsharded, it had started when most packages were done.
+      - name: test widget/widgettest/live (alone)
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        run: go test -json -count=1 -skip "$QUARANTINE" ./widget/widgettest/live | go run ./tools/testtimes -title "macOS arm64, widget/widgettest/live" -raw test-macos-live.json
+      # The steps below run once, on shard 2.
+      - name: vendored go-text font test
+        if: matrix.shard == 2
+        run: go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
       - name: public-API build (gnui_publicapi, DECISIONS.md D53)
+        if: matrix.shard == 2
         run: |
           go vet -tags gnui_publicapi $(go list ./... | grep -v -E "$PKGS_EXCLUDE")
           go test -json -tags gnui_publicapi -count=1 -skip "$QUARANTINE" ./platform ./app | go run ./tools/testtimes -title "macOS arm64, gnui_publicapi" -raw test-macos-publicapi.json
@@ -239,16 +261,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: go test -json -tags gnuiassert -count=1 -skip "$QUARANTINE" ./core ./ui ./app/simtests/ui ./cmd/pilot/pilot | go run ./tools/testtimes -title "macOS arm64, gnuiassert" -raw test-macos-gnuiassert.json
       - name: ffi benchmarks
+        if: matrix.shard == 2
         run: go test -run '^$' -bench . -benchmem ./internal/ffi
       - name: a release build has no debug chord, menu or inspector panel (gnui_release)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 2 }}
         run: go test -tags gnui_release ./app -run 'Release' -count=1
       - name: GnuiShot on the hosted runner (informational, phase 6 T2)
         # Can a hosted runner capture its own windows with GnuiShot? It needs the
         # Screen Recording grant, which a runner cannot be given interactively.
         # This tries it and records the answer in the job summary; it never
         # fails the job.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 2 }}
         continue-on-error: true
         timeout-minutes: 4
         run: |
@@ -284,7 +307,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: tests-macos
+          name: tests-macos-${{ matrix.shard }}
           path: test-macos*.json
           if-no-files-found: ignore
 
@@ -474,7 +497,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    name: Windows ${{ matrix.arch }} (D3D11, WARP on runners)
+    name: Windows ${{ matrix.arch }} (D3D11, WARP on runners) tests ${{ matrix.shard }}/2
     if: inputs.only == '' || inputs.only == 'windows'
     needs: libghostty-windows
     runs-on: ${{ matrix.runner }}
@@ -485,12 +508,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: amd64, runner: windows-2025 }
-          - { arch: arm64, runner: windows-11-arm }
+          - { arch: amd64, runner: windows-2025, shard: 1 }
+          - { arch: amd64, runner: windows-2025, shard: 2 }
+          - { arch: arm64, runner: windows-11-arm, shard: 1 }
+          - { arch: arm64, runner: windows-11-arm, shard: 2 }
     defaults:
       run:
         shell: bash
     steps:
+      - name: turn off Defender's real-time scan and 8.3 names
+        # Defender scans every file the build and the tests write (windows-11-arm
+        # refuses to turn it off). NTFS gives every new file an 8.3 short name
+        # too, which in one directory of similar names gets slower with each:
+        # the fs tests' 100k files took 250-330 s to create with it on (#30).
+        # The runner is thrown away after the job.
+        shell: pwsh
+        run: |
+          try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop; "real-time scan off: $((Get-MpPreference).DisableRealtimeMonitoring)" }
+          catch { "real-time scan left as it was: $_" }
+          fsutil.exe 8dot3name set 1
+          fsutil.exe 8dot3name query
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
@@ -524,23 +561,32 @@ jobs:
           (New-Object -ComObject WScript.Shell).SendKeys('{ESC}')
           Start-Sleep -Seconds 1
           foreach ($n in 'WWAHost', 'SearchHost', 'StartMenuExperienceHost') { "$n after: $(@(Get-Process $n -ErrorAction SilentlyContinue).Count)" }
-      - name: test
+      - name: test (shard ${{ matrix.shard }}/2)
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE|/app/webview$") | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}" -raw test-windows-${{ matrix.arch }}.json
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 -skip "$QUARANTINE" $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE|/app/webview$|/cmd/vlistbench$" | go run ./tools/testshard -shard ${{ matrix.shard }}/2) | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, shard ${{ matrix.shard }}/2" -raw test-windows-${{ matrix.arch }}-${{ matrix.shard }}.json
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
-      # app/webview alone, after the rest: WebView2's engine (a browser and
-      # its renderer, GPU and utility processes) and its focused page beside
-      # the other packages' desktop tests came with their foreground, focus
-      # and clipboard tests failing, a different one each run, on no other
-      # branch as often (H2), so it runs with nothing else on the desktop.
+      # app/webview alone, after the rest (on shard 2): WebView2's engine (a
+      # browser and its renderer, GPU and utility processes) and its focused
+      # page beside the other packages' desktop tests came with their
+      # foreground, focus and clipboard tests failing, a different one each
+      # run, on no other branch as often (H2), so it runs with nothing else on
+      # the desktop.
       - name: test app/webview (alone)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 2 }}
         run: go test -json -count=1 -skip "$QUARANTINE" ./app/webview | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, app/webview" -raw test-windows-webview-${{ matrix.arch }}.json
+      # cmd/vlistbench alone too (on shard 2): TestTimelineSession's sessions
+      # allocate nothing only while each takes under 30 s, as a list frees its
+      # idle rebuild buffer after 30 s (widget/base's vlBackIdleNs); beside
+      # shard 1's heaviest packages a session took ~38 s on arm64 and
+      # reallocated the 78 MB buffer every time (run 41174503139).
+      - name: test cmd/vlistbench (alone)
+        if: ${{ !cancelled() && matrix.shard == 2 }}
+        run: go test -json -count=1 -skip "$QUARANTINE" ./cmd/vlistbench | go run ./tools/testtimes -title "Windows ${{ matrix.arch }}, cmd/vlistbench" -raw test-windows-vlistbench-${{ matrix.arch }}.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: tests-windows-${{ matrix.arch }}
-          path: test-windows-*${{ matrix.arch }}.json
+          name: tests-windows-${{ matrix.arch }}-${{ matrix.shard }}
+          path: test-windows-*${{ matrix.arch }}*.json
           if-no-files-found: ignore
 
   windows-bench:
@@ -558,6 +604,11 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: turn off Defender's real-time scan (the test job's note)
+        shell: pwsh
+        run: |
+          try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop; "real-time scan off: $((Get-MpPreference).DisableRealtimeMonitoring)" }
+          catch { "real-time scan left as it was: $_" }
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
@@ -666,11 +717,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # shard: the half of the shared test suite the job runs. x11 takes
+        # shard 1, which has the slowest package (cmd/gallery/gallery, 390 s
+        # on arm64), as its benches are the shorter (about 100 s to Wayland's
+        # 250 s).
         include:
-          - { arch: amd64, backend: x11, runner: ubuntu-24.04 }
-          - { arch: amd64, backend: wayland, runner: ubuntu-24.04 }
-          - { arch: arm64, backend: x11, runner: ubuntu-24.04-arm }
-          - { arch: arm64, backend: wayland, runner: ubuntu-24.04-arm }
+          - { arch: amd64, backend: x11, runner: ubuntu-24.04, shard: 1 }
+          - { arch: amd64, backend: wayland, runner: ubuntu-24.04, shard: 2 }
+          - { arch: arm64, backend: x11, runner: ubuntu-24.04-arm, shard: 1 }
+          - { arch: arm64, backend: wayland, runner: ubuntu-24.04-arm, shard: 2 }
     env:
       GNUI_BACKEND: ${{ matrix.backend }}
       LIBGL_ALWAYS_SOFTWARE: "1"
@@ -753,10 +808,12 @@ jobs:
           fi
           exit "$status"
           EOF
-      - name: test
+      - name: test (shard ${{ matrix.shard }}/2 of the shared suite)
         run: |
-          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE") | go run ./tools/testtimes -title "Linux ${{ matrix.arch }} ${{ matrix.backend }}" -raw test-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
-          go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
+          GNUI_FS_REPORT=$RUNNER_TEMP/fs-report.txt go test -json -count=1 $(go list $PKGS | grep -v -E "$PKGS_EXCLUDE" | go run ./tools/testshard -shard ${{ matrix.shard }}/2) | go run ./tools/testtimes -title "Linux ${{ matrix.arch }} ${{ matrix.backend }}, shard ${{ matrix.shard }}/2" -raw test-linux-${{ matrix.arch }}-${{ matrix.backend }}.json
+          if [ "${{ matrix.shard }}" = 1 ]; then
+            go test -count=1 github.com/go-text/typesetting/font # vendored: CFF outline extraction allocates nothing (a system CFF font)
+          fi
           { echo '```'; cat $RUNNER_TEMP/fs-report.txt || true; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: platform tests (X11 on Xvfb - clipboard, cursors, content-first startup)
         if: matrix.backend == 'x11'
@@ -774,23 +831,20 @@ jobs:
           wtype -s 900000 a > /dev/null 2>&1 &   # a virtual keyboard gives the seat keyboard focus to give
           sleep 1
           GNUI_TEST_SWAY=1 go test -count=1 -v -run 'Sway' ./platform
-      - name: build spike
-        run: go build -trimpath -ldflags="-s -w" -o bin/spike ./cmd/spike
+      - name: build the bench binaries once
+        # One go build for every binary the steps below run (the macOS benches' note).
+        run: go build -trimpath -ldflags="-s -w" -o bin/ ./cmd/spike ./cmd/listbench ./cmd/pilot ./cmd/pilot/pilotshot ./cmd/gallery ./examples/notes ./cmd/rexlook/rex/rexshot
       - name: spike bench + gates (X11 on Xvfb)
         if: matrix.backend == 'x11'
         run: |
           xvfb-run -a -s "-screen 0 1280x800x24" \
             bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-linux-${{ matrix.arch }}-x11.json
-          go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/listbench -bench -gate -allocsites -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-x11.json
-          go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/pilot -bench -gate -allow-unpaced -budget-scale 3 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-x11.json
-          go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-x11.json
-          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
           xvfb-run -a -s "-screen 0 1280x800x24" \
             ./bin/notes -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-linux-${{ matrix.arch }}-x11.json
       - name: spike bench + gates (Wayland on headless Weston)
@@ -803,20 +857,16 @@ jobs:
           for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] && break; sleep 0.1; done
           [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] || { cat weston.log; exit 1; }
           WAYLAND_DISPLAY=wayland-ci bash "$RUNNER_TEMP/stallgate.sh" 'bench stalled|bench timed out|no frame callbacks|spike: timed out after|[0-9]+ measured frames, want' ./bin/spike -bench -idle 5s -gate -allocsites -timeout 180s | tee spike-linux-${{ matrix.arch }}-wayland.json
-          go build -trimpath -ldflags="-s -w" -o bin/listbench ./cmd/listbench
           WAYLAND_DISPLAY=wayland-ci ./bin/listbench -bench -gate -allow-unpaced -budget-scale 3 -timeout 120s | tee listbench-linux-${{ matrix.arch }}-wayland.json
-          go build -trimpath -ldflags="-s -w" -o bin/pilot ./cmd/pilot
           WAYLAND_DISPLAY=wayland-ci ./bin/pilot -bench -gate -allow-unpaced -budget-scale 3 -timeout 420s | tee pilot-linux-${{ matrix.arch }}-wayland.json
-          go build -trimpath -ldflags="-s -w" -o bin/gallery ./cmd/gallery
           WAYLAND_DISPLAY=wayland-ci ./bin/gallery -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee gallery-linux-${{ matrix.arch }}-wayland.json
-          go build -trimpath -ldflags="-s -w" -o bin/notes ./examples/notes
           WAYLAND_DISPLAY=wayland-ci ./bin/notes -bench -gate -allow-unpaced -max-cpu-us 0 -timeout 420s | tee notes-linux-${{ matrix.arch }}-wayland.json
       - name: listbench + rex + pilot + gallery offscreen PNGs
         run: |
-          go run ./cmd/rexlook/rex/rexshot -o rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark rex-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
-          go run ./cmd/listbench -o listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
-          go run ./cmd/pilot/pilotshot -o pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
-          go run ./cmd/gallery -o gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
+          ./bin/rexshot -o rex-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark rex-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
+          ./bin/listbench -o listbench-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
+          ./bin/pilotshot -o pilot-linux-${{ matrix.arch }}-${{ matrix.backend }}.png
+          ./bin/gallery -o gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}.png -o-dark gallery-linux-${{ matrix.arch }}-${{ matrix.backend }}-dark.png
       - name: summary
         if: always()
         run: |
