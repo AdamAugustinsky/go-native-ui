@@ -265,6 +265,9 @@ System32 (PHASE2-PLAN). GLSL 330 core / GLSL ES 300 text is compiled by
 - Partial presents (dirty rects) are a later optimisation. A full redraw
   of a file-browser frame is cheap; the point is that idle frames are
   never drawn.
+- What an opaque pane hides is not shaded: the pane declares a cover
+  (`ui.Context.NextCover`), and `gpu.CullCovered` drops or cuts, along
+  whole pixels, the quads drawn under it before it (D93).
 
 ## 7. Text
 
