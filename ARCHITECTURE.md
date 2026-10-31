@@ -262,10 +262,10 @@ System32 (PHASE2-PLAN). GLSL 330 core / GLSL ES 300 text is compiled by
   - icons: OS system symbols rasterised into the atlas;
   - focus dimming: an animated colour transform per subtree;
   - window chrome: custom on each OS.
-- Partial presents (dirty rects) are a later optimisation. A full redraw
-  of a file-browser frame is cheap; the point is that idle frames are
-  never drawn. `gpu.DamageTracker` (D92) finds a frame's damage from
-  consecutive draw lists; drawing only the damage is the next step.
+- Idle frames are never drawn. On macOS a window draws only a frame's
+  damage, which `gpu.DamageTracker` finds from consecutive draw lists,
+  into a back buffer it copies to the drawable, and does not present a
+  frame that changed nothing (D92).
 
 ## 7. Text
 

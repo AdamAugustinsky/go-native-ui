@@ -72,6 +72,8 @@ var (
 	rsSetLoad      = objc.Sel("setLoadAction:")
 	rsSetScissor   = objc.Sel("setScissorRect:")
 	rsCopyTex      = objc.Sel("copyFromTexture:toTexture:")
+	rsWidth        = objc.Sel("width")
+	rsHeight       = objc.Sel("height")
 	rsCopyRegion   = objc.Sel("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:")
 	rsSetStore     = objc.Sel("setStoreAction:")
 	rsSetClear     = objc.Sel("setClearColor:")
@@ -1299,9 +1301,10 @@ func (r *Renderer) ReleaseBackBuffer(b uintptr) {
 // EncodeDamaged encodes list as Encode does, into back (a back buffer of
 // NewBackBuffer's, of the target's size, holding the previous frame drawn
 // into it) where d says the frame changed, the whole of it when d is Full,
-// and then copies back to target (a drawable; none when 0 or back). A
-// frame with no damage only copies. Every pixel it leaves is the same as a
-// whole frame's would be: d must be a DamageTracker's for this back buffer.
+// and then copies back to target (a drawable of the same size; none when 0
+// or back). A frame with no damage only copies. Every pixel it leaves is the
+// same as a whole frame's would be: d must be a DamageTracker's for this
+// back buffer.
 func (r *Renderer) EncodeDamaged(cmdBuf, target, back uintptr, width, height int, clear [4]float32, list *DrawList, d *Damage) {
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
@@ -1320,6 +1323,37 @@ func (r *Renderer) EncodeDamaged(cmdBuf, target, back uintptr, width, height int
 		objc.Send2(blit, rsCopyTex, back, target)
 		objc.Send(blit, rsEndEncoding)
 	}
+}
+
+// TextureSize is the size of a texture (a drawable's, a back buffer's) in
+// pixels.
+func TextureSize(t uintptr) (w, h int) {
+	return int(objc.Send(objc.ID(t), rsWidth)), int(objc.Send(objc.ID(t), rsHeight))
+}
+
+// CheckBackBuffer compares a back buffer of NewBackBuffer's with list drawn
+// whole into the offscreen target, once the frames committed before it are
+// done: for a debug mode that checks each partial frame. ref and got hold
+// width×height×4 bytes each. It returns false and the first pixel that
+// differs.
+func (r *Renderer) CheckBackBuffer(back uintptr, width, height int, clear [4]float32, list *DrawList, ref, got []byte) (x, y int, ok bool) {
+	r.RenderToRGBA(width, height, clear, list, ref)
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	cb := objc.Send(r.queue, rsCommandBuf)
+	blit := objc.Send(cb, rsBlitEncoder)
+	objc.Send2(blit, rsCopyTex, back, uintptr(r.offscreen))
+	objc.Send(blit, rsEndEncoding)
+	objc.Send(cb, rsCommit)
+	objc.Send(cb, rsWait)
+	r.readTarget(got)
+	n := width * height * 4
+	for i := 0; i < n; i += 4 {
+		if ref[i] != got[i] || ref[i+1] != got[i+1] || ref[i+2] != got[i+2] || ref[i+3] != got[i+3] {
+			return i / 4 % width, i / 4 / width, false
+		}
+	}
+	return 0, 0, true
 }
 
 // clearRects resets d's rectangles of back to clear, from a tile that
