@@ -35,10 +35,22 @@ type ListGlyphs struct {
 	SortUp, SortDown icon.ID
 }
 
-// ListGlyphSpecs are the glyphs AddListGlyphs adds: SF Symbols chevrons whose
-// ink matches macOS 27.2's (a disclosure 5 × 8.5 pt pointing right, a sort
-// indicator about 6 pt wide).
+// ListGlyphSpecs are the glyphs AddListGlyphs adds: Lucide's chevrons as T3
+// Code sizes them, a disclosure at 14 pt (its ink about 5 × 8 pt, AppKit's
+// 5 × 8.5) and a sort indicator at 12 pt (about 7 pt wide). The SF Symbols
+// chevrons at AppKit's sizes are ListGlyphSystemSpecs.
 var ListGlyphSpecs = [4]icon.Spec{
+	{Lucide: "chevron-right", Fallback: '▸', Pt: 14},
+	{Lucide: "chevron-down", Fallback: '▾', Pt: 14},
+	{Lucide: "chevron-up", Fallback: '▴', Pt: 12},
+	{Lucide: "chevron-down", Fallback: '▾', Pt: 12},
+}
+
+// ListGlyphSystemSpecs are SF Symbols chevrons whose ink matches macOS
+// 27.2's (a disclosure 5 × 8.5 pt pointing right, a sort indicator about
+// 6 pt wide), with their Segoe glyphs: for an app that draws the system's
+// symbols (icon.UseSystemSymbols), in place of ListGlyphSpecs.
+var ListGlyphSystemSpecs = [4]icon.Spec{
 	{Symbol: "chevron.right", Segoe: 0xE76C, Fallback: '▸', Pt: 9, Weight: 0.4},
 	{Symbol: "chevron.down", Segoe: 0xE70D, Fallback: '▾', Pt: 9, Weight: 0.4},
 	{Symbol: "chevron.up", Segoe: 0xE70E, Fallback: '▴', Pt: 7.5, Weight: 0.4},

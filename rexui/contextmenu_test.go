@@ -319,3 +319,94 @@ func TestContextMenuMnemonics(t *testing.T) {
 		t.Errorf("a frame of the open menu allocates %v times", n)
 	}
 }
+
+// DropdownMenu opens the drawn menu below its button on a click, on every OS
+// (native menus or not): a section header is a label that takes no focus,
+// items show their Lucide icons, the arrow keys skip the header, Enter
+// chooses, a press on the button closes the menu without opening it again,
+// and an open menu's frames allocate nothing.
+func TestDropdownMenu(t *testing.T) {
+	var item int
+	var chosen bool
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		b := rexui.Button(g.k, "Add", rexui.ButtonOpts{})
+		if i, ok := rexui.DropdownMenu(g.k, b.ID, func(m *[]ui.MenuItem) {
+			*m = append(*m,
+				ui.MenuItem{Header: true, Title: "Attach"},
+				ui.MenuItem{ID: 1, Title: "File", Icon: "paperclip"},
+				ui.MenuItem{ID: 2, Title: "Image", Icon: "image"},
+				ui.MenuSeparator,
+				ui.MenuItem{Header: true, Title: "Mode"},
+				ui.MenuItem{ID: 3, Title: "Plan", Icon: "list-todo"})
+		}); ok {
+			item, chosen = i, true
+		}
+	}))
+	g.c.SetNativeMenus(true) // drawn all the same
+	has := func(role ui.Role, name string) (ui.SemNode, bool) {
+		g.c.Semantics(&g.sem)
+		for _, n := range g.sem.Nodes {
+			if n.Role == role && string(g.sem.Text(n.Name)) == name {
+				return n, true
+			}
+		}
+		return ui.SemNode{}, false
+	}
+	g.frames(2)
+	btn := g.node(ui.RoleButton, "Add")
+	g.click(centre(btn))
+	g.frame()
+	file, ok := has(ui.RoleMenuItem, "File")
+	if !ok {
+		t.Fatal("a click on the button did not open the menu")
+	}
+	if _, ok := g.c.TakeMenuRequest(); ok {
+		t.Error("a native menu was requested")
+	}
+	if file.Bounds[1] < btn.Bounds[3]-1 {
+		t.Errorf("the menu's item at %v is not below the button %v", file.Bounds, btn.Bounds)
+	}
+	if _, ok := has(ui.RoleLabel, "Attach"); !ok {
+		t.Error("the header is not a label")
+	}
+	if _, ok := has(ui.RoleMenuItem, "Attach"); ok {
+		t.Error("the header is a menu item")
+	}
+	images := 0
+	g.c.Semantics(&g.sem)
+	for _, n := range g.sem.Nodes {
+		if n.Role == ui.RoleImage {
+			images++
+		}
+	}
+	if images < 3 {
+		t.Errorf("%d images in the menu, want the 3 icons", images)
+	}
+	if n := testing.AllocsPerRun(20, g.frame); n != 0 {
+		t.Errorf("a frame with the menu open allocates %v times", n)
+	}
+
+	// a press on the button closes it and does not reopen it
+	g.click(centre(btn))
+	g.frames(2)
+	if _, ok := has(ui.RoleMenuItem, "File"); ok {
+		t.Fatal("a press on the button left the menu open")
+	}
+
+	// the keyboard: Enter on the button opens it with File focused (the
+	// header skipped); Down twice passes the separator and the second header
+	g.key(ui.KeyEnter, 0)
+	g.frame()
+	if _, ok := has(ui.RoleMenuItem, "File"); !ok {
+		t.Fatal("Enter on the button did not open the menu")
+	}
+	g.key(ui.KeyDown, 0)
+	g.frame()
+	g.key(ui.KeyDown, 0)
+	g.frame()
+	g.key(ui.KeyEnter, 0)
+	g.frame()
+	if !chosen || item != 3 {
+		t.Fatalf("by keyboard: chosen %v item %d, want 3", chosen, item)
+	}
+}

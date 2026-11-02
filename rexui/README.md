@@ -650,12 +650,30 @@ with the same buttons, in the same order: Cancel first, the default last.
 declares a native tooltip region and draws nothing; elsewhere it draws one
 from `TooltipLook`.
 
-**Icons** take the weight and size of a text style, as
-`NSImage.SymbolConfiguration(textStyle:scale:)` does: `icon.Spec{…}.In(icon.StyleHeadline, icon.ScaleLarge)`.
-AppKit rasterises the symbol at that size, weight and scale on macOS
-(a test compares it with `textStyle:scale:` for every style and scale); the
+**Icons** are Lucide's (https://lucide.dev, the set T3 Code uses), the same
+on macOS, Windows and Linux: `icon.Lucide("folder-open")` at 16 pt beside a
+row's or a button's text, `.Small()` (14 pt) in dense places, T3 Code's
+`size-4` and `size-3.5`. The standard icons, the sidebar's places, the list
+disclosures and sort indicators are Lucide; `ToolbarIcon` and
+`SidebarTileIcon` make an item's. An icon is rasterised from its outlines into
+the icon atlas on whole pixels (16 × 16 px at 1x, 32 × 32 at 2x) and tinted
+by the text colour. SF Symbols and Segoe stay one call away for an app that
+wants the platform's look: `icon.UseSystemSymbols()`, `icon.Spec{Symbol: …}`,
+`ToolbarSymbol`, `SidebarTileSymbol`, `ListGlyphSystemSpecs`.
+
+An icon beside text can take the size and weight of a text style, as
+`NSImage.SymbolConfiguration(textStyle:scale:)` does: `icon.Lucide("plus").In(icon.StyleHeadline, icon.ScaleLarge)`
+gives a Lucide icon a side in proportion to the style and a stroke of its
+weight; an SF Symbol is rasterised by AppKit at that size, weight and scale (a
+test compares it with `textStyle:scale:` for every style and scale), and the
 drawn glyph of Windows and Linux takes the style's point size and the scale's
 factor.
+
+**Menus** an app draws are `ContextMenu` (a right-click; native on macOS) and
+`DropdownMenu` (a button's menu, drawn on every OS): items with Lucide icons
+(`ui.MenuItem.Icon`), section headers (`Header`), check marks, key
+equivalents, separators and submenus, with the arrow keys, Escape and
+mnemonics. A menu of icons and no check marks has no mark column, as T3 Code's.
 
 ## Owning a component
 

@@ -45,8 +45,9 @@ func OnContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (ite
 // Right opens a submenu and Left closes it, Enter and Space choose. Its items
 // are the ones build made on the click (base.Kit.MenuItems), shown until it
 // closes, so a submenu's slice must stay unchanged while it is open. It
-// shows check marks, key equivalents (as hints), disabled and destructive
-// items, separators and submenus; symbols are not drawn. Each item has a
+// shows check marks, Lucide icons (MenuItem.Icon; Symbol is the native
+// menu's), key equivalents (as hints), disabled and destructive items,
+// section headers, separators and submenus. Each item has a
 // mnemonic (base.Mnemonics): its Key when it has no modifiers (Key 'N' shows
 // "N" and N chooses the item), else a free letter of its title; typing it, with
 // or without Alt, chooses the item while the menu is open, and it is
@@ -88,6 +89,49 @@ func ContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item 
 	return 0, false
 }
 
+// DropdownMenu is the menu of a button (T3 Code's and the web's dropdown
+// menus, the composer's "+" and "…"): a click on the component with root box
+// id (a button's Signal.ID), or Enter or Space on it, opens a drawn menu below
+// it, on every OS, with the items build makes then; it reports the chosen
+// item in the frame it is chosen. The menu is ContextMenu's drawn menu, with
+// its icons, headers, arrow keys, submenus, mnemonics and Escape; the
+// keyboard opens it with the first item focused. A press outside closes it,
+// and a press on the button closes it without opening it again. Call it in
+// every frame that builds the button, after the button.
+//
+//	b := rexui.IconButton(k, icon.Plus, "Add", rexui.IconButtonOpts{})
+//	if item, ok := rexui.DropdownMenu(k, b.ID, func(m *[]ui.MenuItem) {
+//		*m = append(*m, ui.MenuItem{Header: true, Title: "Attach"}, ui.MenuItem{ID: 1, Title: "File…", Icon: "paperclip"})
+//	}); ok { attach(item) }
+func DropdownMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item int, ok bool) {
+	c := k.Context()
+	if id == 0 {
+		return 0, false
+	}
+	pop := k.Popup()
+	owner := c.KeyOf(id)
+	keyed := false
+	if !k.Disabled() {
+		s := c.Signal(id)
+		if s.Clicked || s.Activated {
+			keyed = s.Activated
+			items := k.MenuScratch()
+			build(items)
+			k.OpenPopup(base.PopupItems, owner, 0, c.Rect(id))
+		}
+	}
+	if !pop.OpenBy(base.PopupItems, owner) {
+		return 0, false
+	}
+	k.KeepPopup()
+	cm := contextMenu{k: k, chosen: -1, keyed: keyed}
+	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, ui.PlaceBelow, ui.HashString(owner, "dropdown"))
+	if cm.chosen >= 0 {
+		return cm.item, true
+	}
+	return 0, false
+}
+
 // MenuRecipe is the look of a drawn menu (ContextMenu off macOS): AppKit's
 // menu metrics (theme.ListSizes' 24 pt items, 5 pt padding, 11 pt
 // separators) on the raised surface, with the emphasised selection.
@@ -97,18 +141,25 @@ type MenuRecipe struct {
 	// between an item's parts, all in points; Radius is the panel's corner
 	// radius, RowRadius an item's, MinW the narrowest the menu is.
 	RowH, Pad, SepH, RowPad, Gap, Radius, RowRadius, MinW float32
+	// IconPt is the side of an item's icon (MenuItem.Icon), in points.
+	IconPt float32
 	// Selected is the highlighted item's fill; Text, Disabled, Destructive
 	// and Shortcut colour an item's title and its key equivalent, OnSelected
-	// a highlighted one's; Separator is a separator's line.
-	Selected, Text, Disabled, Destructive, Shortcut, OnSelected, Separator Tint
+	// a highlighted one's; Separator is a separator's line; Icon colours an
+	// item's icon (a highlighted, disabled or destructive item's takes its
+	// title's colour); Header is a section header's title.
+	Selected, Text, Disabled, Destructive, Shortcut, OnSelected, Separator, Icon, Header Tint
+	// HeaderStyle is a section header's text style.
+	HeaderStyle theme.TextStyle
 }
 
 // MenuLook is the drawn menus' recipe.
 var MenuLook = MenuRecipe{
-	RowH: 24, Pad: 5, SepH: 11, RowPad: 8, Gap: 6, Radius: 10, RowRadius: 6, MinW: 160,
+	RowH: 24, Pad: 5, SepH: 11, RowPad: 8, Gap: 6, Radius: 10, RowRadius: 6, MinW: 160, IconPt: 16,
 	Selected: Of(theme.Selection), Text: Of(theme.Label), Disabled: Of(theme.Label3),
 	Destructive: Of(theme.Red), Shortcut: Of(theme.Label2), OnSelected: Of(theme.OnSelection),
-	Separator: Of(theme.Separator),
+	Separator: Of(theme.Separator), Icon: Of(theme.Label2), Header: Of(theme.Label2),
+	HeaderStyle: theme.StyleSubheadline,
 }
 
 // contextMenu builds the drawn menu of one frame.
@@ -148,21 +199,40 @@ func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place 
 	chevW, chevH := k.IconSize(icon.ChevronRight)
 	checkW, chevW = theme.Snap(checkW), theme.Snap(chevW)
 
-	// the widths: the widest title and the widest key equivalent
+	// the widths: the widest title and the widest key equivalent; the
+	// columns of the marks and the icons
+	hfont := r.Styles[rc.HeaderStyle].Font
 	buf := k.MenuLabelScratch(level)
-	var lw, sw float32
-	hasSub := false
+	var lw, sw, hw float32
+	hasSub, hasIcon, hasMark := false, false, false
 	for i := 0; i < items.len(); i++ {
 		it := items.item(i)
-		if it.Separator {
+		switch {
+		case it.Separator:
+			continue
+		case it.Header:
+			hw = max(hw, k.TextWidth(hfont, it.Title))
 			continue
 		}
 		lw = max(lw, k.TextWidth(font, it.Title))
 		sw = max(sw, k.TextWidthBytes(font, shortcutLabel(buf, &it)))
 		hasSub = hasSub || items.hasSub(i)
+		hasIcon = hasIcon || it.Icon != ""
+		hasMark = hasMark || it.Mark != ui.MarkNone
+	}
+	// a menu of icons and no marks has no mark column (T3 Code's menus);
+	// any other keeps AppKit's
+	markW := checkW + gap
+	if hasIcon && !hasMark {
+		markW = 0
+	}
+	var iconW float32
+	if hasIcon {
+		iconW = theme.Snap(pt(sc, rc.IconPt)) + gap
 	}
 	lw, sw = ui.CeilText(lw), theme.Snap(sw) // a title's box is never narrower than its text
-	rowW := 2*rowPad + checkW + gap + lw
+	lw = max(lw, ui.CeilText(hw)-iconW)      // a header starts where the icons do
+	rowW := 2*rowPad + markW + iconW + lw
 	if sw > 0 {
 		rowW += 2*gap + sw
 	}
@@ -177,7 +247,7 @@ func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place 
 	for i := 0; i < items.len(); i++ {
 		it := items.item(i)
 		want := items.mnemonic(i)
-		if it.Separator {
+		if it.Separator || it.Header {
 			mns.Add("", 0)
 		} else {
 			mns.Add(it.Title, want)
@@ -236,18 +306,33 @@ func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place 
 			c.Pop()
 			continue
 		}
+		if it.Header {
+			c.NextAxis(ui.AxisX)
+			c.NextCross(ui.CrossCenter)
+			c.NextPadding(rowPad+markW, 0, rowPad, 0)
+			c.NextSize(ui.Px(rowW), ui.Px(rowH))
+			c.Push(c.BoxKeyed(0, ui.KeyN(okey, uint64(3000+i)), nil))
+			c.NextSize(ui.Pct(1), ui.Px(rowH))
+			c.NextFont(hfont)
+			c.NextTextColor(rc.Header.RGBA(r))
+			c.NextRole(ui.RoleLabel)
+			c.NextSemName(it.Title)
+			c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(okey, uint64(4000+i)), base.StrBytes(it.Title))
+			c.Pop()
+			continue
+		}
 		key := ui.KeyN(okey, uint64(i+2))
 		disabled := it.Disabled || k.Disabled()
 		subOpen := items.hasSub(i) && pop.Hi[level] == int32(i)
 		hi := !disabled && (c.FocusKey() == key || subOpen)
-		fill, fg, fg2 := uint32(0), rc.Text.RGBA(r), rc.Shortcut.RGBA(r)
+		fill, fg, fg2, fgi := uint32(0), rc.Text.RGBA(r), rc.Shortcut.RGBA(r), rc.Icon.RGBA(r)
 		switch {
 		case disabled:
-			fg, fg2 = rc.Disabled.RGBA(r), rc.Disabled.RGBA(r)
+			fg, fg2, fgi = rc.Disabled.RGBA(r), rc.Disabled.RGBA(r), rc.Disabled.RGBA(r)
 		case hi && active:
-			fill, fg, fg2 = rc.Selected.RGBA(r), rc.OnSelected.RGBA(r), rc.OnSelected.RGBA(r)
+			fill, fg, fg2, fgi = rc.Selected.RGBA(r), rc.OnSelected.RGBA(r), rc.OnSelected.RGBA(r), rc.OnSelected.RGBA(r)
 		case it.Destructive:
-			fg = rc.Destructive.RGBA(r)
+			fg, fgi = rc.Destructive.RGBA(r), rc.Destructive.RGBA(r)
 		}
 		flags := ui.DrawBackground | ui.Clickable | ui.Focusable
 		if disabled {
@@ -277,28 +362,43 @@ func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place 
 		row := c.BoxKeyed(flags, key, nil)
 		c.Push(row)
 		// the mark column
-		switch it.Mark {
-		case ui.MarkOn:
-			c.NextSize(ui.Px(checkW), ui.Px(rowH))
-			k.Icon(icon.Check, fg)
-		case ui.MarkMixed:
-			c.NextSize(ui.Px(checkW), ui.Px(rowH))
-			c.NextFont(font)
-			c.NextTextColor(fg)
-			c.NextAlign(ui.AlignCenter)
-			c.BoxKeyed(ui.DrawText, ui.KeyN(key, 1), base.StrBytes("–"))
-		default:
-			c.NextSize(ui.Px(checkW), ui.Px(rowH))
-			c.BoxKeyed(0, ui.KeyN(key, 1), nil)
+		if markW > 0 {
+			switch it.Mark {
+			case ui.MarkOn:
+				c.NextSize(ui.Px(checkW), ui.Px(rowH))
+				k.Icon(icon.Check, fg)
+			case ui.MarkMixed:
+				c.NextSize(ui.Px(checkW), ui.Px(rowH))
+				c.NextFont(font)
+				c.NextTextColor(fg)
+				c.NextAlign(ui.AlignCenter)
+				c.BoxKeyed(ui.DrawText, ui.KeyN(key, 1), base.StrBytes("–"))
+			default:
+				c.NextSize(ui.Px(checkW), ui.Px(rowH))
+				c.BoxKeyed(0, ui.KeyN(key, 1), nil)
+			}
+			c.NextSize(ui.Px(gap), ui.Px(rowH))
+			c.BoxKeyed(0, ui.KeyN(key, 5), nil)
 		}
-		c.NextSize(ui.Px(gap), ui.Px(rowH))
-		c.BoxKeyed(0, ui.KeyN(key, 5), nil)
+		// the icon column
+		if hasIcon {
+			c.NextSize(ui.Px(iconW-gap), ui.Px(rowH))
+			c.NextCross(ui.CrossCenter)
+			c.NextJustify(ui.JustifyCenter)
+			c.Push(c.BoxKeyed(0, ui.KeyN(key, 8), nil))
+			if it.Icon != "" {
+				k.Icon(k.NamedIcon(it.Icon), fgi)
+			}
+			c.Pop()
+			c.NextSize(ui.Px(gap), ui.Px(rowH))
+			c.BoxKeyed(0, ui.KeyN(key, 9), nil)
+		}
 		c.NextSize(ui.Pct(1), ui.Px(rowH))
 		c.NextFont(font)
 		c.NextTextColor(fg)
 		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(key, 2), base.StrBytes(it.Title))
 		if _, off := mns.At(i); show && off >= 0 && !disabled {
-			k.MnemonicUnderline(ui.KeyN(key, 7), font, it.Title, off, rowPad+checkW+gap, 0, rowH, fg)
+			k.MnemonicUnderline(ui.KeyN(key, 7), font, it.Title, off, rowPad+markW+iconW, 0, rowH, fg)
 		}
 		if lab := shortcutLabel(buf, &it); len(lab) > 0 {
 			c.NextSize(ui.Px(sw+2*gap), ui.Px(rowH))
@@ -416,7 +516,7 @@ func (m *contextMenu) letter(level int, items menuRows, mns *base.Mnemonics, oke
 	}
 	base.ClaimMnemonic(c, at)
 	it := items.item(i)
-	if it.Disabled {
+	if it.Disabled || it.Header {
 		return
 	}
 	key := ui.KeyN(okey, uint64(i+2))

@@ -1,23 +1,15 @@
-// Package icon draws system symbols: SF Symbols on macOS, Segoe Fluent Icons
-// or Segoe MDL2 Assets on Windows, and glyphs of the system fonts on Linux.
-// Nothing here is third-party artwork, and no symbol font is redistributed.
+// Package icon draws the icons of an app's interface: Lucide's outlines
+// (https://lucide.dev, the set T3 Code and much of the web use) on every
+// system by default, and the system's own symbols where an app asks for them:
+// SF Symbols on macOS, Segoe Fluent Icons or Segoe MDL2 Assets on Windows.
+// Lucide is ISC-licensed artwork, vendored in third_party/lucide with its
+// licence (DECISIONS.md, the Lucide entry); no symbol font is redistributed.
 //
-// An icon is a Spec: the name of its SF Symbol, its Segoe codepoint and a
-// fallback rune. Standard lists the icons the widgets use; an app adds its
-// own after them.
+// An icon is a Spec: the name of its Lucide icon (Lucide("search")), or of its
+// SF Symbol and its Segoe codepoint, and a fallback rune. Standard lists the
+// icons the widgets use; an app adds its own after them.
 //
 // # Where an icon comes from
-//
-// # Text styles and scales
-//
-// An icon next to text is sized for the text's style, as
-// NSImage.SymbolConfiguration(textStyle:scale:) does: Spec.In gives a spec the
-// point size and weight of a text style (StyleBody, StyleHeadline,
-// StyleTitle1 …) and a scale (ScaleSmall, ScaleMedium, ScaleLarge). On macOS
-// the symbol is rasterised by AppKit's own configuration for that size,
-// weight and scale (a test compares it with textStyle:scale: for every style
-// and scale); on Windows and Linux the drawn glyph takes the style's size
-// and the scale's factor.
 //
 // Atlas.Raster picks a source per icon, once per scale, and never per frame.
 // It picks it for an icon when the icon is first used (Prepare, Size, Source,
@@ -25,19 +17,45 @@
 // icons and shows five rasterises five. The icon is ready, and uploaded, by the
 // time the call returns, so it draws in the frame that first asks for it.
 //
-//   - On macOS the SF Symbol is rasterised through AppKit into an R8 coverage
-//     atlas, which Attach uploads, and drawn as an image tinted by the text
-//     colour (SourceImage).
-//   - Where that fails (no such symbol on this macOS, or a platform without
-//     SF Symbols), the Segoe codepoint is set as text in the symbol font if the
+//   - A Lucide icon is rasterised from its outlines, on every system, into an
+//     R8 coverage atlas, which Attach uploads, and drawn as an image tinted by
+//     the text colour (SourceLucide). Its image is a whole number of pixels on
+//     a side at the window's scale, drawn at that size, so a 16 pt icon is
+//     16×16 px at 1× and 32×32 px at 2×.
+//   - Without a Lucide name, or with a name the set lacks, the SF Symbol is
+//     rasterised through AppKit into the same atlas (SourceImage; macOS).
+//   - Failing that, the Segoe codepoint is set as text in the symbol font if the
 //     system has one (SourceSymbolFont; Windows only).
 //   - Failing that, the fallback rune is set in the system UI font
 //     (SourceFallback), so every platform draws something in the same place.
 //   - An icon with none of these draws nothing (SourceNone).
 //
+// UseSystemSymbols makes the standard icons the system's symbols again, for an
+// app that wants the platform's look; an app's own specs choose their source
+// by the fields they set.
+//
 // Text icons are shaped and rasterised by the text system, into its own glyph
 // atlas, at the same moment: the icon's first use shapes its glyph once so that
 // later frames find it cached.
+//
+// # Sizes and weights
+//
+// A Lucide icon's Pt is its side: LucidePt (16) in rows and buttons,
+// LucideSmallPt (14) small, as T3 Code sizes them. Its Weight sets the stroke,
+// Lucide's 2 grid units at regular and heavier or lighter with the weight; its
+// Scale multiplies the side as it does a symbol's.
+//
+// # Text styles and scales
+//
+// An icon next to text is sized for the text's style, as
+// NSImage.SymbolConfiguration(textStyle:scale:) does: Spec.In gives a spec the
+// point size and weight of a text style (StyleBody, StyleHeadline,
+// StyleTitle1 …) and a scale (ScaleSmall, ScaleMedium, ScaleLarge). On macOS
+// an SF Symbol is rasterised by AppKit's own configuration for that size,
+// weight and scale (a test compares it with textStyle:scale: for every style
+// and scale); on Windows and Linux the drawn glyph takes the style's size
+// and the scale's factor. A Lucide icon takes a side in proportion to the
+// style (16 pt for body text) and a stroke of the style's weight.
 //
 // # Threading
 //
@@ -60,8 +78,14 @@ import (
 // (ChevronDown…Error), then the app's.
 type ID uint16
 
-// Spec describes one icon.
+// Spec describes one icon. Lucide makes the spec of a Lucide icon; a spec
+// with Symbol, Segoe and Fallback and no Lucide name draws the system's
+// symbols.
 type Spec struct {
+	// Lucide is the name of a Lucide icon ("search"; the files of
+	// lucide-static, aliases included), drawn on every system; empty for
+	// none.
+	Lucide string
 	// Symbol is the SF Symbol's name (macOS); empty for none.
 	Symbol string
 	// Segoe is the codepoint in Segoe Fluent Icons and Segoe MDL2 Assets
@@ -70,10 +94,12 @@ type Spec struct {
 	// Fallback is a glyph of the system UI font, used where no symbol is
 	// available; 0 for none.
 	Fallback rune
-	// Pt is the size in points.
+	// Pt is the size in points: a Lucide icon's side, an SF Symbol's point
+	// size, a glyph's font size.
 	Pt float32
-	// Weight is the SF Symbol weight as NSFontWeight: 0 regular, 0.23 medium,
-	// 0.3 semibold. Other sources ignore it.
+	// Weight is the weight as NSFontWeight: 0 regular, 0.23 medium, 0.3
+	// semibold. It sets an SF Symbol's weight and a Lucide icon's stroke
+	// (lucideStroke); the glyphs ignore it.
 	Weight float32
 	// Scale is the symbol's scale within its size (NSImageSymbolScale): the
 	// zero value is medium. Spec.In sets Pt, Weight and Scale together from a
@@ -93,6 +119,8 @@ const (
 	SourceSymbolFont
 	// SourceFallback: the fallback rune, set in the system UI font.
 	SourceFallback
+	// SourceLucide: a Lucide icon, rasterised into the atlas.
+	SourceLucide
 )
 
 // TextSystem is what an Atlas needs from the text system; *text.System
@@ -175,6 +203,7 @@ type Atlas struct {
 	warned       bool   // an overflow has been logged
 	rb           [utf8.UTFMax]byte
 	scratch      []byte // a symbol's coverage before it is copied into pix
+	lr           lucideRaster
 	resolved     int    // icons resolved since the last Raster
 	frame        uint32 // the frame Prepare last saw
 	retired      []retiredTex
@@ -317,15 +346,21 @@ func (a *Atlas) rasterOne(i int) {
 	scale := a.scale
 	e := &a.ents[i]
 	*e = entry{}
+	if sp.Lucide != "" {
+		if ic, ok := lucideIcon(sp.Lucide); ok {
+			side := lucideSidePx(sp, scale)
+			pix := a.lr.draw(a.scratch, ic, side, lucideStroke(sp.Weight))
+			a.scratch = pix[:0]
+			if a.putImage(e, SourceLucide, pix, side, side) {
+				return
+			}
+			a.overflow(sp.Lucide, side, side)
+		}
+	}
 	if sp.Symbol != "" {
 		if pix, w, h, ok := rasterSymbolInto(a.scratch, sp.Symbol, float64(sp.Pt)*float64(scale), float64(sp.Weight), sp.Scale); ok {
 			a.scratch = pix[:0]
-			if x, y, fit := a.place(w, h); fit {
-				for r := 0; r < h; r++ {
-					copy(a.pix[(y+r)*a.w+x:(y+r)*a.w+x+w], pix[r*w:(r+1)*w])
-				}
-				a.markDirty(x, y, w, h)
-				*e = entry{src: SourceImage, w: float32(w), h: float32(h), x: x, y: y, iw: w, ih: h}
+			if a.putImage(e, SourceImage, pix, w, h) {
 				// measured at the point size, as AppKit lays out
 				// (its sizes are whole or half points there), then scaled
 				if aw, _, ok := symbolWidths(sp.Symbol, float64(sp.Pt), float64(sp.Weight), sp.Scale); ok {
@@ -336,10 +371,7 @@ func (a *Atlas) rasterOne(i int) {
 				}
 				return
 			}
-			if !a.warned {
-				a.warned = true
-				log.Printf("icon: the atlas is full at %d×%d texels: symbol %q (%d×%d) and any that follow fall back to text", a.w, a.h, sp.Symbol, w, h)
-			}
+			a.overflow(sp.Symbol, w, h)
 		}
 	}
 	if sp.Segoe != 0 && a.family != "" && a.textEntry(e, SourceSymbolFont, a.family, sp.Segoe, sp.Pt*scaleFactor(sp.Scale)) {
@@ -347,6 +379,29 @@ func (a *Atlas) rasterOne(i int) {
 	}
 	if sp.Fallback != 0 {
 		a.textEntry(e, SourceFallback, "", sp.Fallback, sp.Pt*scaleFactor(sp.Scale))
+	}
+}
+
+// putImage copies the w×h coverage pix into the atlas and makes e show it
+// from src, and reports whether there was room.
+func (a *Atlas) putImage(e *entry, src Source, pix []byte, w, h int) bool {
+	x, y, fit := a.place(w, h)
+	if !fit {
+		return false
+	}
+	for r := 0; r < h; r++ {
+		copy(a.pix[(y+r)*a.w+x:(y+r)*a.w+x+w], pix[r*w:(r+1)*w])
+	}
+	a.markDirty(x, y, w, h)
+	*e = entry{src: src, w: float32(w), h: float32(h), x: x, y: y, iw: w, ih: h}
+	return true
+}
+
+// overflow logs, once, that an image of w×h did not fit the atlas.
+func (a *Atlas) overflow(name string, w, h int) {
+	if !a.warned {
+		a.warned = true
+		log.Printf("icon: the atlas is full at %d×%d texels: %q (%d×%d) and any that follow fall back to text", a.w, a.h, name, w, h)
 	}
 }
 
@@ -570,7 +625,7 @@ func (a *Atlas) Prepare(c *ui.Context, id ID, color uint32) (ui.Flags, []byte) {
 		a.reap()
 	}
 	switch e.src {
-	case SourceImage:
+	case SourceImage, SourceLucide:
 		if a.tex == 0 {
 			return 0, nil
 		}

@@ -84,10 +84,17 @@ func (s TextStyle) spec() struct{ Pt, Weight float32 } {
 // are the style's, and its Scale is sc. The symbol's name and its Segoe and
 // fallback glyphs are kept: the drawn icon on Windows and Linux (a glyph of
 // the symbol font or of the UI font, which have one weight) takes the style's
-// point size and the scale's factor, and ignores the weight.
+// point size and the scale's factor, and ignores the weight. A Lucide icon
+// takes a side in proportion to the style, in whole points (16 for body
+// text, 14 for a subheadline), its scale already applied, and the style's
+// weight as its stroke.
 //
-//	icon.Spec{Symbol: "plus", Segoe: 0xE710, Fallback: '+'}.In(icon.StyleHeadline, icon.ScaleLarge)
+//	icon.Lucide("plus").In(icon.StyleHeadline, icon.ScaleLarge)
 func (s Spec) In(st TextStyle, sc Scale) Spec {
+	if s.Lucide != "" {
+		s.Pt, s.Weight, s.Scale = lucideSide(st, sc), st.Weight(), ScaleMedium
+		return s
+	}
 	s.Pt, s.Weight, s.Scale = st.Pt(), st.Weight(), sc
 	return s
 }

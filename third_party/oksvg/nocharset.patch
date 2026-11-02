@@ -1,0 +1,20 @@
+--- a/public.go
++++ b/public.go
+@@ -19,7 +19,6 @@
+ 
+ 	"github.com/srwiley/rasterx"
+ 	"golang.org/x/image/colornames"
+-	"golang.org/x/net/html/charset"
+ )
+ 
+ // ReadIconStream reads the Icon from the given io.Reader.
+@@ -36,7 +35,8 @@
+ 	}
+ 	classInfo := ""
+ 	decoder := xml.NewDecoder(stream)
+-	decoder.CharsetReader = charset.NewReaderLabel
++	// gonativeui: no CharsetReader (x/net/html/charset links every x/text
++	// encoding table); a document in another encoding than UTF-8 is an error.
+ 	for {
+ 		t, err := decoder.Token()
+ 		if err != nil {

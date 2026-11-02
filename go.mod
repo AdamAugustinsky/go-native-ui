@@ -12,11 +12,11 @@ require (
 	golang.org/x/image v0.23.0
 )
 
-require (
-	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
-	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
-)
+require github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 
 // Patched copy: zero-allocation shaping (DECISIONS.md D23).
 replace github.com/go-text/typesetting => ./third_party/typesetting
+
+// Patched copy: no x/net/html/charset, whose x/text tables the linker keeps
+// (DECISIONS.md, the Lucide entry).
+replace github.com/srwiley/oksvg => ./third_party/oksvg
