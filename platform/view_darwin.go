@@ -65,7 +65,7 @@ func viewDisplayLinkFired(c *ffi.CB) {
 
 // viewMetalLinkUpdate is metalDisplayLink:needsUpdate: (link, update).
 func viewMetalLinkUpdate(c *ffi.CB) {
-	if w := viewWindow(objc.ID(c.Int(0))); w != nil {
+	if w := viewWindow(objc.ID(c.Int(0))); w != nil && !w.deadLink {
 		w.linkTick(c, true)
 	}
 }
@@ -81,6 +81,9 @@ func (w *Window) linkTick(c *ffi.CB, metal bool) {
 	}
 	now := Now()
 	w.ticks, w.ticksSinceFrame, w.lastTickT = w.ticks+1, w.ticksSinceFrame+1, now
+	if metal {
+		w.metalTicks++
+	}
 	// A drawable is held for one tick at most: one kept through an idle
 	// period would leave the link without a free drawable (2 in the
 	// pool), and it stops ticking.
@@ -259,6 +262,7 @@ func (w *Window) attachMetalLink(layer objc.ID) {
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selAutorelease)
 	w.link, w.linkPaused, w.metalLink = link, true, true
+	w.metalTicks, w.deadLink = 0, stopNewLinks
 	if w.frameArmed {
 		objc.Send1(w.link, selSetPaused, 0)
 		w.linkPaused = false
@@ -314,7 +318,10 @@ func (w *Window) takeDrawable() (drawable uintptr, linked bool) {
 	if !w.metalLink && w.relinkAfterDraw && !w.live {
 		// The first frame after unlinkHidden: from the layer; the view
 		// link's next tick, after this present, attaches the metal link.
-		w.relinkAfterDraw, w.metalLayer = false, w.frameLayer
+		w.relinkAfterDraw = false
+		if !w.viewOnly {
+			w.metalLayer = w.frameLayer
+		}
 	}
 	if d == 0 && w.metalLink {
 		if w.linkStopped() && w.restartLink() {
@@ -375,22 +382,66 @@ func (w *Window) unlinkHidden() {
 // restartLink replaces a stopped CAMetalDisplayLink by a view CADisplayLink,
 // as at startup: the caller draws with the layer's nextDrawable, and the view
 // link's first tick attaches a new CAMetalDisplayLink (linkTick).
+//
+// Unless the stopped link never ticked at all. After the Mac slept, or its
+// display did, a CAMetalDisplayLink can be dead from birth, and so is every
+// fresh one made for it, for as long as the window stays there. Each
+// replacement then gave the window one frame after a second of silence
+// (linkStopNs), and the app ran at one frame a second. Such a window is
+// paced by the view link alone (viewOnly), its frames drawn with the layer's
+// nextDrawable, until the system wakes or the screens change (renewLinks).
 func (w *Window) restartLink() bool {
 	link := w.makeViewLink()
 	if link == 0 {
 		return false
 	}
 	now := Now()
+	w.viewOnly = w.metalTicks == 0
 	// Once per restart (docs/research/displaylink-stall.md): the stall is not
 	// understood yet, and each one is evidence.
-	println("gnui: display link of window", w.slot, "stopped calling back: armed", (now-w.armedT)/1e6, "ms ago, last tick", (now-w.lastTickT)/1e6, "ms ago, ticks", w.ticks, "pauses", w.pauses, "windows open", reg.n, "; replaced (restart", w.restarts+1, ")")
+	println("gnui: display link of window", w.slot, "stopped calling back: armed", (now-w.armedT)/1e6, "ms ago, last tick", (now-w.lastTickT)/1e6, "ms ago, ticks", w.ticks, "of it", w.metalTicks, "pauses", w.pauses, "windows open", reg.n, "; replaced (restart", w.restarts+1, ", view link only:", w.viewOnly, ")")
 	objc.Send(w.link, selInvalidate)
 	objc.Send(w.link, selReleaseObj)
-	w.link, w.metalLink, w.metalLayer = link, false, w.frameLayer
+	w.link, w.metalLink, w.metalLayer = link, false, 0
+	if !w.viewOnly {
+		w.metalLayer = w.frameLayer
+	}
 	w.restarts, w.restartT = w.restarts+1, now
 	objc.Send1(w.link, selSetPaused, 0) // a frame is armed
 	w.linkPaused = false
 	return true
+}
+
+// renewLinks gives every window a fresh frame source: the system woke, its
+// screens woke, or they changed. A CAMetalDisplayLink made before may not
+// call back again, and one made since may now.
+func renewLinks() {
+	for _, w := range openWindows() {
+		w.renewLink()
+	}
+}
+
+// renewLink replaces the window's CAMetalDisplayLink as unlinkHidden does
+// (the next frame from the layer, then a new metal link), or, for a window
+// paced by its view link alone (restartLink), lets the view link's next
+// tick try a metal link again. Main thread.
+func (w *Window) renewLink() {
+	w.viewOnly = false
+	if w.live || w.link == 0 || w.frameLayer == 0 {
+		return
+	}
+	w.renewals++
+	if !w.metalLink {
+		if !w.relinkAfterDraw {
+			w.metalLayer = w.frameLayer
+		}
+		return
+	}
+	w.unlinkHidden()
+	if w.frameArmed && w.linkPaused { // a frame waits: the new link must tick
+		objc.Send1(w.link, selSetPaused, 0)
+		w.linkPaused = false
+	}
 }
 
 func (w *Window) setRateRange(link objc.ID) {

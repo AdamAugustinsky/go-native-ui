@@ -326,6 +326,60 @@ func TestAStoppedDisplayLinkIsReplaced(t *testing.T) {
 	}
 }
 
+// After the Mac or its display slept, a CAMetalDisplayLink can be dead from
+// birth, and so can every fresh one made to replace it: each replacement gave
+// the window one frame after a second of silence, and the app ran at a frame
+// a second. A window whose new link never ticks is paced by its view link
+// alone, at the display's rate, and a wake gives it a metal link again.
+func TestAWindowWhoseNewLinksNeverTickStillAnimates(t *testing.T) {
+	p := &mwPane{}
+	l := widgettest.StartLive(t, mwConfig("dead links"), p)
+	var w *app.Win
+	l.Do(func(a *app.App) { w = a.Window() })
+	settle()
+
+	var stopped bool
+	var st0 platform.DebugState
+	l.Do(func(*app.App) {
+		platform.DebugStopNewLinks(true)
+		st0 = w.App().Win.DebugState()
+		stopped = w.App().Win.DebugStopLink()
+	})
+	t.Cleanup(func() { l.Do(func(*app.App) { platform.DebugStopNewLinks(false) }) })
+	if !stopped {
+		t.Fatalf("the window has no CAMetalDisplayLink to stop: %s", st0.Append(nil))
+	}
+	start, b0 := platform.Now(), p.builds.Load()
+	p.animate.Store(true)
+	defer p.animate.Store(false)
+	l.Do(func(*app.App) { w.Wake() })
+	// The stopped link costs a second (linkStopNs), the first fresh one
+	// another; then the frames come at the display's rate. At a frame a
+	// second, 5 s draw a handful.
+	if !waitFor(5*time.Second, func() bool { return p.builds.Load() >= b0+120 }) {
+		if coveredSince(l, w, start) {
+			t.Skip("the window was covered by other windows: it gets no frames")
+		}
+		t.Fatalf("the window drew %d frames in 5 s while its new links never ticked, want 120%s", p.builds.Load()-b0, mwStates(l, w))
+	}
+	var st platform.DebugState
+	l.Do(func(*app.App) { st = w.App().Win.DebugState() })
+	if !st.ViewOnly || st.MetalLink || st.Restarts != 2 {
+		t.Errorf("after the dead links: %s; want the view link alone after two restarts", st.Append(nil))
+	}
+
+	// The system wakes: a fresh metal link, which ticks.
+	b1 := p.builds.Load()
+	l.Do(func(*app.App) { platform.DebugStopNewLinks(false); platform.DebugRenewLinks() })
+	renewed := func() bool {
+		l.Do(func(*app.App) { st = w.App().Win.DebugState() })
+		return st.MetalLink && !st.ViewOnly && st.Renewals == 1 && p.builds.Load() >= b1+60
+	}
+	if !waitFor(3*time.Second, renewed) || st.Restarts != 2 {
+		t.Errorf("after the wake: %s, %d frames; want a metal link that ticks, no new restart", st.Append(nil), p.builds.Load()-b1)
+	}
+}
+
 // A composer in each window: each window's hosted NSTextView (the native
 // editor, N4) takes what is typed into that window, and its signals reach
 // that window's frames; the second window's editor, released, and the window,
