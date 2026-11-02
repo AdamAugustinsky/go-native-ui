@@ -198,6 +198,7 @@ type Atlas struct {
 	checked bool   // family has been looked for
 
 	pix  []byte // atlas, R8, w×h
+	alt  []byte // the buffer pix last grew out of, kept for the next growth (grow)
 	w, h int    // its size in texels: it grows (grow)
 	// the shelf the next symbol goes on: its start, its top, the tallest
 	// symbol on it
@@ -332,10 +333,13 @@ func (a *Atlas) ent(id ID) *entry {
 
 // reset empties the atlas at its initial size, for a new scale.
 func (a *Atlas) reset() {
-	if len(a.pix) == atlasW*atlasH {
+	// the buffers keep the size the atlas grew to, so that preparing the same
+	// icons again at a new scale allocates nothing
+	if n := atlasW * atlasH; cap(a.pix) >= n {
+		a.pix = a.pix[:n]
 		clear(a.pix)
 	} else {
-		a.pix = make([]byte, atlasW*atlasH)
+		a.pix = make([]byte, n)
 	}
 	a.w, a.h = atlasW, atlasH
 	a.cx, a.cy, a.rowH = 0, 0, 0
@@ -444,13 +448,19 @@ func (a *Atlas) grow() bool {
 		return false
 	}
 	if nw == a.w {
-		a.pix = append(a.pix, make([]byte, a.w*(nh-a.h))...)
+		a.pix = append(a.pix, make([]byte, a.w*(nh-a.h))...) // zeroed, in place when there is room
 	} else {
-		pix := make([]byte, nw*nh)
+		pix := a.alt[:0]
+		if cap(pix) < nw*nh {
+			pix = make([]byte, nw*nh)
+		} else {
+			pix = pix[:nw*nh]
+			clear(pix)
+		}
 		for r := 0; r < a.h; r++ {
 			copy(pix[r*nw:], a.pix[r*a.w:(r+1)*a.w])
 		}
-		a.pix = pix
+		a.alt, a.pix = a.pix[:0], pix
 	}
 	a.w, a.h = nw, nh
 	a.dirty = [4]int{0, 0, nw, nh}

@@ -221,13 +221,14 @@ func TestLucideStroke(t *testing.T) {
 }
 
 // Rasterising Lucide icons for the first time, at any size, allocates nothing
-// once the raster's buffers have grown to the largest.
+// once the raster's buffers have grown to the largest, and neither does a new
+// scale that prepares them again in an atlas they made grow.
 func TestFirstUseOfLucideAllocatesNothing(t *testing.T) {
 	ts := newText(t)
 	names := lucide.Names()
 	var specs []Spec
-	for i := 0; i < 40; i++ {
-		specs = append(specs, Lucide(names[i*37%len(names)]).Size(float32(12+i%8)))
+	for i := 0; i < 120; i++ {
+		specs = append(specs, Lucide(names[i*37%len(names)]).Size(float32(12+i%16)))
 	}
 	a := New(ts, specs...)
 	a.Raster(2)
@@ -238,6 +239,9 @@ func TestFirstUseOfLucideAllocatesNothing(t *testing.T) {
 		}
 	}
 	use()
+	if a.w*a.h <= atlasW*atlasH {
+		t.Fatalf("the atlas did not grow (%d×%d): the test needs more icons", a.w, a.h)
+	}
 	if n := testing.AllocsPerRun(5, use); n != 0 {
 		t.Errorf("preparing %d icons for the first time allocates %v times", a.Len(), n)
 	}
