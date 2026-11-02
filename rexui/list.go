@@ -35,13 +35,14 @@ type ListGlyphs struct {
 	SortUp, SortDown icon.ID
 }
 
-// ListGlyphSpecs are the glyphs AddListGlyphs adds: Lucide's chevrons as T3
-// Code sizes them, a disclosure at 14 pt (its ink about 5 × 8 pt, AppKit's
-// 5 × 8.5) and a sort indicator at 12 pt (about 7 pt wide). The SF Symbols
-// chevrons at AppKit's sizes are ListGlyphSystemSpecs.
+// ListGlyphSpecs are the glyphs AddListGlyphs adds: Lucide's chevrons at
+// 12 pt, T3 Code's size-3, a disclosure that fits the outline's 13-pt
+// disclosure column (OutlineLook.DisclosureW; its ink about 4 × 7 pt) and a
+// sort indicator (about 7 pt wide). The SF Symbols chevrons at AppKit's sizes
+// are ListGlyphSystemSpecs.
 var ListGlyphSpecs = [4]icon.Spec{
-	{Lucide: "chevron-right", Fallback: '▸', Pt: 14},
-	{Lucide: "chevron-down", Fallback: '▾', Pt: 14},
+	{Lucide: "chevron-right", Fallback: '▸', Pt: 12},
+	{Lucide: "chevron-down", Fallback: '▾', Pt: 12},
 	{Lucide: "chevron-up", Fallback: '▴', Pt: 12},
 	{Lucide: "chevron-down", Fallback: '▾', Pt: 12},
 }
