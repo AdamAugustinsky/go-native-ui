@@ -1,9 +1,11 @@
 // Package webview hosts the operating system's own browser view inside a
 // window, as content (the phase 8 plan's H1, H2, D64 and D65): a pane that
 // shows web pages and the user's dev servers. It is not a way to build UI:
-// there is no script execution, no injected script and no message channel
-// between page and app, and the framework's own interface never uses it
-// (DECISIONS D2, amended by D64).
+// there is no injected script and no message channel from the page to the
+// app, and the framework's own interface never uses it (DECISIONS D2,
+// amended by D64). The app may run a script of its own in the page and take
+// an image of it (Eval, Capture: D94), so that something acting for the
+// user, such as an agent, can read and drive the page the user sees.
 //
 //	v, err := webview.New(a.Win, webview.Options{
 //		Profile:     "a3-browser",        // "" : a non-persistent session
@@ -49,6 +51,10 @@
 //     profiles.
 //   - The engine's context menu and web inspector are on unless
 //     Options.NoContextMenu, and only with Options.Inspectable.
+//   - Eval runs the app's script in the main frame and the page's world,
+//     awaited, and gives its value as JSON; Capture gives a PNG of what the
+//     view shows. Both answer later, with EvalEnded and CaptureEnded, and
+//     Result takes the answer.
 //
 // # Threads and cost
 //
@@ -272,6 +278,10 @@ const (
 	// ProcessFailed: the engine's content process ended; the view shows
 	// nothing until Reload.
 	ProcessFailed
+	// EvalEnded and CaptureEnded: a script run by Eval, or a Capture, is done;
+	// Event.Request is its ID, and View.Result takes what it gave.
+	EvalEnded
+	CaptureEnded
 )
 
 // Event is a decoded view event.
@@ -282,18 +292,87 @@ type Event struct {
 	View uint32
 	// Download is the download of a download event.
 	Download uint32
+	// Request is the Eval or Capture of an EvalEnded or CaptureEnded event.
+	Request uint32
 	// Permission is the permission of a PermissionDenied event.
 	Permission Permission
 }
 
 // EventOf decodes a view event (an app.EvService from
 // platform.SourceWebView: ID is the view, A the kind and the permission, B
-// the download). It allocates nothing.
+// the download or the request). It allocates nothing.
 func EventOf(e *app.Event) (Event, bool) {
 	if e == nil || e.Kind != app.EvService || e.Source != platform.SourceWebView {
 		return Event{}, false
 	}
-	return Event{Kind: EventKind(e.A), Permission: Permission(e.A >> 8), View: uint32(e.ID), Download: uint32(e.B)}, true
+	ev := Event{Kind: EventKind(uint8(e.A)), Permission: Permission(e.A >> 8), View: uint32(e.ID)}
+	switch ev.Kind {
+	case EvalEnded, CaptureEnded:
+		ev.Request = uint32(e.B)
+	default:
+		ev.Download = uint32(e.B)
+	}
+	return ev, true
+}
+
+// Result is what an Eval or a Capture gave.
+type Result struct {
+	// JSON is an Eval's value, as JSON.stringify writes it ("null" for
+	// undefined or a value JSON cannot hold).
+	JSON string
+	// PNG is a Capture's image: what the view shows, at the display's scale.
+	PNG []byte
+	// Err is why it failed: ErrScript with the page's message for a script
+	// that threw or rejected, ErrClosed for a view closed first, or the
+	// engine's error.
+	Err error
+}
+
+// ErrScript: the script given to Eval threw, or the promise it awaited was
+// rejected; the error carries the page's message.
+var ErrScript = errors.New("webview: the script failed")
+
+// calls is a backend's record of its Evals and Captures: those running and
+// the results not yet taken (main thread).
+type calls struct {
+	running map[uint32]bool
+	done    map[uint32]Result
+}
+
+// nextCall numbers the Evals and Captures of every view (main thread).
+var nextCall uint32
+
+func (c *calls) start() uint32 {
+	nextCall++
+	if c.running == nil {
+		c.running, c.done = map[uint32]bool{}, map[uint32]Result{}
+	}
+	c.running[nextCall] = true
+	return nextCall
+}
+
+// end records id's result and reports whether id was running (a second end,
+// or one after the view closed, is dropped).
+func (c *calls) end(id uint32, r Result) bool {
+	if !c.running[id] {
+		return false
+	}
+	delete(c.running, id)
+	c.done[id] = r
+	return true
+}
+
+func (c *calls) take(id uint32) (Result, bool) {
+	r, ok := c.done[id]
+	delete(c.done, id)
+	return r, ok
+}
+
+// asyncBody is script as the body of an async function whose result is the
+// JSON of what script returns, the form both engines run (macOS as
+// callAsyncJavaScript's body, Windows inside an async arrow).
+func asyncBody(script string) string {
+	return "const __gnui = await (async () => {\n" + script + "\n})();\nreturn JSON.stringify(__gnui === undefined ? null : __gnui) ?? \"null\";"
 }
 
 // View is a hosted browser view.
@@ -316,6 +395,14 @@ type backend interface {
 	blocked() string
 	download(id uint32) (Download, bool)
 	cancelDownload(id uint32)
+	// eval runs body (asyncBody's) for call id, capture captures for id;
+	// each ends with end(id, …) and an EvalEnded or CaptureEnded event, or
+	// fails at once.
+	eval(id uint32, body string) error
+	capture(id uint32) error
+	start() uint32
+	end(id uint32, r Result) bool
+	take(id uint32) (Result, bool)
 	close()
 }
 
@@ -416,6 +503,51 @@ func (v *View) CancelDownload(id uint32) {
 	if !v.closed {
 		v.be.cancelDownload(id)
 	}
+}
+
+// Eval runs script in the page's main frame, in the page's own world (it
+// sees the page's globals and DOM), as the body of an async function: it may
+// await, and what it returns, JSON-serialisable, is the result. The result
+// comes later, with an EvalEnded event whose Request is the ID returned;
+// Result takes it. A navigation that replaces the page before the script
+// ends may end it with an error. The app chooses what to run: the page has no
+// channel back to the app (D94).
+func (v *View) Eval(script string) (uint32, error) {
+	if v.closed {
+		return 0, ErrClosed
+	}
+	id := v.be.start()
+	if err := v.be.eval(id, asyncBody(script)); err != nil {
+		v.be.end(id, Result{})
+		v.be.take(id)
+		return 0, err
+	}
+	return id, nil
+}
+
+// Capture takes an image of what the view shows (the visible part of the
+// page, at the display's scale), as a PNG: a CaptureEnded event whose
+// Request is the ID returned, and Result takes it.
+func (v *View) Capture() (uint32, error) {
+	if v.closed {
+		return 0, ErrClosed
+	}
+	id := v.be.start()
+	if err := v.be.capture(id); err != nil {
+		v.be.end(id, Result{})
+		v.be.take(id)
+		return 0, err
+	}
+	return id, nil
+}
+
+// Result takes the result of Eval or Capture id, once it ended: a second call
+// reports false. Results not taken are kept until the view closes.
+func (v *View) Result(id uint32) (Result, bool) {
+	if v.closed {
+		return Result{}, false
+	}
+	return v.be.take(id)
 }
 
 // Close releases the view and its host; a non-persistent session's data
