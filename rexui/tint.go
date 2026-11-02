@@ -1,10 +1,6 @@
 package rexui
 
-import (
-	"math"
-
-	"gonativeui/theme"
-)
+import "gonativeui/theme"
 
 // NoRole is the Role of a Tint that draws nothing.
 const NoRole theme.Role = 255
@@ -76,20 +72,11 @@ func (t Tint) RGBA(r *theme.Resolved) uint32 {
 	return c&^0xFF | uint32(a*255+0.5)
 }
 
-// settled is the share of the way an exponential approach covers in a
-// duration given as its length: 95 %, which reads as arrived.
-const settled = 0.95
-
 // RateFor is the rate (theme.Motion's unit, for ui.Context.AnimateValue) of an
 // exponential approach that covers 95 % of the way in d seconds: a duration
 // token (Motion.Standard) as a rate. d ≤ 0, which Reduce Motion gives, is
-// theme.Instant.
-func RateFor(d float32) float32 {
-	if d <= 0 {
-		return theme.Instant
-	}
-	return float32(-math.Log2(1-settled)) / d
-}
+// theme.Instant. It is theme.RateFor.
+func RateFor(d float32) float32 { return theme.RateFor(d) }
 
 // over composites top over fill, at strength t: a press or hover tint laid
 // over a fill. A fill that draws nothing gives top itself.

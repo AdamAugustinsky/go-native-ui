@@ -39,10 +39,19 @@ accent": text over a photo, a video or a dark plate is literal white
 label's colour. Red text someone reads (a destructive label, a missed
 call, an error) is `rexui.DangerText`, not `theme.Red`, which is 3.6:1 on
 white; green text (an added line, a success) is `rexui.SuccessText`, not
-`theme.Green`, which is 2.2:1. Then recolour the recipes that
-carry Rex's lilac to the field's hue: `rexui.TabsRecipes[rexui.TabsRex]` (the
-capsule, its pill, the separators). Zap's `gnui/theme/rexlook.go` does all of
-this for WhatsApp's green in about a hundred lines.
+`theme.Green`, which is 2.2:1. In dark, give the field's hue to every opaque
+grey of the system's roles with `FieldColors.DarkCast` (`{0.99, 0.99, 1.03}`
+cools them, `{1.06, 1, 0.95}` warms them): Rex's neutral greys read cold or
+dirty on a tinted field, and the cast keeps them over the system's colours.
+Then recolour the recipes that carry Rex's lilac to the field's hue: the tab
+bar with `rexui.TintTabs(&rexui.TabsRecipes[rexui.TabsRex], rexui.TabsTint{…})`,
+which takes the capsule, the pill, the darkest ink and the text colours and
+derives the rest at Rex's opacities (set a field of the recipe after it for
+an opacity of your own).
+
+```go rexui/recolour.go
+func TintTabs(rc *TabsRecipe, t TabsTint) {
+```
 
 ## 2. Transparency is on by default
 
@@ -61,8 +70,18 @@ it, so the setting changes at once with no new window:
 
 `SetBackdrop` takes "the window has a material and the app wants it seen" and
 turns it off while the system's Reduce Transparency is set, so an app never
-forgets that check. Give the user a Transparency setting, on by default, and
-show its row only on macOS, where the material exists.
+forgets that check (`rexui.HasMaterial(w)` says whether the window has one).
+Then lay the field under the window's content with `rexui.BeginWindow`, and
+close it with `EndWindow`. Rex's scrim alone lets a busy desktop wash out
+what sits on the field, so give `WindowOpts.Cover` some of the field's colour
+over the material (A3 uses 0.72 in light and 0.64 in dark):
+
+```go rexui/recolour.go
+func BeginWindow(k *base.Kit, o WindowOpts) {
+```
+
+Give the user a Transparency setting, on by default, and show its row only
+on macOS, where the material exists.
 
 ## 3. Controls: rexui, as it comes
 
@@ -92,6 +111,20 @@ tokens for nothing.
   with tabular figures, a step smaller than what it describes, so it reads
   as the same voice, quieter. `MonoPt` is for machine text only (a path, a
   code to type in).
+- A shortcut is written once, as macOS writes it ("⌘⇧F"), and shown with
+  `rexui.Kbd` (a chip), `rexui.KeyText` (text) or `rexui.WithShortcut` (a
+  tooltip), which write it as the platform does (Ctrl+Shift+F). The
+  shortcuts sheet is `rexui.ShortcutsSheet`, from `rexui.ShortcutRowsOf(menu
+  model)` plus the keys no menu shows.
+- Times ago, counts, compact numbers, short paths, schedules and dates are
+  package `format`'s, in the language `rexui.SetStrings` picked. The common
+  words (Cancel, Close, Save, Copied, Show in Finder) are `rexui.Strings`'.
+- Several toasts at once (downloads, uploads) are a `rexui.BeginToastStack`
+  in a corner; a copy is confirmed with `rexui.CopiedPill`. A floating panel
+  dims the window with `rexui.DimBackdrop`, a sheet with `DialogOpts.Dim`.
+- A project or a site is `Avatar` with `Square` (and `Initials` for a
+  monogram); an unread mark on a picture or a symbol is `AvatarOpts.Badge` or
+  `rexui.BadgeDot`.
 - Text someone needs to read (a hint, a notice, metadata) is `Label2`, never
   `Label3`: Zap's hints in `Label3` measured under 2:1 against their pane.
   `Label3` is for what is disabled or a placeholder.
@@ -141,6 +174,23 @@ engine could have done.
 - **Content clears what floats over it.** The last message stops a gap above
   a floating composer; anything under a floating bar gets that bar's height
   as bottom padding.
+
+- **Space on the grid.** Gaps, paddings, insets and margins are steps of the
+  4-point grid (`theme.Space1` … `Space8`, `MinGap`; 2 only as an optical
+  nudge inside one element), and `widgettest.LintSpacingGrid` holds a
+  package's screens to it. A literal times the display scale (`5*sc`) is a
+  length and is checked; mark a deliberate exception with a `grid:ok`
+  comment and its reason. Icons come in `theme.SmallIconPt`, `ToolIconPt` and
+  `LargeIconPt`, pressed in `HitSmall`, `HitTool` and `HitLarge`.
+- **Motion has five lengths.** Put the app's into the theme once with
+  `th.SetDurations` (the components' hover, fades and dimming follow), take
+  rates from `r.Enter`, `r.Exit` and `r.Toward` (leaving is quicker than
+  arriving), and let a sidebar or a side pane come and go with `theme.Glide`.
+  Reduce Motion is handled there; do not test it in the app.
+- **A pane card is `rexui.BeginPaneCard`**, its title row `BeginPaneHeader`
+  with `PaneTitle` and `PaneAction`. In a `workspace.Layout` the card takes
+  its place, focus and semantics from the layout; in the flow a `PaneFocus`
+  follows presses. Do not test the pointer against pane rects in the app.
 
 Check, do not eyeball: the debug overlay's Run Layout Audit (⌘⌥⇧A,
 `GNUI_DEBUG=overlay`) and `widgettest.AuditLayout` in a test report overlaps,

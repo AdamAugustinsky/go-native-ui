@@ -17,6 +17,11 @@ type DialogOpts struct {
 	// (0: the plain titlebar's height, 32: under the titlebar, as a sheet is
 	// attached to it). Pass the toolbar's height under a taller toolbar.
 	Top float32
+	// Dim lays black at this opacity over the window behind the sheet (0:
+	// none, as behind a macOS sheet; Zap's floating panels take 0.16),
+	// fading in with the sheet; a click on it is Cancel when DimCancels.
+	Dim        float32
+	DimCancels bool
 }
 
 // DialogRecipe is the look of dialogs: a sheet as AppKit draws one, drawn by
@@ -91,6 +96,7 @@ type Dialog struct {
 	open    *bool
 	okey    ui.Key // the overlay's key
 	opening bool
+	dimmed  bool // the content is in a floating box over the dim (DimBackdrop)
 	defSeen bool
 	onAct   bool // the focus is on an action built earlier
 	rowOpen bool
@@ -149,6 +155,20 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 	c.NextRole(ui.RoleDialog)
 	c.NextSemName(o.Title)
 	c.BeginOverlay(okey, ui.OverlayModal, [4]float32{0, 0, float32(w), float32(h)}, ui.PlaceCenter)
+	if o.Dim > 0 {
+		// the dim, then the sheet's flow in a floating box after it, which
+		// draws over it (floating boxes draw in the order they are built,
+		// after the flow)
+		if DimBackdrop(k, "dim", o.Dim) && o.DimCancels {
+			d.Cancelled = true
+			*open = false
+			c.RequestFrame()
+		}
+		theme.At(c, 0, 0, float32(w), float32(h))
+		c.NextAxis(ui.AxisY)
+		c.Push(c.Box(base.Floating, "over dim"))
+		d.dimmed = true
+	}
 
 	// the sheet hangs from Top, a little higher while it opens, and is
 	// centred by spacers that share the room it leaves
@@ -282,6 +302,32 @@ func EndDialog(k *base.Kit, d *Dialog) {
 	c.Pop() // row
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.Box(0, "below")
+	if d.dimmed {
+		c.Pop()
+	}
 	c.EndOverlay()
 	c.PopOpacity()
+}
+
+// DimBackdrop lays black at opacity dim (the opacity stack's too) over the
+// whole of the current parent, under what is built after it as floating
+// boxes: the dimmed window behind a floating panel (Zap's peek and
+// Spotlight). It is clickable and reports a click, which closes such a panel.
+// Build it first in the panel's overlay, then the panel as a floating box.
+//
+//	c.BeginOverlay(key, ui.OverlayModal, [4]float32{0, 0, W, H}, ui.PlaceCenter)
+//	if rexui.DimBackdrop(k, "scrim", 0.16*t) { v.close() }
+//	… the panel, base.Floating …
+//	c.EndOverlay()
+func DimBackdrop(k *base.Kit, label string, dim float32) bool {
+	c := k.Context()
+	w, h := c.Size()
+	pr := c.Rect(c.Parent())
+	if pr[2] > pr[0] {
+		w, h = int(pr[2]-pr[0]), int(pr[3]-pr[1])
+	}
+	theme.At(c, 0, 0, float32(w), float32(h))
+	c.NextBG(theme.WithAlpha(0x000000FF, dim))
+	c.NextAuditExempt(ui.AuditCovered.Mask())
+	return c.Signal(c.Box(base.Floating|ui.Clickable|ui.DrawBackground, label)).Clicked
 }

@@ -1,6 +1,10 @@
 package theme
 
-import "gonativeui/ui"
+import (
+	"math"
+
+	"gonativeui/ui"
+)
 
 // Motion holds the animation rates and durations of a theme. A rate k is the
 // speed of an exponential approach: each frame covers 1−2^(−k·dt) of the
@@ -30,6 +34,147 @@ type Motion struct {
 	Dismiss float32
 	// Sheet is the duration of a sheet's slide (0.3 s, designed).
 	Sheet float32
+
+	// Micro, Short and Long are the named durations an app's own motion
+	// takes, with Standard between Short and Long (Durations); ExitScale is
+	// the share of its entrance an exit takes (0: 0.7). Reduce Motion keeps
+	// them: Enter and Exit say "at once" instead, and Fade keeps a crossfade.
+	Micro, Short, Long, ExitScale float32
+}
+
+// Durations are the five lengths motion comes in, in seconds, by how far a
+// thing travels, and how much quicker leaving is than arriving
+// (Theme.SetDurations):
+//
+//  1. Instant (no duration): a press, a selection.
+//  2. Micro: hover, a value's tint.
+//  3. Short: fades, swaps of an icon or a line, a badge.
+//  4. Standard: panes, layout that moves, a menu or a popover.
+//  5. Long: a sheet, a big reveal. Nothing longer: a wait the user watches
+//     is a bug.
+//
+// Arriving decelerates and leaving is quicker: an exit takes ExitScale of its
+// entrance (Exit). Under Reduce Motion every travel and scale is at once, and
+// a crossfade of Short or less stays, as macOS keeps it (Enter, Fade).
+type Durations struct {
+	// Micro, Short, Standard and Long are the four lengths, in seconds.
+	Micro, Short, Standard, Long float32
+	// ExitScale is the share of its entrance an exit takes (0: 0.7).
+	ExitScale float32
+}
+
+// DefaultDurations are Zap's: 0.1, 0.18, 0.25 and 0.35 s, exits at 0.7.
+var DefaultDurations = Durations{Micro: 0.1, Short: 0.18, Standard: 0.25, Long: 0.35, ExitScale: 0.7}
+
+// SetDurations makes d the theme's durations and puts them into the rates
+// the components follow, so that an app's motion and the framework's keep
+// one timing: hover (Hot) over Micro, fades and the panes' focus dimming
+// (Fade, Dim) over Short, a state change over Standard, a dismissal over
+// Standard×ExitScale and a sheet over Long.
+func (t *Theme) SetDurations(d Durations) {
+	m := &t.Motion
+	if d.ExitScale <= 0 {
+		d.ExitScale = DefaultDurations.ExitScale
+	}
+	m.Micro, m.Short, m.Long, m.ExitScale = d.Micro, d.Short, d.Long, d.ExitScale
+	m.Hot, m.Fade, m.Dim = RateFor(d.Micro), RateFor(d.Short), RateFor(d.Short)
+	m.Standard, m.Dismiss, m.Sheet = d.Standard, d.Standard*d.ExitScale, d.Long
+}
+
+// settled is the share of the way an exponential approach covers in a
+// duration given as its length: 95 %, which reads as arrived.
+const settled = 0.95
+
+// RateFor is the rate (Motion's unit, for ui.Context.AnimateValue) of an
+// exponential approach that covers 95 % of the way in d seconds: a duration
+// as a rate. d ≤ 0 is Instant.
+func RateFor(d float32) float32 {
+	if d <= 0 {
+		return Instant
+	}
+	return float32(-math.Log2(1-settled)) / d
+}
+
+// still reports whether r's motion is reduced: the system's Reduce Motion,
+// or a theme whose durations it stilled.
+func (r *Resolved) still() bool { return r.Settings.ReduceMotion || r.Motion.Standard <= 0 }
+
+// Enter is the rate of something arriving over d seconds; Instant under
+// Reduce Motion and for d ≤ 0.
+func (r *Resolved) Enter(d float32) float32 {
+	if d <= 0 || r.still() {
+		return Instant
+	}
+	return RateFor(d)
+}
+
+// Exit is Enter for something leaving: ExitScale of the time.
+func (r *Resolved) Exit(d float32) float32 {
+	s := r.Motion.ExitScale
+	if s <= 0 {
+		s = DefaultDurations.ExitScale
+	}
+	return r.Enter(d * s)
+}
+
+// Toward is Enter while on (arriving) and Exit while not (leaving): the rate
+// of a thing that comes and goes.
+func (r *Resolved) Toward(d float32, on bool) float32 {
+	if on {
+		return r.Enter(d)
+	}
+	return r.Exit(d)
+}
+
+// Fade is the rate of a crossfade over d seconds, which Reduce Motion keeps
+// (at most Short of it).
+func (r *Resolved) Fade(d float32) float32 {
+	if !r.still() {
+		return RateFor(d)
+	}
+	if s := r.Motion.Short; s > 0 {
+		d = min(d, s)
+	}
+	return RateFor(d)
+}
+
+// Dur is d as a tween's length (a motion of fixed length), 0 under Reduce
+// Motion.
+func (r *Resolved) Dur(d float32) float32 {
+	if r.still() {
+		return 0
+	}
+	return d
+}
+
+// EaseOut is t, 0 to 1, decelerated (cubic): a tween's arrival.
+func EaseOut(t float32) float32 {
+	t = 1 - min(max(t, 0), 1)
+	return 1 - t*t*t
+}
+
+// Glide is how far a thing that comes and goes (a sidebar, a side pane, a
+// panel) is shown, 0 to 1: easing toward on over d seconds as it arrives and
+// quicker as it leaves (Toward), at once under Reduce Motion or with d ≤ 0 (a
+// still render). The ends snap within 1 %, so the caller can skip building a
+// thing at 0 and draw one at 1 as at rest.
+func Glide(c *ui.Context, r *Resolved, key ui.Key, on bool, d float32) float32 {
+	target := float32(0)
+	if on {
+		target = 1
+	}
+	rate := float32(Instant)
+	if d > 0 {
+		rate = r.Toward(d, on)
+	}
+	t := c.AnimateValue(key, target, rate)
+	switch {
+	case t < 0.01:
+		return 0
+	case t > 0.99:
+		return 1
+	}
+	return t
 }
 
 // Instant is a rate that arrives in one frame: what Reduce Motion gives the
