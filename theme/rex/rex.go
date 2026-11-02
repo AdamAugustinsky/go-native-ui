@@ -58,6 +58,7 @@ func ThemeWithField(fc FieldColors) *theme.Theme {
 	if fc.DarkGlass != 0 {
 		th.Roles[theme.Dark][theme.GlassTint] = theme.ColA(fc.DarkGlass, darkAlpha)
 	}
+	castGreys(th, fc.DarkCast)
 	return th
 }
 

@@ -2,7 +2,9 @@ package rexui
 
 import (
 	"reflect"
+	"runtime"
 
+	"gonativeui/format"
 	"gonativeui/menu"
 	"gonativeui/widget/base"
 )
@@ -65,6 +67,19 @@ type Strings struct {
 	// Maximize and Restore name a drawn titlebar's maximise button
 	// (CaptionButtons; Menu.Minimize and Menu.Close name the others).
 	Maximize, Restore string
+
+	// The words every app's screens repeat (D95): the
+	// buttons of a dialog or a row (Cancel, Close, Save, Rename, Open,
+	// TryAgain; Remove and Back are above), a more-options button
+	// (MoreOptions), a file's reveal (ShowInFinder on macOS, ShowInExplorer
+	// on Windows: RevealLabel), a wait (LoadingDots, "Loading…"), a copy's
+	// confirmation (Copied) and the shortcuts sheet's title (Shortcuts).
+	Cancel, Close, Save, Rename, Open, TryAgain, MoreOptions     string
+	ShowInFinder, ShowInExplorer, LoadingDots, Copied, Shortcuts string
+
+	// Format are package format's words (times ago, numbers, schedules,
+	// dates), set with these (format.SetLocale).
+	Format format.Locale
 }
 
 // StringsEnglish are the default Strings.
@@ -111,6 +126,19 @@ var StringsEnglish = Strings{
 	Loading:        "Loading",
 	Maximize:       "Maximize",
 	Restore:        "Restore",
+	Cancel:         "Cancel",
+	Close:          "Close",
+	Save:           "Save",
+	Rename:         "Rename",
+	Open:           "Open",
+	TryAgain:       "Try Again",
+	MoreOptions:    "More Options",
+	ShowInFinder:   "Show in Finder",
+	ShowInExplorer: "Show in Explorer",
+	LoadingDots:    "Loading…",
+	Copied:         "Copied",
+	Shortcuts:      "Keyboard Shortcuts",
+	Format:         format.English,
 }
 
 // StringsPtBR are the Strings in Brazilian Portuguese, in macOS's words.
@@ -172,6 +200,19 @@ var StringsPtBR = Strings{
 	Loading:        "Carregando",
 	Maximize:       "Maximizar",
 	Restore:        "Restaurar",
+	Cancel:         "Cancelar",
+	Close:          "Fechar",
+	Save:           "Salvar",
+	Rename:         "Renomear",
+	Open:           "Abrir",
+	TryAgain:       "Tentar de novo",
+	MoreOptions:    "Mais opções",
+	ShowInFinder:   "Mostrar no Finder",
+	ShowInExplorer: "Mostrar no Explorer",
+	LoadingDots:    "Carregando…",
+	Copied:         "Copiado",
+	Shortcuts:      "Atalhos de teclado",
+	Format:         format.PtBR,
 }
 
 var (
@@ -195,9 +236,19 @@ func SetStrings(s Strings) {
 	orEnglish(reflect.ValueOf(&s).Elem(), reflect.ValueOf(StringsEnglish))
 	base.SetStrings(s.Base)
 	menu.SetStrings(s.Menu)
+	format.SetLocale(s.Format)
 	str = s
 	sendLabels = [2]string{s.Send + "###send", s.Sending + "###send"}
 	scrollBottomLabel = s.ScrollToBottom + "###scroll-bottom"
+}
+
+// RevealLabel is the button that shows a file in the system's file manager:
+// Strings.ShowInExplorer on Windows, ShowInFinder elsewhere.
+func RevealLabel() string {
+	if runtime.GOOS == "windows" {
+		return str.ShowInExplorer
+	}
+	return str.ShowInFinder
 }
 
 // CurrentStrings returns the Strings in use.

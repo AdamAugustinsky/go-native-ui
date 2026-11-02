@@ -66,6 +66,18 @@ type AvatarOpts struct {
 	// out in (the surface the avatar lies on); the zero Tint is the window
 	// background.
 	Backdrop Tint
+	// Square makes the avatar a rounded square (corners a quarter of its
+	// side, a favicon's or a project's tile) instead of a circle.
+	Square bool
+	// Initials, when not empty, are shown in place of the name's (Initials):
+	// a project's monogram. InitialsColor is their colour (zero: white, on a
+	// backdrop deepened until white reads on it).
+	Initials      string
+	InitialsColor Tint
+	// Badge, when set, is a dot at the top right corner in this colour (an
+	// unread mark), ringed in Backdrop so that it reads on any picture
+	// (BadgeDot).
+	Badge Tint
 }
 
 // AvatarRecipe is the look of avatars. Contacts' avatars are the model; the
@@ -210,17 +222,24 @@ func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
 	c.NextAuditExempt(ui.AuditOverflow.Mask() | ui.AuditCovered.Mask()) // the ring and the cut lie over their neighbour on purpose // the presence dot sits on the corner
 	id := c.BoxKeyed(flags, key, nil)
 	c.Push(id)
+	corner := side / 2
+	if o.Square {
+		corner = side / 4
+	}
 	if o.Image != 0 && k.ImageState(o.Image) == img.Ready {
 		k.NextSize(ui.Px(side), ui.Px(side))
-		k.Image(0, o.Image, ui.FitFill, side/2, "")
+		k.Image(0, o.Image, ui.FitFill, corner, "")
 	} else {
 		avatarInitials(k, key, name, side, size, &o)
 	}
 	if o.Presence != PresenceNone && o.Presence < numPresence {
 		avatarDot(k, key, side, &o)
 	}
+	if o.Badge != (Tint{}) {
+		BadgeDot(k, BadgeDotOpts{Color: o.Badge, Backdrop: o.Backdrop})
+	}
 	if o.Pressable {
-		k.FocusRing(id, vis, side/2)
+		k.FocusRing(id, vis, corner)
 	}
 	c.Pop()
 	return id
@@ -231,6 +250,9 @@ func avatarInitials(k *base.Kit, key ui.Key, name string, side, size float32, o 
 	c, r := k.Context(), k.Theme()
 	rc := &AvatarLook
 	fg := uint32(0xFFFFFFFF)
+	if o.InitialsColor != (Tint{}) {
+		fg = o.InitialsColor.RGBA(r)
+	}
 	fill := o.Color.RGBA(r) // the app's colour, as it gave it
 	if o.Color == (Tint{}) {
 		fill = legibleUnder(Of(rc.Palette[hashName(name)%uint32(len(rc.Palette))]).RGBA(r), fg)
@@ -241,13 +263,21 @@ func avatarInitials(k *base.Kit, key ui.Key, name string, side, size float32, o 
 	st := avatarStyle(k, size, o)
 	theme.At(c, 0, 0, side, side)
 	c.NextBG(fill)
-	c.NextRadius(side / 2)
+	if o.Square {
+		c.NextRadius(side / 4)
+	} else {
+		c.NextRadius(side / 2)
+	}
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
 	c.NextJustify(ui.JustifyCenter)
 	disc := c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(key, 1), nil)
 	f := c.Fmt()
-	initialsOf(f, name)
+	if o.Initials != "" {
+		f.Str(o.Initials)
+	} else {
+		initialsOf(f, name)
+	}
 	b := f.Bytes()
 	if len(b) == 0 {
 		return
@@ -460,4 +490,50 @@ func AvatarStack(k *base.Kit, label string, names []string, max int, o AvatarOpt
 	}
 	c.Pop()
 	return id
+}
+
+// BadgeDotOpts are BadgeDot's options, in points.
+type BadgeDotOpts struct {
+	// Color is the dot's colour.
+	Color Tint
+	// Backdrop is the ring's colour, what the marked thing lies on (zero:
+	// the field, theme.Field).
+	Backdrop Tint
+	// Ring is the ring's outer side and Dot the dot's (0: 8 and 6); Inset
+	// how far inside the top right corner the ring's corner sits (negative:
+	// past it; 0: -2, a little past it).
+	Ring, Dot, Inset float32
+}
+
+// BadgeDot marks the box being built at its top right corner with a dot
+// ringed in its backdrop's colour, so that it reads on any picture or symbol
+// (an unread conversation, an account with news). Build it last in that box.
+func BadgeDot(k *base.Kit, o BadgeDotOpts) {
+	c, r := k.Context(), k.Theme()
+	if o.Ring == 0 {
+		o.Ring = theme.Space2
+	}
+	if o.Dot == 0 {
+		o.Dot = 6
+	}
+	if o.Inset == 0 {
+		o.Inset = -theme.GridMicro
+	}
+	back := r.Colors[theme.Field]
+	if o.Backdrop != (Tint{}) {
+		back = o.Backdrop.RGBA(r)
+	}
+	ring, dot := k.Pt(o.Ring), k.Pt(o.Dot)
+	c.NextAnchor(ui.AnchorTopRight, k.Pt(o.Inset), k.Pt(o.Inset))
+	c.NextSize(ui.Px(ring), ui.Px(ring))
+	c.NextBG(back)
+	c.NextRadius(ring / 2)
+	c.NextAuditExempt(ui.AuditOverflow.Mask() | ui.AuditCovered.Mask())
+	c.Push(c.Box(base.Floating|ui.DrawBackground, "badge dot"))
+	c.NextCenter()
+	c.NextSize(ui.Px(dot), ui.Px(dot))
+	c.NextBG(o.Color.RGBA(r))
+	c.NextRadius(dot / 2)
+	c.Box(base.Floating|ui.DrawBackground, "dot")
+	c.Pop()
 }

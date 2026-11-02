@@ -156,6 +156,30 @@ type FieldColors struct {
 	// material behind the window, theme.Resolved.Backdrop) in the field's
 	// place, 0xRRGGBB; 0 keeps Rex's.
 	Scrim [2]uint32
+	// DarkCast is the field's hue in dark, given to every grey of the dark
+	// roles: each opaque neutral grey (red, green and blue equal, alpha at
+	// least 0xE6) has its red, green and blue multiplied by these
+	// ({1.06, 1, 0.95} warms it, {0.99, 0.99, 1.03} cools it) and is kept
+	// over the system's colours (Theme.Own). A translucent fill takes the
+	// colour of what is under it and stays. The zero value keeps the greys.
+	DarkCast [3]float32
+}
+
+// castGreys gives th's opaque neutral dark greys the cast k (FieldColors.DarkCast).
+func castGreys(th *theme.Theme, k [3]float32) {
+	if k == ([3]float32{}) {
+		return
+	}
+	scale := func(v uint32, f float32) uint32 { return uint32(min(float32(v)*f+0.5, 255)) }
+	d := &th.Roles[theme.Dark]
+	for i, v := range d {
+		r, g, b, a := v>>24, v>>16&0xFF, v>>8&0xFF, v&0xFF
+		if a < 0xE6 || r != g || g != b {
+			continue
+		}
+		d[i] = scale(r, k[0])<<24 | scale(g, k[1])<<16 | scale(b, k[2])<<8 | a
+		th.Own[i] = true
+	}
 }
 
 // look is one theme's field and glass, light and dark.

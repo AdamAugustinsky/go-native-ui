@@ -42,8 +42,8 @@ excluded.
 | `github.com/ebitengine/purego` | `Dlopen`/`Dlsym`; the `fakecgo` runtime bootstrap that makes C calls and callbacks legal without cgo (sets `runtime.iscgo`, creates threads with `pthread_create`, provides `crosscall2`); Objective-C class registration at startup. darwin + linux only. | +236 KB (Dlopen + 1 call), +509 KB with `objc` on darwin/arm64; +131–180 KB on linux | no | Apache-2.0 (some files BSD-3 from Go) |
 | `github.com/go-text/typesetting` | Linux text shaping, bidi and segmentation (**D9 option B, chosen**). Linux builds only. To be added in phase 2. | +2.1–3.4 MB (probe) | no | Unlicense OR BSD-3; `harfbuzz/` is MIT |
 | `golang.org/x/image` v0.23.0 | Already required, indirectly, by go-text (D20). Phase 8 C6 imports its `webp` package directly: `img` decodes WebP (lossy VP8, lossless VP8L, alpha) on Windows and Linux, where there is no system decoder in reach; animated WebP is our own container walk over it (`img/anim_webp.go`). Not linked on macOS (ImageIO decodes WebP). | +0.18 MB linux/amd64, +0.13 MB windows/amd64 (gallery and notes, with C5) | no | BSD-3-Clause |
-| `github.com/srwiley/oksvg`, `github.com/srwiley/rasterx` | Linux system icons drawn from SVG (D85; Linux builds only). rasterx also rasterises the Lucide icons on every OS (D-pending (lucide)). oksvg is a patched copy in `third_party/oksvg` without `x/net/html/charset`. | +356 KB on linux/amd64 when added (D85, with x/net and x/text, since dropped: −242 KB); rasterx's stroker and `x/image/vector` about +100 KB on darwin and windows | no | BSD-3 |
-| Lucide 1.66.0 (`third_party/lucide`) | The icon set on every OS (D-pending (lucide)): artwork, compiled to outlines, not code. | 99 KB compressed in the binary, 283 KB inflated at the first icon | no | ISC (some icons MIT, from Feather) |
+| `github.com/srwiley/oksvg`, `github.com/srwiley/rasterx` | Linux system icons drawn from SVG (D85; Linux builds only). rasterx also rasterises the Lucide icons on every OS (D96). oksvg is a patched copy in `third_party/oksvg` without `x/net/html/charset`. | +356 KB on linux/amd64 when added (D85, with x/net and x/text, since dropped: −242 KB); rasterx's stroker and `x/image/vector` about +100 KB on darwin and windows | no | BSD-3 |
+| Lucide 1.66.0 (`third_party/lucide`) | The icon set on every OS (D96): artwork, compiled to outlines, not code. | 99 KB compressed in the binary, 283 KB inflated at the first icon | no | ISC (some icons MIT, from Feather) |
 | libghostty-vt (Ghostty, `4a4fc0179`), **draft, phase 8 D74** | The terminal emulator under `term` and `rexui.Terminal`: parser, screen, scrollback, render state, input encoders, selection, search. Built by `tools/libghostty` with Zig 0.17.0, not committed; bundled only with apps that use the terminal (`gnui.json` `nativeLibs`). Not a Go module: a native library loaded at runtime through `clib` (`dlopen`, `LoadLibraryExW`). | not in the Go binary: a separate file of 2.06 MB (darwin/arm64), 2.35 MB (windows/amd64), 1.95 MB (windows/arm64), 2.26 MB (linux/amd64), 2.00 MB (linux/arm64), ReleaseFast, stripped | no | MIT, Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors |
 
 **Phase 1: `golang.org/x/sys` dropped.** It was planned for Windows DLL
@@ -401,7 +401,7 @@ derivative.
 
 **Boundaries.**
 - The reference image stays out of git.
-- No Superlogical or third-party assets, logos, fonts or code: icons are system symbols or our own, and fonts are system fonts. (Icons: superseded by D-pending (lucide), Lucide's set on every OS.)
+- No Superlogical or third-party assets, logos, fonts or code: icons are system symbols or our own, and fonts are system fonts. (Icons: superseded by D96, Lucide's set on every OS.)
 - **Risk (flagged, accepted by you):** shipping another product's distinctive look publicly can draw trade-dress objections. The public repo makes the resemblance visible early. If that becomes a concern, the theme is data (colours, radii, spacing) and can be changed without touching the renderer.
 
 **Cost.** Renderer additions:
@@ -1433,7 +1433,27 @@ So a partial frame drawn into a retained back buffer and copied to the drawable 
 
 **Cost.** Nothing until an app calls them; a call is one block or one COM object and its result is kept until taken or until the view closes. Tested by `TestEvalAndCapture` on both OSes.
 
-## D-pending (lucide). Lucide is the icon set on every OS; system symbols are an opt-in (2026-11-02)
+## D95. The apps' design tokens and shared pieces move into the framework (2026-11-02)
+
+**Decision.** What Zap and A3 each built for themselves, and copied from each other, is the framework's, so the apps stop rebuilding it and cannot drift apart:
+- **Tokens** (`theme/grid.go`, `theme/motion.go`): the 4-point spacing grid (`GridUnit`, `GridMicro`, `Space1`…`Space8`, `MinGap`, `OnGrid`), `WindowRadius` and `Theme.SetPaneGrid` (inset, gutter and concentric pane corners), three icon sizes with their hit boxes (`SmallIconPt`, `ToolIconPt`, `LargeIconPt`, `HitSmall`, `HitTool`, `HitLarge`, `SmallIconWeight`) and `MetaPt`. Five named durations (`Durations`, `Theme.SetDurations`, which also sets the component rates), `Resolved.Enter`/`Exit`/`Toward`/`Fade`/`Dur` (an exit takes `ExitScale` of its entrance; Reduce Motion stills travel and keeps a short crossfade) and `theme.Glide` (a pane or a sidebar that comes and goes). `theme.RateFor` is `rexui.RateFor`, which stays.
+- **Grid lint** (`widgettest.LintSpacingGrid`): the apps' test, reusable. A literal multiplied by the display scale (`theme.Snap(5*sc)`, `9*k.Scale()`) is now a length in points and is checked; the apps' copies skipped it as a "factor".
+- **Recolouring** (`rex.FieldColors.DarkCast`, `rexui.TintTabs`, `rexui.BeginWindow`/`EndWindow`, `rexui.HasMaterial`): the dark cast on every opaque grey, the tab bar's 13 fields from a few colours, and the field (with a cover of its colour over the system's material) under a window's content.
+- **Pane card** (`rexui.BeginPaneCard`, `PaneFocus`, `BeginPaneHeader`, `PaneTitle`, `PaneAction`): a pane on the theme's surface, its focus at the theme's dimming rate (both apps hard-coded 14), placed by a `workspace.Layout` or in the flow with `PaneFocus` (a press anywhere in a card focuses it; A3 tested the pointer itself), and a content sweep for a gliding card.
+- **Key hints** (`rexui.KeyText`, `Kbd`, `WithShortcut`, `ShortcutRow`, `ShortcutRowsOf`, `ShortcutsSheet`): a shortcut written once as macOS writes it, shown as the platform writes it (A3's replacer missed ⌥; Zap always showed ⌘), and the shortcuts sheet from the menu model.
+- **Formatting** (package `format`): time ago, plurals, compact and grouped numbers, short paths, schedules (Hermes' and cron's) and short dates, in English and pt-BR, set with the components' words (`rexui.Strings.Format`).
+- **Words** (`rexui.Strings`): Cancel, Close, Save, Rename, Open, Try Again, More Options, Show in Finder/Explorer (`RevealLabel`), Loading…, Copied, Keyboard Shortcuts, in pt-BR too.
+- **Toasts** (`rexui.BeginToastStack`, `ToastStack.Toast`, `CopiedPill`): a stack in a corner with an inset, progress, actions and a time (`Toast`'s clock, held under the pointer), and the copy confirmation.
+- **Avatars** (`AvatarOpts.Square`, `Initials`, `InitialsColor`, `Badge`; `rexui.BadgeDot`): a project's tile and the ringed badge dot.
+- **Dimmed backdrop** (`DialogOpts.Dim`, `DimCancels`; `rexui.DimBackdrop`): the window dimmed behind a sheet or a floating panel.
+
+**Why.** Adam, 2026-11-02: generic UI belongs in go-native-ui; the apps' copies had already drifted (A3's micro duration 0.15 against Zap's 0.1, its ⌥ missing on Windows, Zap's ⌘ on every OS, two grid lints 25 lines apart with the same hole).
+
+**Not done.** The favicon normaliser (A3's `favicon` package) stays in the app: it is an HTML/ICO fetcher, not an image codec. `BeginWindow` has no rounded variant without the material (HyperPedia's panels draw the field's corners themselves). Zap and HyperPedia move onto these in a later lane.
+
+**Tested.** `format` (each text in both languages), `TestKeyTextPerPlatform`, `TestSpacingGridOffenders` (the scaled-literal hole), `TestToastStackStacksInItsCorner`, `TestPaneFocusFollowsPresses`, `TestDarkCastTintsOpaqueGreys`.
+
+## D96. Lucide is the icon set on every OS; system symbols are an opt-in (2026-11-02)
 
 **Decision (Adam, 2026-11-02: "our icons are quite bad. Let's take a look at the web icons that are usually used in apps like T3 Code and use those instead").** Package `icon` draws Lucide (https://lucide.dev, ISC) by default, the set T3 Code uses (`lucide-react`, read from its `app.asar`). `icon.Lucide("search")` names one; every standard icon, rexui's sidebar places, list disclosures and sort indicators are Lucide, so an app looks the same on macOS, Windows and Linux. SF Symbols (macOS) and Segoe (Windows) stay an explicit choice: `icon.UseSystemSymbols()` for the standard set, `Spec.Symbol`/`Spec.Segoe` for an app's own, `rexui.ToolbarSymbol`, `SidebarTileSymbol`, `ListGlyphSystemSpecs`. This supersedes D2's "icons are system symbols or our own" for icons; fonts stay the system's. Drawn menus (`rexui.ContextMenu` off macOS and the new `rexui.DropdownMenu`, a button's menu drawn on every OS) show an item's Lucide icon (`ui.MenuItem.Icon`) and section headers (`ui.MenuItem.Header`), and leave out the mark column in a menu of icons without check marks, as T3 Code's do.
 
