@@ -39,7 +39,7 @@ type SidebarItem struct {
 	// Tile draws the symbol white on a rounded square of this colour (RGBA;
 	// 0: none), as System Settings' sidebar does: TileSize square, radius
 	// TileRadius, in the place of a symbol. Give the tiles their symbols at
-	// TileGlyphPt (SidebarTileSymbol).
+	// TileGlyphPt (SidebarTileIcon, or SidebarTileSymbol for SF Symbols).
 	Tile uint32
 	// Header makes the row a group header: small bold text, not selectable;
 	// the rows up to the next header are its group.
@@ -574,8 +574,16 @@ var SidebarLook = SidebarRecipe{
 	TileSize: 20, TileRadius: 5, TileGlyphPt: 11, TileInactive: 0.5, TileGlyph: Of(theme.OnAccent),
 }
 
-// SidebarTileSymbol is the icon spec of a tile's symbol (SidebarItem.Tile):
-// the SF Symbol name at the tile's size and weight, for Kit.AddIcon.
+// SidebarTileIcon is the icon spec of a tile's Lucide icon
+// (SidebarItem.Tile): the icon named at the tile's glyph size, for
+// Kit.AddIcon.
+func SidebarTileIcon(name string, fallback rune) icon.Spec {
+	return icon.Spec{Lucide: name, Fallback: fallback, Pt: SidebarLook.TileGlyphPt}
+}
+
+// SidebarTileSymbol is the icon spec of a tile's SF Symbol (SidebarItem.Tile):
+// the symbol named at the tile's size and weight, for an app that draws the
+// system's symbols; SidebarTileIcon draws Lucide's.
 func SidebarTileSymbol(symbol string, fallback rune) icon.Spec {
 	return icon.Spec{Symbol: symbol, Fallback: fallback, Pt: SidebarLook.TileGlyphPt, Weight: 0.23}
 }
@@ -1278,22 +1286,21 @@ func desaturate(c uint32) uint32 {
 	return y<<24 | y<<16 | y<<8 | c&0xFF
 }
 
-// SidebarIcons are SF Symbols for common sidebar places, at the sidebar's
-// symbol size (16 pt: AppKit's medium sidebar images, 18–26 × 18–21 on
-// 27.2); add the ones a sidebar uses to the kit (Kit.AddIcon) before
-// the first frame.
+// SidebarIcons are Lucide icons for common sidebar places, at the sidebar's
+// icon size (16 pt, T3 Code's size-4 and AppKit's medium sidebar images); add
+// the ones a sidebar uses to the kit (Kit.AddIcon) before the first frame.
 var SidebarIcons = struct {
 	Recents, Applications, Desktop, Documents, Downloads, Cloud, Shared, Disk, Network, Folder, Tag icon.Spec
 }{
-	Recents:      icon.Spec{Symbol: "clock", Fallback: '◷', Pt: 16},
-	Applications: icon.Spec{Symbol: "square.grid.2x2", Fallback: '▦', Pt: 16},
-	Desktop:      icon.Spec{Symbol: "menubar.dock.rectangle", Fallback: '▭', Pt: 16},
-	Documents:    icon.Spec{Symbol: "doc", Fallback: '▢', Pt: 16},
-	Downloads:    icon.Spec{Symbol: "arrow.down.circle", Fallback: '⇩', Pt: 16},
-	Cloud:        icon.Spec{Symbol: "icloud", Fallback: '☁', Pt: 16},
-	Shared:       icon.Spec{Symbol: "folder.badge.person.crop", Fallback: '▣', Pt: 16},
-	Disk:         icon.Spec{Symbol: "internaldrive", Fallback: '▤', Pt: 16},
-	Network:      icon.Spec{Symbol: "network", Fallback: '◎', Pt: 16},
-	Folder:       icon.Spec{Symbol: "folder", Fallback: '▣', Pt: 16},
-	Tag:          icon.Spec{Symbol: "circle.fill", Fallback: '●', Pt: 16},
+	Recents:      icon.Spec{Lucide: "clock", Fallback: '◷', Pt: 16},
+	Applications: icon.Spec{Lucide: "layout-grid", Fallback: '▦', Pt: 16},
+	Desktop:      icon.Spec{Lucide: "monitor", Fallback: '▭', Pt: 16},
+	Documents:    icon.Spec{Lucide: "file-text", Fallback: '▢', Pt: 16},
+	Downloads:    icon.Spec{Lucide: "circle-arrow-down", Fallback: '⇩', Pt: 16},
+	Cloud:        icon.Spec{Lucide: "cloud", Fallback: '☁', Pt: 16},
+	Shared:       icon.Spec{Lucide: "users", Fallback: '▣', Pt: 16},
+	Disk:         icon.Spec{Lucide: "hard-drive", Fallback: '▤', Pt: 16},
+	Network:      icon.Spec{Lucide: "globe", Fallback: '◎', Pt: 16},
+	Folder:       icon.Spec{Lucide: "folder", Fallback: '▣', Pt: 16},
+	Tag:          icon.Spec{Lucide: "tag", Fallback: '●', Pt: 16},
 }

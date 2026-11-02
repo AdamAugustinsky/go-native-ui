@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"gonativeui/app"
+	"gonativeui/icon"
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
@@ -67,6 +68,62 @@ func TestContextMenuLook(t *testing.T) {
 			r.Play(widgettest.RClick(ui.RoleListItem, "Ada Lovelace"), widgettest.WaitFor(ui.RoleMenuItem, "Labels"),
 				widgettest.Move(ui.RoleMenuItem, "Labels"), widgettest.WaitFor(ui.RoleMenuItem, "Work"), widgettest.Settle())
 			r.AssertImageRect("contextmenu-"+m.name, image.Rect(0, 0, 960, 560), widgettest.Tolerance{})
+		})
+	}
+}
+
+// dropdownScene is a "+" button with a DropdownMenu of Lucide icons under
+// section headers, as T3 Code's composer menus are.
+type dropdownScene struct {
+	k    *widget.Kit
+	mode theme.Mode
+}
+
+func (s *dropdownScene) Init(a *app.App) error {
+	s.k = widget.NewKit(a.UI, a.Text, rex.Theme())
+	s.k.SetMode(s.mode)
+	s.k.ReduceMotion = true
+	return nil
+}
+
+func (s *dropdownScene) Build(c *ui.Context) {
+	k := s.k
+	k.Begin(c)
+	k.BeginWindow()
+	k.Column("col")
+	b := rexui.IconButton(k.Kit, icon.Plus, "Add", rexui.IconButtonOpts{})
+	rexui.DropdownMenu(k.Kit, b.ID, func(m *[]ui.MenuItem) {
+		*m = append(*m,
+			ui.MenuItem{Header: true, Title: "Attach"},
+			ui.MenuItem{ID: 1, Title: "Files", Icon: "paperclip", Key: 'u', Mods: ui.ModSuper},
+			ui.MenuItem{ID: 2, Title: "Image", Icon: "image"},
+			ui.MenuItem{ID: 3, Title: "Folder", Icon: "folder-open", Disabled: true},
+			ui.MenuSeparator,
+			ui.MenuItem{Header: true, Title: "Mode"},
+			ui.MenuItem{ID: 4, Title: "Plan", Icon: "list-todo"},
+			ui.MenuItem{ID: 5, Title: "Clear Chat", Icon: "trash-2", Destructive: true})
+	})
+	k.EndColumn()
+	k.EndWindow()
+	k.End()
+}
+
+// The dropdown menu of a button, offscreen, in light and dark, with the
+// pointer on its first item: section headers, Lucide icons in the item's
+// colour, a key equivalent, a disabled and a destructive item, and no mark
+// column.
+func TestDropdownMenuLook(t *testing.T) {
+	for _, m := range []struct {
+		name string
+		mode theme.Mode
+	}{{"light", theme.Light}, {"dark", theme.Dark}} {
+		t.Run(m.name, func(t *testing.T) {
+			s := &dropdownScene{mode: m.mode}
+			r := widgettest.Open(t, app.Config{Title: "dropdown"}, 480, 520, 2, s)
+			r.Frames(3)
+			r.Play(widgettest.Click(ui.RoleButton, "Add"), widgettest.WaitFor(ui.RoleMenuItem, "Files"),
+				widgettest.Move(ui.RoleMenuItem, "Files"), widgettest.Settle())
+			r.AssertImageRect("dropdown-"+m.name, image.Rect(0, 0, 480, 520), widgettest.Tolerance{})
 		})
 	}
 }

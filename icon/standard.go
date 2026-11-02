@@ -38,8 +38,7 @@ const (
 	CheckMark
 	// ChevronUpDown is the double chevron of a pop-up button.
 	ChevronUpDown
-	// ClearField is a filled circle with a cross knocked out: a search
-	// field's clear button.
+	// ClearField is a circle with a cross: a search field's clear button.
 	ClearField
 	// PullDown is the small down chevron of a pull-down button.
 	PullDown
@@ -47,17 +46,74 @@ const (
 	NumStandard
 )
 
-// Standard returns the specs of the standard icons, indexed by ID. Each names
-// its SF Symbol (macOS), its codepoint in Segoe Fluent Icons and Segoe MDL2
-// Assets (Windows; the two share these assignments), and a glyph of the system
-// UI font for everywhere else.
+// Standard returns the specs of the standard icons, indexed by ID: Lucide
+// icons, the same on every system, each with a glyph of the system UI font in
+// case the set fails to load. After UseSystemSymbols it returns the system's
+// symbols instead: each names its SF Symbol (macOS), its codepoint in Segoe
+// Fluent Icons and Segoe MDL2 Assets (Windows; the two share these
+// assignments), and the same fallback glyph.
 func Standard() []Spec {
 	s := make([]Spec, NumStandard)
-	copy(s, standard[:])
+	if systemSymbols {
+		copy(s, standardSystem[:])
+	} else {
+		copy(s, standard[:])
+	}
 	return s
 }
 
+// systemSymbols is set by UseSystemSymbols.
+var systemSymbols bool
+
+// UseSystemSymbols makes Standard, and so New, give the system's symbols (SF
+// Symbols on macOS, Segoe on Windows, the UI font's glyphs elsewhere) instead
+// of Lucide's icons: the look of the platform, sized to macOS 27.2's controls.
+// Call it at startup, before the first atlas is made (rexui's
+// ListGlyphSystemSpecs, SidebarTileSymbol and ToolbarSymbol are the system
+// symbols of rexui's own icons).
+func UseSystemSymbols() { systemSymbols = true }
+
+// SystemStandard returns the system-symbol specs of the standard icons, the
+// ones Standard gives after UseSystemSymbols, whichever is in use.
+func SystemStandard() []Spec {
+	s := make([]Spec, NumStandard)
+	copy(s, standardSystem[:])
+	return s
+}
+
+// The Lucide standard icons, at T3 Code's sizes: 16 pt beside a row's or a
+// button's text, 14 pt in menus, fields and window buttons, 12 pt for the
+// small marks of controls (a pull-down's chevron, a sort indicator, a
+// checkbox's check, which a heavier stroke keeps legible).
 var standard = [NumStandard]Spec{
+	ChevronDown:   {Lucide: "chevron-down", Fallback: '▾', Pt: 14},
+	ChevronRight:  {Lucide: "chevron-right", Fallback: '▸', Pt: 14},
+	ChevronUp:     {Lucide: "chevron-up", Fallback: '▴', Pt: 14},
+	ChevronLeft:   {Lucide: "chevron-left", Fallback: '◂', Pt: 14},
+	Check:         {Lucide: "check", Fallback: '✓', Pt: 14},
+	Close:         {Lucide: "x", Fallback: '✕', Pt: 14},
+	Minimise:      {Lucide: "minus", Fallback: '−', Pt: 14},
+	Maximise:      {Lucide: "square", Fallback: '□', Pt: 12},
+	Restore:       {Lucide: "copy", Fallback: '❐', Pt: 12},
+	Search:        {Lucide: "search", Fallback: '⌕', Pt: 14},
+	Folder:        {Lucide: "folder", Fallback: '▣', Pt: 16},
+	File:          {Lucide: "file", Fallback: '▢', Pt: 16},
+	Plus:          {Lucide: "plus", Fallback: '+', Pt: 16},
+	Minus:         {Lucide: "minus", Fallback: '−', Pt: 16},
+	Ellipsis:      {Lucide: "ellipsis", Fallback: '…', Pt: 16},
+	SortUp:        {Lucide: "chevron-up", Fallback: '▲', Pt: 12, Weight: 0.4},
+	SortDown:      {Lucide: "chevron-down", Fallback: '▼', Pt: 12, Weight: 0.4},
+	Info:          {Lucide: "info", Fallback: 'ⓘ', Pt: 16},
+	Warning:       {Lucide: "triangle-alert", Fallback: '⚠', Pt: 16},
+	Error:         {Lucide: "circle-x", Fallback: '✖', Pt: 16},
+	CheckMark:     {Lucide: "check", Fallback: '✓', Pt: 12, Weight: 0.56},
+	ChevronUpDown: {Lucide: "chevrons-up-down", Fallback: '⇕', Pt: 14},
+	ClearField:    {Lucide: "circle-x", Fallback: '⊗', Pt: 14},
+	PullDown:      {Lucide: "chevron-down", Fallback: '▾', Pt: 12, Weight: 0.4},
+}
+
+// The system-symbol standard icons (UseSystemSymbols).
+var standardSystem = [NumStandard]Spec{
 	ChevronDown:  {Symbol: "chevron.down", Segoe: 0xE70D, Fallback: '▾', Pt: 12, Weight: 0.3},
 	ChevronRight: {Symbol: "chevron.right", Segoe: 0xE76C, Fallback: '▸', Pt: 12, Weight: 0.3},
 	ChevronUp:    {Symbol: "chevron.up", Segoe: 0xE70E, Fallback: '▴', Pt: 12, Weight: 0.3},

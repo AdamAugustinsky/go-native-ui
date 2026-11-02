@@ -209,9 +209,17 @@ type ToolbarRecipe struct {
 	TrafficInactive Pair
 }
 
+// ToolbarIcon is the icon spec of a toolbar item's Lucide icon (with a
+// fallback rune), at 16 pt as T3 Code's header buttons draw theirs: add it
+// to the kit (Kit.AddIcon) before the first frame.
+func ToolbarIcon(name string, fallback rune) icon.Spec {
+	return icon.Spec{Lucide: name, Fallback: fallback, Pt: icon.LucidePt}
+}
+
 // ToolbarSymbol is the icon spec of a toolbar item's SF Symbol (with a
 // fallback rune elsewhere), at the theme's toolbar size and scale
-// (theme.CapsuleSpec.Glyph, GlyphScale): add it to the kit (Kit.AddIcon)
+// (theme.CapsuleSpec.Glyph, GlyphScale), for an app that draws the system's
+// symbols; ToolbarIcon draws Lucide's. Add it to the kit (Kit.AddIcon)
 // before the first frame.
 func ToolbarSymbol(symbol string, fallback rune) icon.Spec {
 	c := &theme.MacWindow.Capsule

@@ -106,6 +106,14 @@ tokens for nothing.
   (`rexui.IconButtonChip`). Give it the hit area you want with `NextSize`; the
   chip is the button's own box. Do not draw the chip or set the greys in the
   app.
+- Icons are Lucide's, as T3 Code's are: `icon.Lucide("name")` at 16 pt
+  beside text and in buttons, `.Small()` (14 pt) in dense rows, the names of
+  https://lucide.dev/icons. They look the same on every OS. Reach for SF
+  Symbols or Segoe (`icon.Spec{Symbol: …, Segoe: …}`) only for a deliberately
+  native look, never as a per-OS map of your own.
+- A button's menu (an "add" or "more" button) is `rexui.DropdownMenu` with
+  `ui.MenuItem`s, icons and section headers included; it has the arrow keys,
+  Escape and mnemonics. Do not build menus out of popovers and rows.
 - Colour choices (swatches) are circles.
 - Metadata (times, sizes, counts, hints) is `LabelOpts.MetaPt`: the UI face
   with tabular figures, a step smaller than what it describes, so it reads

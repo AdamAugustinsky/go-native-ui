@@ -49,6 +49,7 @@ type Kit struct {
 	icons *icon.Atlas
 	keep  []icon.ID // KeepIcons, until the atlas exists
 	extra []icon.Spec
+	named map[string]icon.ID // NamedIcon's
 
 	scale  float32
 	ready  bool
@@ -131,6 +132,22 @@ func (k *Kit) AddIcon(s icon.Spec) icon.ID {
 		k.icons.Add(s)
 	}
 	return icon.NumStandard + icon.ID(len(k.extra)-1)
+}
+
+// NamedIcon is the ID of the Lucide icon name at 16 pt (icon.Lucide),
+// added to the kit the first time it is asked for: for the icons a component
+// is given by name (ui.MenuItem.Icon). Later calls find it without
+// allocating. Main thread.
+func (k *Kit) NamedIcon(name string) icon.ID {
+	if id, ok := k.named[name]; ok {
+		return id
+	}
+	if k.named == nil {
+		k.named = map[string]icon.ID{}
+	}
+	id := k.AddIcon(icon.Lucide(name))
+	k.named[name] = id
+	return id
 }
 
 // KeepIcons has the atlas prepare icons ids ahead of use and again at every

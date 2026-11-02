@@ -127,53 +127,65 @@ func inkIn(g *rig, pix []byte, s *sheet, i int) (n, redness, offHue int) {
 }
 
 // Every icon of the standard set draws on this OS, in the colour asked for, at
-// both scales, from the source this OS is meant to use.
+// both scales: Lucide's icons by default, the same on every OS, and the
+// system's symbols (SystemStandard) from the source this OS is meant to use.
 func TestStandardIconsDraw(t *testing.T) {
-	for _, scale := range []float32{1, 2} {
-		g := newRig(t, 6*int(40*scale), 4*int(40*scale))
-		a := New(g.ts)
-		a.Raster(scale)
-		a.Attach(g.r)
-		s := &sheet{a: a, ids: allIDs(a), color: 0xCC1100FF, cell: 40 * scale, cols: 6}
-		g.frame(s, scale)
-		g.frame(s, scale) // a glyph shaped by the first frame is drawn by the next
-		pix := g.pixels()
-		for _, id := range s.ids {
-			src := a.Source(id)
-			switch runtime.GOOS {
-			case "darwin":
-				if src != SourceImage {
-					t.Errorf("%vx icon %d (%s): source %v, want an SF Symbol image", scale, id, standard[id].Symbol, src)
-				}
-			case "windows":
-				want := SourceFallback
-				if a.SymbolFamily() != "" {
-					want = SourceSymbolFont
-				}
-				if src != want {
-					t.Errorf("%vx icon %d (U+%04X): source %v, want %v (symbol font %q)", scale, id, standard[id].Segoe, src, want, a.SymbolFamily())
-				}
-			default:
-				if src != SourceFallback {
-					t.Errorf("%vx icon %d (%q): source %v, want the fallback glyph", scale, id, standard[id].Fallback, src)
-				}
-			}
-			n, redness, off := inkIn(g, pix, s, int(id))
-			if n < int(4*scale*scale) {
-				t.Errorf("%vx icon %d (%v): only %d inked pixels", scale, id, src, n)
-				continue
-			}
-			// Tinted by the colour given: every inked pixel is a shade of it.
-			if redness < 15*n || off > n/20 {
-				t.Errorf("%vx icon %d: ink is not tinted red (%d inked pixels, redness %d, %d off hue)", scale, id, n, redness, off)
-			}
-			w, h := a.Size(id)
-			if w <= 0 || h <= 0 || w > s.cell || h > s.cell {
-				t.Errorf("%vx icon %d: size %v×%v does not fit a %v px cell", scale, id, w, h, s.cell)
-			}
+	for _, set := range []string{"lucide", "system"} {
+		specs := Standard()
+		if set == "system" {
+			specs = SystemStandard()
 		}
-		if runtime.GOOS == "windows" {
-			t.Logf("symbol font: %q", a.SymbolFamily())
+		for _, scale := range []float32{1, 2} {
+			g := newRig(t, 6*int(40*scale), 4*int(40*scale))
+			a := newAtlas(g.ts, specs)
+			a.Raster(scale)
+			a.Attach(g.r)
+			s := &sheet{a: a, ids: allIDs(a), color: 0xCC1100FF, cell: 40 * scale, cols: 6}
+			g.frame(s, scale)
+			g.frame(s, scale) // a glyph shaped by the first frame is drawn by the next
+			pix := g.pixels()
+			for _, id := range s.ids {
+				src := a.Source(id)
+				sp := specs[id]
+				switch {
+				case set == "lucide":
+					if src != SourceLucide {
+						t.Errorf("%vx icon %d (%s): source %v, want Lucide", scale, id, sp.Lucide, src)
+					}
+				case runtime.GOOS == "darwin":
+					if src != SourceImage {
+						t.Errorf("%vx system icon %d (%s): source %v, want an SF Symbol image", scale, id, sp.Symbol, src)
+					}
+				case runtime.GOOS == "windows":
+					want := SourceFallback
+					if a.SymbolFamily() != "" {
+						want = SourceSymbolFont
+					}
+					if src != want {
+						t.Errorf("%vx system icon %d (U+%04X): source %v, want %v (symbol font %q)", scale, id, sp.Segoe, src, want, a.SymbolFamily())
+					}
+				default:
+					if src != SourceFallback {
+						t.Errorf("%vx system icon %d (%q): source %v, want the fallback glyph", scale, id, sp.Fallback, src)
+					}
+				}
+				n, redness, off := inkIn(g, pix, s, int(id))
+				if n < int(4*scale*scale) {
+					t.Errorf("%s %vx icon %d (%v): only %d inked pixels", set, scale, id, src, n)
+					continue
+				}
+				// Tinted by the colour given: every inked pixel is a shade of it.
+				if redness < 15*n || off > n/20 {
+					t.Errorf("%s %vx icon %d: ink is not tinted red (%d inked pixels, redness %d, %d off hue)", set, scale, id, n, redness, off)
+				}
+				w, h := a.Size(id)
+				if w <= 0 || h <= 0 || w > s.cell || h > s.cell {
+					t.Errorf("%s %vx icon %d: size %v×%v does not fit a %v px cell", set, scale, id, w, h, s.cell)
+				}
+			}
+			if runtime.GOOS == "windows" && set == "system" {
+				t.Logf("symbol font: %q", a.SymbolFamily())
+			}
 		}
 	}
 }
@@ -186,7 +198,7 @@ func TestFallbackGlyphsDraw(t *testing.T) {
 	g := newRig(t, 6*int(40*scale), 4*int(40*scale))
 	specs := Standard()
 	for i := range specs {
-		specs[i].Symbol, specs[i].Segoe = "", 0
+		specs[i].Lucide, specs[i].Symbol, specs[i].Segoe = "", "", 0
 	}
 	a := newAtlas(g.ts, specs)
 	a.Raster(scale)

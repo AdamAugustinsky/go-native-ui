@@ -140,9 +140,16 @@ type MenuItem struct {
 	ID int
 	// Title is the item's text (for a submenu, the text of the entry).
 	Title string
-	// Symbol is the SF Symbol shown before the title ("trash"; "" none).
-	// Menus drawn by the app do not show it.
+	// Symbol is the SF Symbol a native menu shows before the title
+	// ("trash"; "" none).
 	Symbol string
+	// Icon is the Lucide icon a drawn menu (rexui) shows before the title
+	// ("trash-2"; "" none; package icon); native menus show Symbol.
+	Icon string
+	// Header makes the entry a section title: Title in small secondary
+	// text, which is not chosen and takes no focus (a native menu shows a
+	// disabled item).
+	Header bool
 	// Key and Mods show a key equivalent after the title (Key 'F' with
 	// ModSuper|ModShift: ⇧⌘F). It is shown, not matched: choosing by key
 	// stays with the app's own shortcuts, so it is a hint of one.

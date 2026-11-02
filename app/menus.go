@@ -186,6 +186,8 @@ func (a *App) addDynamicMenu(items []ui.MenuItem) int {
 		switch {
 		case it.Separator:
 			pi = platform.MenuItem{Kind: platform.MenuItemSeparator}
+		case it.Header:
+			pi = platform.MenuItem{Kind: platform.MenuItemAction, Title: it.Title, Disabled: true}
 		case len(it.Sub) > 0 && len(s.Menus) < maxDynamicMenus:
 			pi.Kind = platform.MenuItemSubmenu
 			pi.Submenu = a.addDynamicMenu(it.Sub)
