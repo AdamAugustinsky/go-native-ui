@@ -131,6 +131,10 @@ const (
 // fonts created in its text system, and the palette for the current mix of
 // light and dark.
 type Resolved struct {
+	// A Resolved is not comparable: nothing compares one, and its == (some
+	// three hundred fields) would be compiled into every binary (4.6 KB).
+	_ [0]func()
+
 	// Name is the theme's name.
 	Name string
 	// Scale is pixels per point.

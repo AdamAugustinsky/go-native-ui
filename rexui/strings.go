@@ -16,6 +16,11 @@ import (
 // fills its own, and SetStrings keeps English in the fields it leaves empty.
 // Whatever the app passes (a label, BubbleOpts.Name) wins over these.
 type Strings struct {
+	// Strings are not comparable: an == over some seventy strings would be
+	// compiled into every binary (8.7 KB) because SetStrings reflects over
+	// them, and nothing compares them.
+	_ [0]func()
+
 	// Base are the primitives' names (scroll bars, dividers).
 	Base base.Strings
 	// Menu are the titles of the standard commands and menus (Copy, Quit,
