@@ -12,6 +12,8 @@ type OutlineOpts struct {
 	Style ListStyle
 	// Striped alternates the rows' background.
 	Striped bool
+	// Hover fills the row under the pointer (ListOpts.Hover).
+	Hover bool
 	// Glyphs are the disclosures (AddListGlyphs; zero: the standard
 	// chevrons).
 	Glyphs ListGlyphs
@@ -68,7 +70,7 @@ type Outline struct {
 // and a click on the disclosure.
 func BeginOutline(k *base.Kit, label string, st *base.OutlineState, t *base.Tree, o OutlineOpts) Outline {
 	s := o.Style % NumListStyles
-	return Outline{Outline: k.BeginOutline(label, st, t, listOpts(k, ListOpts{Style: o.Style, Striped: o.Striped}, false)),
+	return Outline{Outline: k.BeginOutline(label, st, t, listOpts(k, ListOpts{Style: o.Style, Striped: o.Striped, Hover: o.Hover}, false)),
 		rowLook: rowLook{style: s, striped: o.Striped}, glyphs: o.Glyphs.orStandard()}
 }
 

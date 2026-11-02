@@ -86,6 +86,7 @@ type Theme struct {
 	// Own are System roles the theme keeps its own values for, whatever
 	// SystemColors says: an app with an identity of its own (warm surfaces)
 	// pins those and still follows the system's labels, fills and lines.
+	// RowSelected, which follows the accent, is kept too when owned.
 	Own [NumRoles]bool
 	// Text are the text styles in points; zero takes MacText.
 	Text [NumTextStyles]TextSpec
@@ -234,6 +235,9 @@ func (t *Theme) SetAccent(light, dark uint32) {
 		c[Accent], c[Selection], c[OnAccent] = a, a, on
 		c[FocusRing] = a&^0xFF | c[FocusRing]&0xFF
 		c[Link] = readableOn(a, m == 1, [3]uint32{p.Background, p.Surface, p.SurfaceRaised})
+		if !t.Own[RowSelected] {
+			c[RowSelected] = WithAlpha(a, rowSelectedAlpha[m])
+		}
 	}
 	for _, role := range [...]Role{Accent, Selection, FocusRing, OnAccent, Link} {
 		t.Own[role] = true
@@ -458,12 +462,18 @@ func (r *Resolved) applyRoles() {
 			c[Accent] = a
 			c[FocusRing] = a&^0xFF | c[FocusRing]&0xFF
 			c[Selection] = a
+			if !r.own[RowSelected] {
+				c[RowSelected] = WithAlpha(a, rowSelectedAlpha[m])
+			}
 		}
 		if a := r.tint[m] | 0xFF; r.tint[m] != 0 {
 			p := &r.base[m]
 			c[Accent], c[Selection], c[OnAccent] = a, a, onAccent(a)
 			c[FocusRing] = a&^0xFF | c[FocusRing]&0xFF
 			c[Link] = readableOn(a, m == 1, [3]uint32{p.Background, p.Surface, p.SurfaceRaised})
+			if !r.own[RowSelected] {
+				c[RowSelected] = WithAlpha(a, rowSelectedAlpha[m])
+			}
 		}
 		derive(&c, m, r.rolesBase[m][SidebarSel])
 		r.roles[m] = c

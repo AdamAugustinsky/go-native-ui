@@ -49,6 +49,9 @@ type SidebarItem struct {
 	// Open is the disclosure state of a row with children, or of a header
 	// whose group can be hidden (nil: none). The sidebar toggles it.
 	Open *bool
+	// Height replaces the row's height, in points (0: SidebarOpts.RowH):
+	// a row the app builds (SidebarOpts.Row) of its own height.
+	Height float32
 }
 
 // SidebarState is the state of a sidebar, owned by the app.
@@ -64,7 +67,85 @@ type SidebarState struct {
 
 	anchor, anchSel uint32   // the row a Shift range extends from, and the Sel it was set for
 	picked          []uint32 // the selected rows' IDs, ascending; empty: Sel alone
+
+	vis    []int32         // the visible, selectable rows' indexes, for the keys
+	find   base.TypeAhead  // type-to-find
+	pend   [4]base.NavMove // moves a text field sent (Steer), for the next Sidebar
+	npend  int
+	enter  bool // Enter from the field (Steer)
+	cmdr   sidebarCmd
+	menuFn func(*[]ui.MenuItem) // buildMenu, made once
+	menu   func(id uint32, items *[]ui.MenuItem)
+	menuID uint32
+
+	renaming uint32 // the row being renamed (Rename), 0 for none
+	rename   ui.TextBuffer
+	renameAt uint8 // 0 opened, 1 focus asked, 2 had the focus
+	renamed  uint32
+	row      SidebarRow // the row SidebarOpts.Row builds
 }
+
+// Rename starts renaming the row id in place: its title becomes a text field
+// holding title, which takes the focus. Enter ends it with
+// SidebarSignal.Renamed set (RenameText is the new name); Escape, or the
+// field losing the focus, ends it without.
+func (s *SidebarState) Rename(id uint32, title string) {
+	s.renaming, s.renameAt = id, 0
+	s.rename.SetString(title)
+	s.rename.SetCaret(len(title))
+}
+
+// Renaming is the row being renamed, 0 for none.
+func (s *SidebarState) Renaming() uint32 { return s.renaming }
+
+// RenameText is the rename field's text.
+func (s *SidebarState) RenameText() string { return s.rename.String() }
+
+// Steer makes the next ui TextField (a search field over the sidebar) steer
+// the sidebar's selection: Up, Down, Page Up and Page Down move it as the
+// sidebar's own keys do, as keys or as macOS's edit actions, and Enter
+// activates the selected row (SidebarSignal.Activated), while the field
+// keeps the caret and the focus. The moves apply in the next Sidebar call:
+// build the field before the sidebar, in the same frame.
+func (s *SidebarState) Steer(c *ui.Context) {
+	s.cmdr.st = s
+	c.NextFieldCommander(&s.cmdr, "")
+}
+
+// sidebarCmd is a SidebarState as a text field's commander (Steer).
+type sidebarCmd struct{ st *SidebarState }
+
+// FieldCommand queues the field's moves for the sidebar.
+func (s *sidebarCmd) FieldCommand(cmd ui.FieldCommand, _ rune) bool {
+	st := s.st
+	m := base.NavNone
+	switch cmd {
+	case ui.FieldMoveUp:
+		m = base.NavUp
+	case ui.FieldMoveDown:
+		m = base.NavDown
+	case ui.FieldPageUp:
+		m = base.NavPageUp
+	case ui.FieldPageDown:
+		m = base.NavPageDown
+	case ui.FieldInsertNewline:
+		if st.Sel == 0 {
+			return false
+		}
+		st.enter = true
+		return true
+	default:
+		return false
+	}
+	if st.npend < len(st.pend) {
+		st.pend[st.npend] = m
+		st.npend++
+	}
+	return true
+}
+
+// buildMenu builds the menu of the row menuID (SidebarOpts.Menu).
+func (s *SidebarState) buildMenu(items *[]ui.MenuItem) { s.menu(s.menuID, items) }
 
 // Reserve makes room for n selected rows, so that selecting does not allocate.
 func (s *SidebarState) Reserve(n int) {
@@ -319,6 +400,47 @@ type SidebarOpts struct {
 	// with A selects every row. SidebarState says which rows are selected;
 	// Sel is the one last chosen.
 	Multiple bool
+	// Row builds a row's content in place of the symbol and the title: in
+	// the row's box (pushed, its children flowing left to right, centred,
+	// after the indentation and the disclosure), over the selection the
+	// sidebar draws. Give a function made once (a method value kept in the
+	// app's state), so that a frame allocates nothing. Headers stay the
+	// sidebar's.
+	Row func(k *base.Kit, it *SidebarItem, row *SidebarRow)
+	// Menu builds the context menu of the row id (rexui.ContextMenu: a
+	// right-click, Shift+F10 or the accessibility action); the choice is
+	// SidebarSignal.MenuRow and MenuItem. Give a function made once.
+	Menu func(id uint32, items *[]ui.MenuItem)
+}
+
+// SidebarRow is a row a SidebarOpts.Row function builds: its box and state.
+type SidebarRow struct {
+	// ID and Key are the row's box.
+	ID  ui.ID
+	Key ui.Key
+	// Selected: the row is selected; Emphasised: the selection is the accent
+	// (the sidebar has the keyboard in the key window).
+	Selected, Emphasised bool
+	// Text and Text2 are the colours of its text and secondary text in its
+	// state (white on the accent).
+	Text, Text2 uint32
+	// Renaming: the row is being renamed (SidebarState.Rename): build
+	// RenameField where its title goes.
+	Renaming bool
+	// W and H are its size in pixels.
+	W, H float32
+
+	k    *base.Kit
+	st   *SidebarState
+	root ui.Key
+}
+
+// RenameField builds the inline rename field of a row being renamed, as wide
+// as what is left of the row (Grow), where the row's title goes.
+func (row *SidebarRow) RenameField() {
+	if row.Renaming {
+		sidebarRename(row.k, row.st, row.root, ui.Grow(1))
+	}
 }
 
 // SidebarSignal is what a sidebar reports for a frame.
@@ -329,6 +451,17 @@ type SidebarSignal struct {
 	Under bool
 	// Toggled is the row whose disclosure changed (0: none).
 	Toggled uint32
+	// Activated is the row Enter (from the sidebar, or a field that steers
+	// it) or a double click opened (0: none).
+	Activated uint32
+	// MenuRow and MenuItem are the row and the item chosen in a context menu
+	// (SidebarOpts.Menu), when MenuChosen.
+	MenuRow    uint32
+	MenuItem   int
+	MenuChosen bool
+	// Renamed is the row renamed in place (SidebarState.Rename) and confirmed
+	// with Enter (0: none); SidebarState.RenameText is its new name.
+	Renamed uint32
 }
 
 // SidebarRecipe is the sidebar's look. Lengths are in points.
@@ -491,10 +624,34 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	} else if len(st.picked) > 0 {
 		st.picked = st.picked[:0] // (from a time it had Multiple)
 	}
-	if focused {
-		changed, res.Toggled = sidebarKeys(c, st, items, o.Multiple)
-		keyed = changed
+	if o.Menu != nil {
+		st.menu = o.Menu
+		if st.menuFn == nil {
+			st.menuFn = st.buildMenu
+		}
 	}
+	st.visible(items)
+	page := 8
+	if rh := theme.Snap(sp.RowH); rh > 0 {
+		rr := c.Rect(root)
+		page = max(int((rr[3]-rr[1]-o.Top-theme.Snap(k.Pt(o.Pad)))/rh)-1, 1)
+	}
+	for i := range st.npend { // a field's moves (Steer)
+		if sidebarMove(st, items, st.pend[i], false, page) {
+			changed = true
+		}
+	}
+	st.npend = 0
+	if st.enter {
+		st.enter = false
+		res.Activated = st.Sel
+	}
+	if focused {
+		var ch bool
+		ch, res.Toggled, res.Activated = sidebarKeys(c, st, items, o.Multiple, page, res.Activated)
+		changed = changed || ch
+	}
+	keyed = changed
 
 	k.NextSize(ui.Pct(1), ui.Pct(1))
 	v := k.BeginScroll("rows", &st.Scroll, base.ScrollVertical)
@@ -540,7 +697,7 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 			}
 			continue
 		}
-		pressed, toggled, rh := sidebarRow(k, key, it, st.Has(it.ID), emph, rc, &o, room)
+		pressed, toggled, rh := sidebarRow(k, key, it, st, emph, rc, &o, room, &res)
 		switch {
 		case pressed && o.Multiple:
 			if st.press(items, it.ID, c.Input().Mods, ui.PrimaryMod()) {
@@ -567,6 +724,7 @@ func Sidebar(k *base.Kit, label string, st *SidebarState, items []SidebarItem, o
 	k.CloseScroll(&v)
 	c.Pop()
 	res.Signal = k.SignalOf(root)
+	res.Renamed, st.renamed = st.renamed, 0
 	res.Focused = focused
 	res.Changed = changed
 	return res
@@ -643,18 +801,25 @@ func SidebarSearch(k *base.Kit, label string, buf *ui.TextBuffer, placeholder st
 
 // sidebarRow builds one row; it reports a press on it and a click on its
 // disclosure.
-func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *SidebarRecipe, o *SidebarOpts, room float32) (pressed, toggled bool, h float32) {
+func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, st *SidebarState, emph bool, rc *SidebarRecipe, o *SidebarOpts, room float32, res *SidebarSignal) (pressed, toggled bool, h float32) {
 	c, r := k.Context(), k.Theme()
 	sp := &r.Window.Sidebar
+	sel := st.Has(it.ID)
 	rkey := ui.KeyN(key, 1<<32|uint64(it.ID))
 	ps := c.PeekSignal(rkey)
 	pressed = (ps.Pressed || ps.Action&ui.ActPress != 0) && !k.Disabled()
 	if pressed {
 		sel = true
 	}
+	if ps.DoubleClicked && !k.Disabled() && st.renaming != it.ID {
+		res.Activated = it.ID
+	}
 	h = theme.Snap(sp.RowH)
 	if o.RowH > 0 {
 		h = theme.Snap(k.Pt(o.RowH))
+	}
+	if it.Height > 0 {
+		h = theme.Snap(k.Pt(it.Height))
 	}
 	var state ui.SemState
 	if sel {
@@ -672,7 +837,13 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 		flags = ui.Disabled
 	}
 	row := c.BoxKeyed(flags, rkey, nil)
-	if rr := c.Rect(row); rr[3] > rr[1] && c.ShownRect(row) == [4]float32{} {
+	if o.Menu != nil {
+		st.menuID = it.ID
+		if item, ok := ContextMenu(k, row, st.menuFn); ok {
+			res.MenuRow, res.MenuItem, res.MenuChosen = it.ID, item, true
+		}
+	}
+	if rr := c.Rect(row); rr[3] > rr[1] && c.ShownRect(row) == [4]float32{} && st.renaming != it.ID {
 		return pressed, false, h
 	}
 	c.Push(row)
@@ -707,6 +878,25 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 		toggled = sidebarChevron(k, rkey, key, it.Open, theme.Snap(k.Pt(rc.DisclosureX)+indent), k.Pt(rc.DisclosureDY), h, col, false)
 	}
 	indent += room
+	if o.Row != nil {
+		cr := &st.row // (state's: a row passed to the app's function would escape)
+		*cr = SidebarRow{ID: row, Key: rkey, Selected: sel, Emphasised: sel && emph, Text: textCol, Text2: rc.Detail.RGBA(r),
+			Renaming: st.renaming == it.ID, W: w, H: h, k: k, st: st, root: key}
+		if sel && emph {
+			cr.Text2 = theme.WithAlpha(rc.OnSel.RGBA(r), rc.DetailOnSel)
+		}
+		// the content's box, after the indentation and the disclosure
+		x := theme.Snap(sp.IconX + indent)
+		theme.At(c, x, 0, max(w-x-theme.Snap(k.Pt(rc.TextEnd))+theme.Snap(k.Pt(rc.FieldInset)), 0), h)
+		c.NextAxis(ui.AxisX)
+		c.NextCross(ui.CrossCenter)
+		c.NextGap(k.Pt(rc.SymbolGap))
+		c.Push(c.BoxKeyed(ui.Clip|base.Floating, ui.KeyN(rkey, 6), nil))
+		o.Row(k, it, cr)
+		c.Pop()
+		c.Pop()
+		return pressed, toggled, h
+	}
 	textX := k.Pt(rc.PlainTextX+rc.FieldInset) + indent
 	if id, ok := it.Glyph.ID(); ok && it.Tile != 0 {
 		// a tile: the symbol white on a rounded square of the row's colour
@@ -745,27 +935,36 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, sel, emph bool, rc *Si
 	}
 	// the selected row's title is semibold, and so is every title of a
 	// two-line row (a list of notes, as AppKit's Notes draws it)
-	st := &r.Styles[theme.StyleBody]
+	ts := &r.Styles[theme.StyleBody]
 	if sel || it.Detail != "" {
-		st = &r.Styles[theme.StyleBodySemibold]
+		ts = &r.Styles[theme.StyleBodySemibold]
 	}
 	tw := max(w-theme.Snap(textX)-theme.Snap(k.Pt(rc.TextEnd)), 0)
-	ty := theme.Snap((h - st.Line) / 2)
+	ty := theme.Snap((h - ts.Line) / 2)
 	var dt *theme.StyleFont
 	if it.Detail != "" {
 		dt = &r.Styles[theme.StyleSubheadline]
 		ty = theme.Snap(k.Pt(rc.DetailTop))
 	}
-	theme.At(c, theme.Snap(textX), ty, tw, st.Line)
-	c.NextFont(st.Font)
-	c.NextTextColor(textCol)
-	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 2), base.StrBytes(it.Title))
+	if st.renaming == it.ID {
+		theme.At(c, theme.Snap(textX-k.Pt(rc.FieldInset)), 0, tw+k.Pt(rc.FieldInset), h)
+		c.NextAxis(ui.AxisX)
+		c.NextCross(ui.CrossCenter)
+		c.Push(c.BoxKeyed(base.Floating, ui.KeyN(rkey, 7), nil))
+		sidebarRename(k, st, key, ui.Pct(1))
+		c.Pop()
+	} else {
+		theme.At(c, theme.Snap(textX), ty, tw, ts.Line)
+		c.NextFont(ts.Font)
+		c.NextTextColor(textCol)
+		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 2), base.StrBytes(it.Title))
+	}
 	if dt != nil {
 		col := rc.Detail.RGBA(r)
 		if sel && emph {
 			col = theme.WithAlpha(rc.OnSel.RGBA(r), rc.DetailOnSel)
 		}
-		theme.At(c, theme.Snap(textX), ty+st.Line+theme.Snap(k.Pt(2)), tw, dt.Line)
+		theme.At(c, theme.Snap(textX), ty+ts.Line+theme.Snap(k.Pt(2)), tw, dt.Line)
 		c.NextFont(dt.Font)
 		c.NextTextColor(col)
 		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 4), base.StrBytes(it.Detail))
@@ -901,79 +1100,137 @@ func sidebarChevron(k *base.Kit, rkey, root ui.Key, open *bool, x, dy, h float32
 	return toggled
 }
 
-// sidebarKeys applies the arrow keys to the selection and the disclosures
-// of the visible rows, and with multi Shift+arrow extends the selection and
-// the primary modifier with A selects every row; it reports a changed
-// selection and a toggled row.
-func sidebarKeys(c *ui.Context, st *SidebarState, items []SidebarItem, multi bool) (changed bool, toggled uint32) {
-	// the visible, selectable rows in order
-	var vis [256]int16
-	n := 0
-	cur := -1
+// visible makes st.vis the indexes of the visible, selectable rows, in
+// order.
+func (st *SidebarState) visible(items []SidebarItem) {
+	st.vis = st.vis[:0]
 	w := sidebarWalk{hide: -1}
 	for i := range items {
-		it := &items[i]
-		if !w.row(it) {
-			continue
-		}
-		if n < len(vis) {
-			if it.ID == st.Sel {
-				cur = n
-			}
-			vis[n] = int16(i)
-			n++
+		if w.row(&items[i]) {
+			st.vis = append(st.vis, int32(i))
 		}
 	}
+}
+
+// cursor is Sel's place among the visible rows, -1 when it is not one.
+func (st *SidebarState) cursor(items []SidebarItem) int {
+	for j, i := range st.vis {
+		if items[i].ID == st.Sel {
+			return j
+		}
+	}
+	return -1
+}
+
+// sidebarMove applies move m to the selection over the visible rows (a page
+// is page rows), with extend the range from the anchor, and reports whether
+// it changed.
+func sidebarMove(st *SidebarState, items []SidebarItem, m base.NavMove, extend bool, page int) bool {
+	n := len(st.vis)
+	if n == 0 || m == base.NavNone {
+		return false
+	}
+	cur := st.cursor(items)
+	to := base.NavStep(cur, n, nil, m, page, false)
+	if to < 0 || to == cur && !(extend && st.Count() > 1) {
+		return false
+	}
+	id := items[st.vis[to]].ID
+	if extend {
+		st.selectRange(items, st.anchorRow(), id)
+	} else {
+		st.Select(id)
+	}
+	return true
+}
+
+// sidebarKeys applies the keys of the focused sidebar: Up, Down, Page Up,
+// Page Down, Home and End move the selection (base.NavStep, as every list's
+// keys), with multi Shift extends it and the primary modifier with A selects
+// every row; Right and Left open and close a row's children (Left on a child
+// goes to its parent); Enter activates the selected row; typing finds a row
+// by its title, ignoring case and accents. It reports a changed selection, a
+// toggled row and the activated one (act, unless Enter went down).
+func sidebarKeys(c *ui.Context, st *SidebarState, items []SidebarItem, multi bool, page int, act uint32) (changed bool, toggled, activated uint32) {
+	activated = act
+	n := len(st.vis)
 	if n == 0 {
-		return false, 0
+		return false, 0, activated
 	}
 	if multi && c.TakeKey('A', ui.PrimaryMod()) {
 		st.SelectAll(items)
-		return true, 0
+		return true, 0, activated
 	}
-	to, extend := -1, false
+	if m, extend := base.TakeNavKey(c, multi); m != base.NavNone {
+		return sidebarMove(st, items, m, extend, page), 0, activated
+	}
+	cur := st.cursor(items)
 	switch {
-	case c.TakeKey(ui.KeyDown, 0):
-		to = min(cur+1, n-1)
-		if cur < 0 {
-			to = 0
-		}
-	case c.TakeKey(ui.KeyUp, 0):
-		to = max(cur-1, 0)
-	case multi && c.TakeKey(ui.KeyDown, ui.ModShift):
-		to, extend = min(cur+1, n-1), true
-		if cur < 0 {
-			to = 0
-		}
-	case multi && c.TakeKey(ui.KeyUp, ui.ModShift):
-		to, extend = max(cur-1, 0), true
+	case cur >= 0 && c.TakeKey(ui.KeyEnter, 0):
+		activated = st.Sel
 	case cur >= 0 && c.TakeKey(ui.KeyRight, 0):
-		if it := &items[vis[cur]]; it.Open != nil && !*it.Open {
+		if it := &items[st.vis[cur]]; it.Open != nil && !*it.Open {
 			*it.Open, toggled = true, it.ID
 		}
 	case cur >= 0 && c.TakeKey(ui.KeyLeft, 0):
-		it := &items[vis[cur]]
+		it := &items[st.vis[cur]]
 		if it.Open != nil && *it.Open {
 			*it.Open, toggled = false, it.ID
 		} else if it.Level > 0 { // to the parent
 			for j := cur - 1; j >= 0; j-- {
-				if items[vis[j]].Level < it.Level {
-					to = j
-					break
+				if items[st.vis[j]].Level < it.Level {
+					st.Select(items[st.vis[j]].ID)
+					return true, toggled, activated
 				}
 			}
 		}
 	}
-	if to >= 0 && (to != cur || extend && st.Count() > 1) {
-		id := items[vis[to]].ID
-		if extend {
-			st.selectRange(items, st.anchorRow(), id)
-		} else {
-			st.Select(id)
+	if q := st.find.Feed(c.Input()); q != nil {
+		start := max(cur, 0)
+		if len(q) == 1 || cur < 0 {
+			start = cur + 1
 		}
-		return true, toggled
+		for i := range n {
+			j := (start + i) % n
+			if it := &items[st.vis[j]]; base.FoldHasPrefix(it.Title, base.BytesStr(q)) {
+				if it.ID != st.Sel {
+					st.Select(it.ID)
+					return true, toggled, activated
+				}
+				break
+			}
+		}
 	}
-	return false, toggled
+	return false, toggled, activated
+}
+
+// sidebarRename builds the inline rename field, w wide, and ends the
+// rename: Enter confirms it
+// (SidebarSignal.Renamed), Escape or the focus leaving cancels it.
+func sidebarRename(k *base.Kit, st *SidebarState, root ui.Key, w ui.Size) {
+	c := k.Context()
+	k.NextWidth(w)
+	sig := TextField(k, str.Rename+"###rename", &st.rename, "", FieldOpts{Size: theme.SizeSmall})
+	if st.renameAt == 0 {
+		st.renameAt = 1
+		c.SetFocus(sig.Key)
+		c.SetFocusVisible(false)
+	}
+	switch {
+	case sig.Submitted:
+		st.renamed = st.renaming
+		st.renaming = 0
+	case sig.Focused:
+		st.renameAt = 2
+		if c.TakeKey(ui.KeyEscape, 0) {
+			st.renaming = 0
+		}
+	case st.renameAt == 2: // the focus left it
+		st.renaming = 0
+	}
+	if st.renaming == 0 {
+		c.SetFocus(root) // back to the sidebar's keys
+	}
 }
 
 // sidebarThumb builds the scroll bar of the sidebar's view: an overlay

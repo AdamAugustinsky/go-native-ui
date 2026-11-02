@@ -66,6 +66,9 @@ type ListOpts struct {
 	// Striped alternates the rows' background, and the room below the last
 	// row, as usesAlternatingRowBackgroundColors does.
 	Striped bool
+	// Hover fills the row under the pointer with ListRecipe.Hover (the
+	// theme's RowHover). AppKit's tables have none: off by default.
+	Hover bool
 }
 
 // ListRecipe is the look of the rows of lists, tables and outlines (macOS
@@ -97,6 +100,8 @@ type ListRecipe struct {
 	DividerInset float32
 	// Stripe fills the odd rows of a striped list.
 	Stripe Tint
+	// Hover fills the row under the pointer of a list with ListOpts.Hover.
+	Hover Tint
 	// Label colours a row's text, Label2 its secondary text (a date, a
 	// size), LabelDisabled both in a disabled list, and OnSelection text
 	// and glyphs on an emphasised selection; OnSelection2 is the secondary
@@ -128,8 +133,8 @@ var ListLook = ListRecipe{
 	Background: Of(theme.ControlBackground),
 	Selection:  Of(theme.Selection), SelectionUnemph: Of(theme.SelectionUnemph),
 	Divider: Of(theme.SelectionDivider), DividerUnemph: OfAlpha(theme.Text, 0.05, 0.05), DividerInset: 6,
-	Stripe: Of(theme.AltRow),
-	Label:  Of(theme.Label), Label2: Of(theme.Label2), LabelDisabled: Of(theme.TextDisabled), OnSelection: Of(theme.OnSelection),
+	Stripe: Of(theme.AltRow), Hover: Of(theme.RowHover),
+	Label: Of(theme.Label), Label2: Of(theme.Label2), LabelDisabled: Of(theme.TextDisabled), OnSelection: Of(theme.OnSelection),
 	OnSelection2: OfAlpha(theme.OnSelection, 0.7, 0.7),
 	Inset:        [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
 	PadY:         [NumListStyles]float32{ListFullWidth: 0, ListInset: 10},
@@ -167,7 +172,11 @@ func listOpts(k *base.Kit, o ListOpts, header bool) base.ListOpts {
 		pad = rc.HeaderPadY[s]
 	}
 	c.NextBG(rc.Background.RGBA(r))
-	return base.ListOpts{Pad: [2]float32{rc.Inset[s], pad}, OwnPad: true, Flags: ui.DrawBackground}
+	var hover base.Hover
+	if o.Hover {
+		hover = base.HoverOn
+	}
+	return base.ListOpts{Pad: [2]float32{rc.Inset[s], pad}, OwnPad: true, Flags: ui.DrawBackground, Hover: hover}
 }
 
 // BeginList starts a list of rows rows of the theme's row height (24 pt;
@@ -211,6 +220,11 @@ func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name
 		bg = rc.Selection.RGBA(r)
 	case rs.Selected:
 		bg = rc.SelectionUnemph.RGBA(r)
+	case rs.Hover:
+		bg = rc.Hover.RGBA(r)
+		if lk.striped && rs.Row&1 == 1 {
+			bg = theme.Over(bg, rc.Stripe.RGBA(r)|0xFF)
+		}
 	case lk.striped && rs.Row&1 == 1:
 		bg = rc.Stripe.RGBA(r)
 	}

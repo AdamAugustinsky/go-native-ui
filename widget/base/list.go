@@ -37,9 +37,7 @@ type ListState struct {
 	rowPx, padPx float32 // the row pitch and the padding above the first row, in the last frame
 	goRow        int
 	goPending    bool
-	find         [findMax]byte
-	nFind        int
-	findT        int64
+	find         TypeAhead
 
 	mv      moveReq // a cursor move the app asked for
 	revRow  int
@@ -500,31 +498,11 @@ func (l *List) input(ps ui.Signal, rect [4]float32) {
 	page := max(int(view/l.rowH)-1, 1)
 	cur := l.cursorRow()
 	was := l.Changed
-	switch {
-	case c.TakeKey(ui.KeyDown, 0):
-		l.moveTo(cur+1, false)
-	case c.TakeKey(ui.KeyDown, ui.ModShift):
-		l.moveTo(max(cur, 0)+1, true)
-	case c.TakeKey(ui.KeyUp, 0):
-		l.moveTo(max(cur, 1)-1, false)
-	case c.TakeKey(ui.KeyUp, ui.ModShift):
-		l.moveTo(max(cur, 1)-1, true)
-	case c.TakeKey(ui.KeyPageDown, 0):
-		l.moveTo(max(cur, 0)+page, false)
-	case c.TakeKey(ui.KeyPageDown, ui.ModShift):
-		l.moveTo(max(cur, 0)+page, true)
-	case c.TakeKey(ui.KeyPageUp, 0):
-		l.moveTo(max(cur, page)-page, false)
-	case c.TakeKey(ui.KeyPageUp, ui.ModShift):
-		l.moveTo(max(cur, page)-page, true)
-	case c.TakeKey(ui.KeyHome, 0):
-		l.moveTo(0, false)
-	case c.TakeKey(ui.KeyHome, ui.ModShift):
-		l.moveTo(0, true)
-	case c.TakeKey(ui.KeyEnd, 0):
-		l.moveTo(l.Rows-1, false)
-	case c.TakeKey(ui.KeyEnd, ui.ModShift):
-		l.moveTo(l.Rows-1, true)
+	switch m, extend := TakeNavKey(c, true); {
+	case m != NavNone && extend: // a range grows from the first row when there is no cursor
+		l.moveTo(NavStep(max(cur, 0), l.Rows, nil, m, page, false), true)
+	case m != NavNone:
+		l.moveTo(NavStep(cur, l.Rows, nil, m, page, false), false)
 	case c.TakeKey('A', prim):
 		l.selectAllRows()
 		l.Changed = true
@@ -555,20 +533,7 @@ func (l *List) selectAllRows() {
 
 // typeToFind collects the characters typed into the focused list.
 func (l *List) typeToFind(in *ui.Input) {
-	st := l.st
-	if in.NText == 0 || in.Mods&(ui.PrimaryMod()|ui.ModAlt) != 0 {
-		return
-	}
-	if in.Time-st.findT > findResetNs {
-		st.nFind = 0
-	}
-	if st.nFind == 0 && in.Text[0] == ' ' {
-		return // a space starts nothing: it activates
-	}
-	n := copy(st.find[st.nFind:], in.Text[:in.NText])
-	st.nFind += n
-	st.findT = in.Time
-	l.Find = st.find[:st.nFind]
+	l.Find = l.st.find.Feed(in) // a space starts nothing: it activates
 }
 
 // RowState is the state of a row about to be built, as a recipe draws it.

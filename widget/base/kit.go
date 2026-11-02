@@ -381,6 +381,10 @@ func (k *Kit) TextWidthBytes(f text.FontKey, b []byte) float32 {
 // StrBytes views s as bytes without copying; the bytes must not be changed.
 func StrBytes(s string) []byte { return unsafe.Slice(unsafe.StringData(s), len(s)) }
 
+// BytesStr is b as a string without a copy: b must not change while the
+// string is in use.
+func BytesStr(b []byte) string { return unsafe.String(unsafe.SliceData(b), len(b)) }
+
 // Visible reports whether the rectangle r (x0, y0, x1, y1, window pixels)
 // shows in the window.
 func (k *Kit) Visible(r [4]float32) bool {

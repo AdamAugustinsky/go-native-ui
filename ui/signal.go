@@ -467,6 +467,14 @@ func (c *Context) SetObscured(id ID, top, bottom float32) {
 	c.boxes[id].obscured = [2]float32{max(top, 0), max(bottom, 0)}
 }
 
+// Obscured is what SetObscured said covers the view of scroll box id, at its
+// top and its bottom, in pixels: a list's Page Up and Page Down count the
+// view without it.
+func (c *Context) Obscured(id ID) (top, bottom float32) {
+	o := c.boxes[id].obscured
+	return o[0], o[1]
+}
+
 // StopWheel makes box id, this frame, keep the wheel and the trackpad's
 // scrolling from the scroll boxes beneath it (drawn before it): over it they
 // scroll only a scroll box inside it. A toolbar's band over content that runs

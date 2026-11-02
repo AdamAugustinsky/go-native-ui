@@ -258,6 +258,28 @@ const (
 	// strength): the label's black or white here, #2A2030 / white in Rex.
 	PaneButtonChip
 
+	// The rows of the lists an app builds (rexui.BeginNavList, the palette,
+	// a sidebar's own rows): one set of states, so that every list hovers,
+	// presses and selects alike.
+
+	// RowHover is a row's fill under the pointer, faded in at the theme's
+	// hover rate (Motion.Hot): the label's colour at 5 %.
+	RowHover
+	// RowPressed is a row's fill while it is held: the label's colour at 9 %.
+	RowPressed
+	// RowSelected is the selected row's fill in the key window: the accent at
+	// 14 % in light and 24 % in dark (Rex's quiet tint, under the label's
+	// colour). It follows an accent the app or the system sets, unless the
+	// theme owns it (Theme.Own[RowSelected]: a fill of its own).
+	RowSelected
+	// RowSelectedInactive is the selected row's fill in a window that is not
+	// the key window: the label's colour at 6 %.
+	RowSelectedInactive
+	// RowSelectedRing is a hairline ring round the selected row (0 alpha:
+	// none, the default); a theme whose selection is a lighter card on its
+	// pane (T3 Code's white row) sets it.
+	RowSelectedRing
+
 	// NumRoles is the number of roles.
 	NumRoles
 )
@@ -379,6 +401,7 @@ var roleNames = [NumRoles]string{
 	"ScrollEdgeBar", "ScrollEdgeBarInactive", "ScrollEdgeLine", "AccessoryLine", "GroupBox",
 	"ControlText", "Knob", "FieldOutline", "ToolbarSymbolInactive", "SelectedRowTextInactive", "SidebarDetail", "SidebarSearchFill", "SidebarSearchFillInactive",
 	"PaneButton", "PaneButtonHover", "PaneButtonChip",
+	"RowHover", "RowPressed", "RowSelected", "RowSelectedInactive", "RowSelectedRing",
 }
 
 // Colors holds a colour per role, 0xRRGGBBAA, indexed by Role.
@@ -430,6 +453,7 @@ var Measured = [2]Colors{
 		ToolbarSymbolInactive: 0xA6A6A6FF, SelectedRowTextInactive: 0x676767FF, SidebarDetail: 0x0000006E,
 		SidebarSearchFill: 0xEAEAEAFF, SidebarSearchFillInactive: 0xE5E5E5FF,
 		PaneButton: 0x0000007F, PaneButtonHover: 0x000000D8, PaneButtonChip: 0x000000FF,
+		RowHover: 0x0000000D, RowPressed: 0x00000017, RowSelected: 0x007AFF24, RowSelectedInactive: 0x0000000F,
 	},
 	{
 		Window: 0x1E1E1EFF, UnderPage: 0x282828FF, ControlBackground: 0x1E1E1EFF, TextBackground: 0x1E1E1EFF,
@@ -457,12 +481,18 @@ var Measured = [2]Colors{
 		ToolbarSymbolInactive: 0x666666FF, SelectedRowTextInactive: 0x999999FF, SidebarDetail: 0xFFFFFF5C,
 		SidebarSearchFill: 0x4E4E4EFF, SidebarSearchFillInactive: 0x464646FF,
 		PaneButton: 0xFFFFFF8C, PaneButtonHover: 0xFFFFFFD8, PaneButtonChip: 0xFFFFFFFF,
+		RowHover: 0xFFFFFF0D, RowPressed: 0xFFFFFF17, RowSelected: 0x007AFF3D, RowSelectedInactive: 0xFFFFFF0F,
 	},
 }
 
 // defaultAccent is the accent the measured window-chrome colours were taken
 // with (the blue, AppleAccentColor 4).
 const defaultAccent = 0x007AFFFF
+
+// rowSelectedAlpha is the accent's share in RowSelected, light and dark: an
+// accent of the app's or the system's moves it (Theme.SetAccent), unless the
+// theme owns it (Theme.Own).
+var rowSelectedAlpha = [2]float32{0.14, 0.24}
 
 // derive sets the roles that follow others in mode m (0 light, 1 dark):
 // AccentPressed and SidebarSel from Accent, SelectionDivider from Selection.

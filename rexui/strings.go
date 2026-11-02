@@ -80,6 +80,11 @@ type Strings struct {
 	// Format are package format's words (times ago, numbers, schedules,
 	// dates), set with these (format.SetLocale).
 	Format format.Locale
+
+	// Results names a palette's list, NoResults what it shows when nothing
+	// matches, and Navigate its footer's hint for the arrows (Open and Close
+	// name the others; Rename a row's inline rename field).
+	Results, NoResults, Navigate string
 }
 
 // StringsEnglish are the default Strings.
@@ -139,6 +144,9 @@ var StringsEnglish = Strings{
 	Copied:         "Copied",
 	Shortcuts:      "Keyboard Shortcuts",
 	Format:         format.English,
+	Results:        "Results",
+	NoResults:      "No Results",
+	Navigate:       "Navigate",
 }
 
 // StringsPtBR are the Strings in Brazilian Portuguese, in macOS's words.
@@ -213,6 +221,9 @@ var StringsPtBR = Strings{
 	Copied:         "Copiado",
 	Shortcuts:      "Atalhos de teclado",
 	Format:         format.PtBR,
+	Results:        "Resultados",
+	NoResults:      "Nenhum resultado",
+	Navigate:       "Navegar",
 }
 
 var (

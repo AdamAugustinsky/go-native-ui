@@ -122,6 +122,10 @@ const (
 	CompletionEnter
 	// CompletionEscape cancels.
 	CompletionEscape
+	// CompletionPageUp and CompletionPageDown move the highlight a page (the
+	// rows the list shows), stopping at the ends.
+	CompletionPageUp
+	CompletionPageDown
 )
 
 // CompletionResult is what a command did.
@@ -183,24 +187,33 @@ func (s *CompletionState) init(n int) {
 
 // Command applies the host's command to the list of n items and says what it
 // did. Up and Down move the highlight (wrapping, and from none to the last
-// or the first row), Tab and Enter accept a highlighted row, Escape cancels.
+// or the first row), Page Up and Page Down a page (base.NavStep, as every
+// list's keys), Tab and Enter accept a highlighted row, Escape cancels.
 func (s *CompletionState) Command(cmd CompletionCmd, n int) CompletionResult {
 	s.init(n)
+	m := base.NavNone
 	switch cmd {
 	case CompletionUp:
-		if n > 0 {
-			if s.Sel <= 0 { // from none, or from the first row, to the last
-				s.Sel = n - 1
-			} else {
-				s.Sel--
-			}
-			return ResultMoved
-		}
+		m = base.NavUp
 	case CompletionDown:
-		if n > 0 {
-			s.Sel = (s.Sel + 1) % n
-			return ResultMoved
+		m = base.NavDown
+	case CompletionPageUp:
+		m = base.NavPageUp
+	case CompletionPageDown:
+		m = base.NavPageDown
+	}
+	if m != base.NavNone {
+		if n == 0 {
+			return ResultNone
 		}
+		page := s.rows
+		if page <= 0 {
+			page = 8
+		}
+		s.Sel = base.NavStep(s.Sel, n, nil, m, page, m == base.NavUp || m == base.NavDown)
+		return ResultMoved
+	}
+	switch cmd {
 	case CompletionTab, CompletionEnter:
 		if s.Sel >= 0 && s.Sel < n {
 			return ResultAccept
@@ -449,6 +462,10 @@ func (s *completionCmd) FieldCommand(cmd ui.FieldCommand, _ rune) bool {
 		c = CompletionUp
 	case ui.FieldMoveDown:
 		c = CompletionDown
+	case ui.FieldPageUp:
+		c = CompletionPageUp
+	case ui.FieldPageDown:
+		c = CompletionPageDown
 	case ui.FieldInsertTab:
 		c = CompletionTab
 	case ui.FieldInsertNewline:
