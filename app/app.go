@@ -151,6 +151,7 @@ type App struct {
 	p    pacer
 	list gpu.DrawList
 	fr   gpu.Frame
+	dmg  damage // partial frames (damage_darwin.go)
 
 	w, h   int     // surface size in pixels
 	scale  float32 // pixels per point (the backing scale; zoom.go has the zoom)
@@ -512,6 +513,9 @@ func (a *App) closeWin() {
 	a.forget() // out of the app's windows (window.go)
 	r := retiredWin{a.Win, a.Surf, a.ownTex}
 	a.ownTex = nil
+	if a.R != nil {
+		a.releaseDamage()
+	}
 	a.R, a.Surf, a.Win, a.Text = nil, nil, nil, nil
 	a.buttons = nil
 	s := a.appObject

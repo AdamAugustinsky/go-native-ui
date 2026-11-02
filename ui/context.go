@@ -87,6 +87,7 @@ type boxAttrs struct {
 	dupN      uint32
 	alignNext bool       // the alignment came from NextAlign (Audit)
 	auditOff  AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
+	cover     bool       // its subtree paints its rect opaque first (NextCover)
 	fadeEnd   float32    // its children fade out over its last fadeEnd pixels (NextFadeEnd)
 	obscured  [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
 	stopWheel bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
@@ -232,6 +233,8 @@ type Context struct {
 	nextSelf   Cross // 1 + the Cross; 0 none
 	nextFlags  Flags
 	nextAudit  AuditMask  // the exemptions of the next box (NextAuditExempt)
+	nextCover  bool       // the next box is a cover (NextCover)
+	cullBuf    []gpu.Quad // CullCovered's scratch, between frames
 	nextFade   float32    // the next box's children's fade at its end (NextFadeEnd)
 	emitFade   [2]float32 // while emitting: the fade of the boxes round this one (NextFadeEnd)
 	bd         backdrops  // this frame's backdrops and the next box's (NextBackdrop)
@@ -853,6 +856,7 @@ func (c *Context) resetStyles() {
 	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
 	c.nextFlags = 0
 	c.nextAudit = 0
+	c.nextCover = false
 	c.nextFade = 0
 	c.bd.n, c.bd.hasNext = 0, false
 	c.nextEscClr = false
@@ -1027,6 +1031,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		c.nDragBoxes++
 	}
 	b.auditOff, c.nextAudit = c.nextAudit, 0
+	b.cover, c.nextCover = c.nextCover, false
 	b.fadeEnd, c.nextFade = c.nextFade, 0
 	c.takeBackdrop(b)
 	if c.hasNextPos {

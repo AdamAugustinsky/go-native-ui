@@ -210,6 +210,7 @@ func (c *Context) End(list *gpu.DrawList) {
 	} else {
 		c.overflowRun = 0
 	}
+	gpu.CullCovered(list, &c.cullBuf)
 	c.keepRich()
 	c.syncAtlas()
 	c.mesh.reset()
@@ -250,8 +251,35 @@ func (c *Context) dropStaleGlyphs(l *gpu.DrawList) {
 		w++
 	}
 	l.Quads = q[:w]
+	l.Covers = l.Covers[:0] // their quad indices moved: this frame hides nothing
 	c.glyphQuads = c.glyphQuads[:0]
 	c.droppedGlyphs = true
+}
+
+// NextCover declares that the next box's subtree paints the box's rect
+// opaque, every pixel inside its corners, before anything that reads what
+// is under it (a backdrop): an opaque pane's fill. What was drawn before the
+// box is then not shaded where it lies (gpu.CullCovered), and the frame's
+// pixels stay as they were. Ignored for a box drawn at an opacity under 1 or
+// in a fade.
+func (c *Context) NextCover() { c.nextCover = true }
+
+// addCover adds the part of rect r, inside clip, that a cover box's opaque
+// fill paints whole: less its corners' reach (the continuous corner's, as
+// the shaders draw it) and a pixel of edge, on whole pixels.
+func (c *Context) addCover(l *gpu.DrawList, r, clip [4]float32, radii [4]float32) {
+	in := float64(1)
+	if rad := max(radii[0], radii[1], radii[2], radii[3], 0); rad > 0 {
+		in = math.Ceil(float64(rad)*1.52) + 1
+	}
+	k := intersect([4]float32{r[0] + float32(in), r[1] + float32(in), r[2] - float32(in), r[3] - float32(in)},
+		[4]float32{clip[0] + 1, clip[1] + 1, clip[2] - 1, clip[3] - 1})
+	k = [4]float32{float32(math.Ceil(float64(k[0]))), float32(math.Ceil(float64(k[1]))),
+		float32(math.Floor(float64(k[2]))), float32(math.Floor(float64(k[3])))}
+	if empty(k) {
+		return
+	}
+	l.Covers = append(l.Covers, gpu.Cover{Rect: k, At: len(l.Quads)})
 }
 
 func intersect(a, b [4]float32) [4]float32 {
@@ -310,6 +338,9 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 	r := b.rect
 	sized := r[2] > r[0] && r[3] > r[1]
 	visible := intersect(r, clip)
+	if b.cover && sized && b.opacity >= 1 && c.emitFade == [2]float32{} {
+		c.addCover(l, r, clip, b.radii)
+	}
 
 	if b.flags&DrawShadow != 0 {
 		// Only the background's fully opaque interior hides the shadow.

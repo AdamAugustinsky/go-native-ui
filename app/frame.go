@@ -186,12 +186,15 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	if a.dbg != nil {
 		a.debugOwed(why)
 	}
-	a.R.Encode(a.fr.CmdBuf, a.fr.Target, a.fr.W, a.fr.H, a.cfg.Clear, &a.list)
+	present := a.encodeFrame() // only what changed, on macOS (D92)
 	if a.dbg != nil {
 		a.dbg.mark(PhaseEncode)
 	}
-	a.Surf.EndFrame(&a.fr) // applies the shell changes syncShell staged, in the present's transaction
-	a.Win.FlushShell()     // (nothing is left; a safety net), inside the frame's pool
+	if present {
+		a.Surf.EndFrame(&a.fr) // applies the shell changes syncShell staged, in the present's transaction
+	}
+	a.checkDamage()
+	a.Win.FlushShell() // (nothing is left; a safety net), inside the frame's pool
 	framePoolPop(pool)
 	a.inFrame = false
 	a.framing--

@@ -1353,6 +1353,76 @@ Not converted, and why: real OS I/O (watchers, mtimes, files, sockets, the nativ
 
 **Quarantine:** every quarantined test was read for a timing flake of ours. None is one (docs/QUARANTINE.md, "Checked on synctest-fuzz").
 
+## D92. Damage from consecutive draw lists: the first step toward partial presents (2026-10-31)
+
+**Decision.** `gpu.DamageTracker` finds the part of a target that changed since the previous frame drawn into it, from the two draw lists, with no change to `ui` or to rendering yet. A frame's pixels are a function of its list, the texels its quads sample, its clear colour, its size and the renderer's epoch: `ui` bakes tint, opacity, clips, fades, shadows and meshes into the quads (`box.col`, `emit`). So a pixel whose ordered sequence of covering quads is unchanged keeps its colour.
+
+- **Matching:** a common subsequence of the two lists (common prefix and suffix, then quads unique in both middles kept in order by a longest increasing subsequence, then equal neighbours of each). A backdrop is matched by its recipe, not its index.
+- **Damage:** the union of the unmatched quads' bounds, old and new. The bounds are the vertex stage's geometry (pad, clip ± 0.5, fade end) rounded out. Matched textured quads whose UV rect, plus a texel for filtering, meets a `TextureWrite` since the last frame are damaged too.
+- **Backdrops:** a backdrop reads its whole region however little is redrawn around it. So damage that reaches where a backdrop draws or reads takes all of both, as one rectangle with whatever crosses it, until no rectangle crosses one it does not hold whole.
+- **Fallbacks:** the damage is merged to `MaxDamageRects` (8) rectangles, least area added first. Over 70% of the target, or on a first frame or a change of size, clear colour or epoch, it is `Full`.
+
+**Why now.** Measured on an M1 MacBook Air at 60 Hz (Zap, a 3360×2040 px window): a frame costs about 2 ms of CPU but shades 3–7× the window (translucent panes, two shadows each, a full-window field or scrim, text). An isolated frame costs about 18 ms of GPU while WindowServer shares the GPU, back-to-back frames queue, and input reaches the screen in a median of 89 ms. A keystroke or a caret blink changes a few hundred pixels.
+
+**Probe for the next step** (a scratch scissor and LoadAction hook on `Renderer.Encode`; a real Zap frame of 542 quads into a private 3360×2040 BGRA8 target; GPUStartTime..GPUEndTime, 30 runs):
+
+| Case | GPU |
+|---|---|
+| Full frame | 6.1–10.8 ms (min) |
+| A 1700×140 composer region under scissor, LoadAction Load | 0.29 ms |
+| A 6×44 caret | 0.03 ms (no per-tile floor) |
+| Blit of the whole target to another texture | 0.36 ms |
+
+So a partial frame drawn into a retained back buffer and copied to the drawable should cost about 0.8 ms for a keystroke.
+
+**Checked.**
+- **Brute force:** on a 64×48 target, each pixel's ordered sequence of covering quads, with a backdrop's output depending on all of its region and written texels counting as changed, must be equal outside the damage. It is checked over 12,000 random frames of random edits (insertions, removals, moves, recolours, nudges, duplicates, recipe changes and texture writes), and so must the backdrop rule.
+- **Fuzzing:** `FuzzDamage` runs the same check; 330k executions in 90 s found nothing, and it joins CI's fuzz job.
+- **Bounds:** `quadBounds` is tested case by case against `vs_main`.
+- **Cost:** 10,000 quads with one change diff in about 0.17 ms, with no allocations once the buffers have grown.
+
+**Partial frames on Metal.** `Renderer.EncodeDamaged` draws a frame into a retained back buffer (`NewBackBuffer`: private BGRA8, render target and shader read) and copies it to the drawable. A `Full` damage is the old whole-frame `Encode`. Otherwise:
+- **Clear:** each rectangle is set to the clear colour by blits from a 256×256 tile cleared by a LoadAction Clear pass, so its bytes are exactly a cleared target's.
+- **Draw:** the list is encoded once per rectangle with LoadAction Load and the rectangle as scissor. Every pass binds the same texture slots, since the GPU reads the one instance copy after encoding: a backdrop outside the scissor still splits the pass.
+- **Texture writes:** `NewTexture`, `NewYUVTexture`, `FreeTexture`, `Upload`, `Stage`, `StageYUV` (a call's video frames) and new pixel-buffer imports note what they wrote in a fixed log of 1024 entries. `TextureWrites(since)` returns those since a serial, or `complete == false` when the log has dropped some, and the caller then resets its tracker. The Linux and Windows backends report `false` always, so they keep drawing whole frames.
+- **Checked:** `TestEveryTextureWriteIsLogged` calls each of them and finds it in the log. `TestPartialFramesMatchWholeFrames` draws each frame both ways on the GPU (300 random lists of 6 frames, 4 clear colours including a translucent one, real textures and staged writes between frames) and compares every byte; runs of 1,500 and 2,200 lists also matched. `TestPartialFramesOfAWindow` does the same on a 1280×800 window with a pane, its shadow, 400 glyphs and a backdrop band: a caret, a glyph, a quad under the band and an unchanged frame.
+
+**In the frame loop (macOS).** `drawFrame` encodes through `App.encodeFrame` (`app/damage_darwin.go`). Each window keeps a tracker and a back buffer of its own, made at the drawable's size, and the renderer's texture-write serial.
+- **A new back buffer** comes with a new size or a new renderer epoch (a lost device), and its first frame is whole. The window's close releases it.
+- **Whole frames straight to the drawable:** in a live resize (one frame at each size; a back buffer per step would cost a whole frame and a copy for nothing), for a drawable of another size than the surface's (taken just before a resize; the copy needs equal sizes), and with `GNUI_DAMAGE=0`.
+- **No present:** a frame with no damage ends with `Surface.SkipFrame`, which releases the drawable and the command buffer unpresented, so the layer keeps the previous frame. Not the first frame, a live resize's, one that moves the native shell's views or one whose present is traced.
+- **Debug:** `GNUI_DAMAGE_CHECK=1` compares each partial frame's back buffer, once drawn, with the frame drawn whole (`Renderer.CheckBackBuffer`). A difference goes to stderr and heals, since the next frame is drawn whole.
+- **Cost:** a back buffer is 4 bytes a pixel per window (27 MB at 3360×2040) for as long as the window is open; an idle trim gives back drawables, not it.
+- **Checked:** `TestPartialFramesInAWindow` runs a real window of widgets through the loop with the check on: 211 frames, 210 partial, 36 not presented, none different. The check itself was tested by halving a damage rectangle, which it reported from the sixth frame on. `TestIdleWindowGivesBackDrawables` now expects the last presented frame's drawable on screen, not the last one built.
+
+**Not done:** the Linux and Windows backends (whole frames there, as before); dropping the back buffer of a window hidden for long.
+
+## D93. Opaque covers: what a pane's opaque fill hides is not shaded (2026-10-31)
+
+**Decision.** A box can declare that its subtree paints its rect opaque before anything reads what is under it (`ui.Context.NextCover`). `End` records each cover in the draw list (`gpu.Cover`: the rect less its corners' reach and a pixel of edge, on whole pixels, and the index its quads begin at), then `gpu.CullCovered` rewrites the list:
+- **Dropped:** a quad drawn before a cover whose geometry (as `vs_main` builds it: fringe, shadow tail, clip, fade end) lies wholly under covers.
+- **Cut:** a quad partly under them becomes the same quad clipped to the pieces outside them (at most 8, else it stays whole). An integer clip edge has a coverage of exactly 0 or 1, so every pixel that shows is computed as before.
+- **Backdrops:** a cover whose quads begin after a backdrop hides nothing drawn before that backdrop, which reads it.
+- **Rex:** a pane declares a cover when its fill is opaque: focused, or the mesh over the field (no backdrop). Not when it is tiny, drawn at an opacity under 1 or in a fade (ui checks the last two).
+
+**Why.** The occlusion prototype (2026-10-30) inferred covers from single opaque quads and cut each hidden quad once. A pane's fill is a mesh of many cells, so the field, a window-wide tint and the pane shadows under it were cut around one cell at most, and the prototype saved little. A pane knows it is opaque; one cover per pane hides all of that.
+
+**Measured** (Zap's demo with Transparency off, a 3360×2040 px window, M1 MacBook Air):
+
+| | Before | With covers |
+|---|---|---|
+| Area shaded, chat (2 panes) | 4.24 windows | 1.67 windows |
+| Area shaded, split (3 panes) | 4.32 windows | 2.15 windows |
+| Soft shadow shading, chat | 1.86 windows | 0.15 windows |
+| Whole frame on the GPU, median (2 alternating runs, GPU shared) | 44–80 ms | 9–14 ms |
+
+**Checked.**
+- **GPU equality:** `TestCoveredQuadsCutMatchTheWholeList` renders random lists (shapes with radii, borders, shadows, capsules, textured quads, whole and fractional clips, fades, backdrops, quads hugging a cover's edges; covers over solid and rounded panes) before and after the cut, and every byte must match: 1,500 lists by default, 16,500 in longer runs (`GNUI_COVER_LISTS`). Shrinking the bounds by the fringe's pixel makes it fail.
+- **The contract on Rex:** `TestOpaquePanesCoverWhatIsUnderThem` draws, for each cover of the chrome scene, the quads from its start alone over a clear target and requires an alpha of 255 on every pixel of it (scale 1 and 2, light and dark, with and without a backdrop, three focus states).
+- **Cases:** `TestCullCoveredCases` (a fringe or a shadow's tail past a cover is kept, a cover after a backdrop or before the quad hides nothing, two panes over a field cut it into five pieces), `TestCoverCutsWhatIsUnderIt` (ui, at opacity 1 and 0.5), `TestCullCoveredAllocatesNothing`.
+
+**Not done:** covers for other opaque surfaces (sheets, popovers, the composer); the list's covers are dropped for a frame whose glyphs were dropped (`dropStaleGlyphs` moves the quads).
+
 ## D94. The hosted browser runs the app's scripts and captures itself (2026-11-02)
 
 **Decision.** `app/webview` gains `View.Eval(script)` and `View.Capture()`, both asynchronous: the answer is an `EvalEnded` or `CaptureEnded` event whose `Event.Request` names the call, and `View.Result` takes it once (`Result.JSON`, `Result.PNG`, `Result.Err`). The script runs in the page's main frame and the page's own world, as the body of an async function, awaited; its value comes back as `JSON.stringify` writes it (undefined and unserialisable values are `null`). A script that throws, or awaits a rejected promise, ends with `ErrScript` and the page's message. Capture is what the view shows, at the display's scale.

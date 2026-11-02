@@ -207,6 +207,7 @@ func (r *Renderer) NewYUVTexture(f YUVFormat, w, h int, sp YUVSpace) (TextureID,
 	r.xtex[i] = x
 	cw, ch := chromaSize(w, h)
 	r.ids.addBytes(i, int64(w)*int64(h)+2*int64(cw)*int64(ch)) // Y, and the chroma (NV12's RG8 plane or two R8 ones)
+	r.texLog.note(id, 0, 0, 0, 0)
 	return id, nil
 }
 
@@ -234,6 +235,7 @@ func (r *Renderer) StageYUV(t TextureID, im *YUVImage) {
 	x := &r.xtex[i]
 	w, h := int(x.w), int(x.h)
 	cw, ch := chromaSize(w, h)
+	r.texLog.note(t, 0, 0, 0, 0) // every plane, and the turns
 	r.stage(t, 0, 0, 0, w, h, im.Y, im.YStride, 1, "gpu: StageYUV: Y plane too short")
 	if x.format == YUVNV12 {
 		r.stage(t, 1, 0, 0, cw, ch, im.U, im.UStride, 2, "gpu: StageYUV: UV plane too short")
@@ -355,7 +357,9 @@ func (r *Renderer) ImportPixelBuffer(pb uintptr, turns int) (TextureID, error) {
 		w:      int32(w), h: int32(h),
 		format: YUVNV12, space: sp, turns: uint8(turns & 3),
 	}
-	return r.importID(k), nil
+	id := r.importID(k)
+	r.texLog.note(id, 0, 0, 0, 0) // a new frame under a reused id
+	return id, nil
 }
 
 // cvTexture is a CVMetalTextureRef of plane plane of pb (0 on failure).

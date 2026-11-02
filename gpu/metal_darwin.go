@@ -36,6 +36,8 @@ type Surface struct {
 	// because the native shell's views moved with them (outside live resize
 	// and the first frame).
 	SyncedPresents int
+	// Skipped counts the frames ended by SkipFrame, never presented.
+	Skipped int
 }
 
 var (
@@ -256,6 +258,7 @@ type Frame struct {
 	W, H   int     // target size in pixels
 
 	drawable objc.ID // retained until EndFrame
+	traced   bool    // the drawable reports when it is on glass (Trace.OnGlass)
 }
 
 // BeginFrame acquires the frame's drawable and a command buffer. It returns
@@ -309,6 +312,7 @@ func (s *Surface) BeginFrame(f *Frame) bool {
 		s.traceNext = false
 		onGlassTarget.Store(&s.Trace.OnGlass)
 		objc.Send1(f.drawable, selAddPresented, uintptr(unsafe.Pointer(&presentedBlock)))
+		f.traced = true
 	}
 	f.Target = uintptr(objc.Send(f.drawable, selTexture))
 	f.CmdBuf = uintptr(objc.Retain(objc.Send(s.queue, selCommandBuffer)))
@@ -393,6 +397,26 @@ func (s *Surface) EndFrame(f *Frame) {
 	objc.Send(f.drawable, selRelease)
 	objc.F.Call1(objc.PoolPop, pool)
 	*f = Frame{}
+}
+
+// Live reports whether the surface is in a live resize with a frame
+// handler (since the last BeginFrame): its frames are presented with the
+// window's transaction, one size each.
+func (s *Surface) Live() bool { return s.live }
+
+// SkipFrame ends a frame that BeginFrame began and whose pixels are those
+// the screen shows already, without committing or presenting it: the layer
+// keeps showing the previous frame. Nothing must be encoded into the frame.
+// It returns false, and does nothing, when the frame must be presented
+// anyway: the first one, one in a live resize, one that moves the native
+// shell's views, and one whose present is traced.
+func (s *Surface) SkipFrame(f *Frame) bool {
+	if s.presented == 0 || s.live || f.traced || s.native.ShellPending() {
+		return false
+	}
+	s.AbandonFrame(f)
+	s.Skipped++
+	return true
 }
 
 // presentWithShell presents drawable inside an explicit transaction with

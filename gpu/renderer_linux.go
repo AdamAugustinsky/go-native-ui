@@ -1000,3 +1000,9 @@ func (r *Renderer) InstanceCapacity() int {
 	}
 	return n
 }
+
+// TextureWrites reports no writes as complete: partial frames are drawn on
+// macOS only for now, so a tracker here always draws whole frames.
+func (r *Renderer) TextureWrites(since uint64, dst []TextureWrite) ([]TextureWrite, uint64, bool) {
+	return dst, since, false
+}

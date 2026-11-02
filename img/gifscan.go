@@ -1,5 +1,17 @@
 package img
 
+// gifTextHeader is how many bytes come before the sub-blocks of the extension
+// with this label besides the label's own two: a plain text extension's
+// header is read as 13 bytes (its size byte and 12) whatever its size byte
+// says, as image/gif reads it, so a short one does not leave a graphic control
+// inside it to be read as the next image's.
+func gifTextHeader(label byte) int {
+	if label == 0x01 {
+		return 13
+	}
+	return 0
+}
+
 // gifFrames counts the frames of a GIF and returns the first frame's delay in
 // milliseconds, by walking its blocks without decoding any (the standard
 // decoder's DecodeAll would decode every frame).
@@ -33,7 +45,7 @@ func gifFrames(b []byte) (frames, delayMs int32) {
 			if b[i+1] == 0xF9 && i+8 <= len(b) && b[i+2] == 4 { // graphic control
 				pending = int32(b[i+4]) | int32(b[i+5])<<8
 			}
-			i += 2
+			i += 2 + gifTextHeader(b[i+1])
 			if !skipSub() {
 				return max(frames, 1), max(delay, 0)
 			}
@@ -89,7 +101,7 @@ func gifBackground(b []byte) (rgb [3]byte, ok bool) {
 			if b[i+1] == 0xF9 && i+4 <= len(b) && b[i+2] == 4 && b[i+3]&1 != 0 { // graphic control with a transparent colour
 				return rgb, false
 			}
-			i += 2
+			i += 2 + gifTextHeader(b[i+1])
 			for {
 				if i >= len(b) {
 					return rgb, false
