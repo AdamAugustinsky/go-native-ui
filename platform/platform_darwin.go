@@ -72,7 +72,7 @@ type Window struct {
 	viewOnly   bool
 	renewals   uint64 // renewLink calls (DebugState)
 	deadLink   bool   // DebugStopNewLinks made this link: its ticks are dropped
-	idleTicks       int     // display-link ticks since the last frame request
+	idleTicks  int    // display-link ticks since the last frame request
 	// Nested loops (an AppKit loop, or a block's, that does not return to
 	// Wait: NSCorrectionPanel's): frameOut is set while an EvFrame a tick
 	// queued (at frameOutT) has not reached the app (Wait, Pending); a tick
