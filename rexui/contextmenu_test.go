@@ -322,12 +322,13 @@ func TestContextMenuMnemonics(t *testing.T) {
 
 // DropdownMenu opens the drawn menu below its button on a click, on every OS
 // (native menus or not): a section header is a label that takes no focus,
-// items show their Lucide icons, the arrow keys skip the header, Enter
-// chooses, a press on the button closes the menu without opening it again,
-// and an open menu's frames allocate nothing.
+// items show their Lucide icons, the items follow the app's state while it is
+// open, the arrow keys skip the header, Enter chooses, a press on the button
+// closes the menu without opening it again, and an open menu's frames
+// allocate nothing.
 func TestDropdownMenu(t *testing.T) {
 	var item int
-	var chosen bool
+	var chosen, loaded bool
 	g := newRig(t, theme.Light, nil, column(func(g *rig) {
 		b := rexui.Button(g.k, "Add", rexui.ButtonOpts{})
 		if i, ok := rexui.DropdownMenu(g.k, b.ID, func(m *[]ui.MenuItem) {
@@ -338,6 +339,9 @@ func TestDropdownMenu(t *testing.T) {
 				ui.MenuSeparator,
 				ui.MenuItem{Header: true, Title: "Mode"},
 				ui.MenuItem{ID: 3, Title: "Plan", Icon: "list-todo"})
+			if loaded {
+				*m = append(*m, ui.MenuItem{ID: 4, Title: "Loaded"})
+			}
 		}); ok {
 			item, chosen = i, true
 		}
@@ -385,6 +389,15 @@ func TestDropdownMenu(t *testing.T) {
 	if n := testing.AllocsPerRun(20, g.frame); n != 0 {
 		t.Errorf("a frame with the menu open allocates %v times", n)
 	}
+
+	// the items follow the app's state while it is open
+	loaded = true
+	g.frame()
+	if _, ok := has(ui.RoleMenuItem, "Loaded"); !ok {
+		t.Error("an item added while the menu is open did not show")
+	}
+	loaded = false
+	g.frame()
 
 	// a press on the button closes it and does not reopen it
 	g.click(centre(btn))

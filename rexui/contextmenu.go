@@ -92,8 +92,10 @@ func ContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item 
 // DropdownMenu is the menu of a button (T3 Code's and the web's dropdown
 // menus, the composer's "+" and "…"): a click on the component with root box
 // id (a button's Signal.ID), or Enter or Space on it, opens a drawn menu below
-// it, on every OS, with the items build makes then; it reports the chosen
-// item in the frame it is chosen. The menu is ContextMenu's drawn menu, with
+// it (above it where there is no room below), on every OS; it reports the
+// chosen item in the frame it is chosen. build makes the items on the click
+// and again in every frame while the menu is open, so they follow the app's
+// state (a list that loads after the menu opens); keep it cheap. The menu is ContextMenu's drawn menu, with
 // its icons, headers, arrow keys, submenus, mnemonics and Escape; the
 // keyboard opens it with the first item focused. A press outside closes it,
 // and a press on the button closes it without opening it again. Call it in
@@ -122,6 +124,9 @@ func DropdownMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item
 	}
 	if !pop.OpenBy(base.PopupItems, owner) {
 		return 0, false
+	}
+	if !keyed && !c.Signal(id).Clicked {
+		build(k.MenuScratch()) // the items of this frame
 	}
 	k.KeepPopup()
 	cm := contextMenu{k: k, chosen: -1, keyed: keyed}
