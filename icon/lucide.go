@@ -42,6 +42,12 @@ func (s Spec) Size(pt float32) Spec {
 // Small returns s at LucideSmallPt.
 func (s Spec) Small() Spec { return s.Size(LucideSmallPt) }
 
+// Filled returns s with its shapes filled as well as stroked (Spec.Fill).
+func (s Spec) Filled() Spec {
+	s.Fill = true
+	return s
+}
+
 // lucideSide is the side in points of a Lucide icon sized for text style st
 // at scale sc: a body line (13 pt) takes a 16 pt icon, as T3 Code's 14 px
 // text takes size-4, and the other styles in proportion, in whole points.
@@ -91,12 +97,15 @@ type lucideRaster struct {
 	side    int
 	k       float64 // 26.6 grid units to 26.6 pixels
 	fill    bool
+	fillAll bool // Spec.Fill: every element is filled
 }
 
 // draw rasterises ic at side×side pixels with a stroke of sw grid units into
-// dst's memory (grown if too small): the coverage, side×side bytes. Lucide
-// keeps its drawing inside the grid with its caps, so there is no margin.
-func (r *lucideRaster) draw(dst []byte, ic lucide.Icon, side int, sw float64) []byte {
+// dst's memory (grown if too small), every element filled as well if fill:
+// the coverage, side×side bytes. Lucide keeps its drawing inside the grid
+// with its caps, so there is no margin.
+func (r *lucideRaster) draw(dst []byte, ic lucide.Icon, side int, sw float64, fill bool) []byte {
+	r.fillAll = fill
 	if cap(dst) < side*side {
 		dst = make([]byte, side*side)
 	}
@@ -125,7 +134,7 @@ func (r *lucideRaster) draw(dst []byte, ic lucide.Icon, side int, sw float64) []
 
 func (r *lucideRaster) Begin(flags byte) {
 	r.path.Clear()
-	r.fill = flags&lucide.FlagFill != 0
+	r.fill = r.fillAll || flags&lucide.FlagFill != 0
 }
 
 func (r *lucideRaster) Op(op byte, pts [6]int32) {

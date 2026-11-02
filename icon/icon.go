@@ -86,6 +86,9 @@ type Spec struct {
 	// lucide-static, aliases included), drawn on every system; empty for
 	// none.
 	Lucide string
+	// Fill fills a Lucide icon's shapes as well as stroking them, as T3
+	// Code's fill-current does: a filled star, a stop square (Filled).
+	Fill bool
 	// Symbol is the SF Symbol's name (macOS); empty for none.
 	Symbol string
 	// Segoe is the codepoint in Segoe Fluent Icons and Segoe MDL2 Assets
@@ -349,7 +352,7 @@ func (a *Atlas) rasterOne(i int) {
 	if sp.Lucide != "" {
 		if ic, ok := lucideIcon(sp.Lucide); ok {
 			side := lucideSidePx(sp, scale)
-			pix := a.lr.draw(a.scratch, ic, side, lucideStroke(sp.Weight))
+			pix := a.lr.draw(a.scratch, ic, side, lucideStroke(sp.Weight), sp.Fill)
 			a.scratch = pix[:0]
 			if a.putImage(e, SourceLucide, pix, side, side) {
 				return

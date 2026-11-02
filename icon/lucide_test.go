@@ -30,7 +30,7 @@ func TestEveryLucideIconDraws(t *testing.T) {
 			t.Errorf("%s: malformed", n)
 			continue
 		}
-		buf = r.draw(buf, ic, 24, 2)
+		buf = r.draw(buf, ic, 24, 2, false)
 		ink := 0
 		for _, b := range buf {
 			if b > 0x40 {
@@ -183,7 +183,7 @@ func TestManyLucideIconsGrowTheAtlas(t *testing.T) {
 			continue
 		}
 		ic, _ := lucide.Lookup(sp.Lucide)
-		own = r.draw(own, ic, 64, 2)
+		own = r.draw(own, ic, 64, 2, false)
 		for y := 0; y < 64; y++ {
 			if !bytes.Equal(a.pix[(e.y+y)*a.w+e.x:(e.y+y)*a.w+e.x+64], own[y*64:(y+1)*64]) {
 				t.Errorf("%s: texels differ from its raster at row %d", sp.Lucide, y)
@@ -240,5 +240,26 @@ func TestFirstUseOfLucideAllocatesNothing(t *testing.T) {
 	use()
 	if n := testing.AllocsPerRun(5, use); n != 0 {
 		t.Errorf("preparing %d icons for the first time allocates %v times", a.Len(), n)
+	}
+}
+
+// A filled icon has more ink than its outline, and its middle is solid: a
+// star and a square.
+func TestFilledLucideIcons(t *testing.T) {
+	var r lucideRaster
+	for _, n := range []string{"star", "square"} {
+		ic, _ := lucide.Lookup(n)
+		ink := func(fill bool) (sum int, mid byte) {
+			pix := r.draw(nil, ic, 32, 2, fill)
+			for _, b := range pix {
+				sum += int(b)
+			}
+			return sum, pix[16*32+16]
+		}
+		outline, om := ink(false)
+		filled, fm := ink(true)
+		if filled <= outline || om != 0 || fm != 0xFF {
+			t.Errorf("%s: ink %d outlined, %d filled; middle %d and %d", n, outline, filled, om, fm)
+		}
 	}
 }
