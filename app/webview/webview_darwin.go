@@ -85,6 +85,11 @@ var wk struct {
 	paths   [len(kvoPaths)]objc.ID // retained key paths
 	stores  map[string]objc.ID     // a profile's data store (+1), kept for the process (dataStore)
 	lastDL  atomic.Int64           // the time of the last DownloadProgress posted, ns
+	// evalKind and snapKind are the completion handlers of
+	// callAsyncJavaScript: and takeSnapshotWithConfiguration:, whose context is
+	// the call's ID; calls maps a running call to its view.
+	evalKind, snapKind *objc.BlockKind
+	calls              map[uint32]uint32
 	// loadTime is how long loading WebKit and registering the classes took
 	// (the first New), for the gate's report.
 	loadTime time.Duration
@@ -162,12 +167,26 @@ var (
 	selDecideDestination  = objc.Sel("download:decideDestinationUsingResponse:suggestedFilename:completionHandler:")
 	selDownloadDidFinish  = objc.Sel("downloadDidFinish:")
 	selDownloadDidFail    = objc.Sel("download:didFailWithError:resumeData:")
+	selCallAsyncJS        = objc.Sel("callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:")
+	selPageWorld          = objc.Sel("pageWorld")
+	selSnapshot           = objc.Sel("takeSnapshotWithConfiguration:completionHandler:")
+	selTIFF               = objc.Sel("TIFFRepresentation")
+	selRepWithData        = objc.Sel("imageRepWithData:")
+	selRepresentation     = objc.Sel("representationUsingType:properties:")
+	selDictionary         = objc.Sel("dictionary")
+	selBytes              = objc.Sel("bytes")
+	selLength             = objc.Sel("length")
+	selUserInfo           = objc.Sel("userInfo")
+	selObjectForKey       = objc.Sel("objectForKey:")
+	selLocalizedDesc      = objc.Sel("localizedDescription")
 	clsNSURL, clsRequest  objc.ID
 	clsHTTPResponse       objc.ID
 	strDisposition        objc.ID
 	strCompleted          objc.ID
 	strNSURLErrorDomain   objc.ID
 	strWebKitErrorDomain  objc.ID
+	strJSException        objc.ID
+	clsNSString           objc.ID
 	webKitFrameInterrupt  = 102  // WebKitErrorFrameLoadInterruptedByPolicyChange: a download took the navigation
 	nsURLErrorCancelled   = -999 // a navigation stopped or replaced
 	webKitPath            = "/System/Library/Frameworks/WebKit.framework/WebKit"
@@ -217,6 +236,12 @@ func load() error {
 	strCompleted = objc.Retain(objc.Str("completedUnitCount"))
 	strNSURLErrorDomain = objc.Retain(objc.Str("NSURLErrorDomain"))
 	strWebKitErrorDomain = objc.Retain(objc.Str("WebKitErrorDomain"))
+	strJSException = objc.Retain(objc.Str("WKJavaScriptExceptionMessage"))
+	clsNSString = objc.Cls("NSString")
+	// void (^)(id result, NSError *error) and void (^)(NSImage *image, NSError *error), on the main thread
+	wk.evalKind = objc.NewBlockKind("v24@?0@8@16", true, evalDone, nil)
+	wk.snapKind = objc.NewBlockKind("v24@?0@8@16", true, snapDone, nil)
+	wk.calls = map[uint32]uint32{}
 	for i, p := range kvoPaths {
 		if p != "" {
 			wk.paths[i] = objc.Retain(objc.Str(p))
@@ -241,6 +266,8 @@ type view struct {
 	blockedU string
 	dls      []*download
 	closed   bool
+	calls
+	reqs map[uint32]objc.Request // the running Evals' and Captures' blocks
 }
 
 // download is one of a view's downloads.
@@ -713,11 +740,144 @@ func (v *view) cancelDownload(id uint32) {
 	}
 }
 
+// eval is callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:
+// in the main frame and the page's world: WebKit awaits the function's promise
+// and hands its value, the JSON string asyncBody makes, to the handler.
+func (v *view) eval(id uint32, body string) error {
+	req, err := wk.evalKind.New(uintptr(id))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrRuntime, err)
+	}
+	pool := objc.F.Call0(objc.PoolPush)
+	defer objc.F.Call1(objc.PoolPop, pool)
+	v.track(id, req)
+	src, args := objc.Str(body), objc.Send(objc.Cls("NSDictionary"), selDictionary)
+	world := objc.Send(objc.Cls("WKContentWorld"), selPageWorld)
+	objc.F.Reset().Arg(uintptr(v.wv)).Arg(uintptr(selCallAsyncJS)).Arg(uintptr(src)).Arg(uintptr(args)).Arg(0).Arg(uintptr(world)).Arg(uintptr(req.Block())).Call(objc.MsgSend)
+	req.Sent()
+	return nil
+}
+
+// capture is takeSnapshotWithConfiguration: with the default configuration
+// (the view's bounds at its window's scale).
+func (v *view) capture(id uint32) error {
+	req, err := wk.snapKind.New(uintptr(id))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrRuntime, err)
+	}
+	v.track(id, req)
+	objc.F.Reset().Arg(uintptr(v.wv)).Arg(uintptr(selSnapshot)).Arg(0).Arg(uintptr(req.Block())).Call(objc.MsgSend)
+	req.Sent()
+	return nil
+}
+
+func (v *view) track(id uint32, req objc.Request) {
+	if v.reqs == nil {
+		v.reqs = map[uint32]objc.Request{}
+	}
+	v.reqs[id] = req
+	wk.calls[id] = v.id
+}
+
+// callView is the view of a call that completed, and forgets the call.
+func callView(id uint32) *view {
+	vid, ok := wk.calls[id]
+	if !ok {
+		return nil
+	}
+	delete(wk.calls, id)
+	v := wk.views[vid]
+	if v == nil || v.closed {
+		return nil
+	}
+	delete(v.reqs, id)
+	return v
+}
+
+// evalDone is the eval's completion handler (main thread): c holds the
+// block, the result (an NSString, or nil) and the NSError.
+func evalDone(ctx uintptr, c *ffi.CB) {
+	id := uint32(ctx)
+	v := callView(id)
+	if v == nil {
+		return
+	}
+	res, nserr := objc.ID(c.Int(1)), objc.ID(c.Int(2))
+	var r Result
+	switch {
+	case nserr != 0:
+		r.Err = scriptError(nserr)
+	case res != 0 && objc.SendBool1(res, selIsKindOfClass, uintptr(clsNSString)):
+		r.JSON = string(objc.AppendUTF8(nil, res))
+	default:
+		r.JSON = "null"
+	}
+	if v.end(id, r) {
+		v.postCall(EvalEnded, id)
+	}
+}
+
+// scriptError is an eval's NSError: the page's exception message
+// (WKJavaScriptExceptionMessage) when the script threw, else the error's
+// description.
+func scriptError(nserr objc.ID) error {
+	if info := objc.Send(nserr, selUserInfo); info != 0 {
+		if m := objc.Send1(info, selObjectForKey, uintptr(strJSException)); m != 0 {
+			return fmt.Errorf("%w: %s", ErrScript, objc.AppendUTF8(nil, m))
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrRuntime, objc.AppendUTF8(nil, objc.Send(nserr, selLocalizedDesc)))
+}
+
+// snapDone is the snapshot's completion handler (main thread): the NSImage
+// as a PNG (NSBitmapImageRep of its TIFF representation).
+func snapDone(ctx uintptr, c *ffi.CB) {
+	id := uint32(ctx)
+	v := callView(id)
+	if v == nil {
+		return
+	}
+	img, nserr := objc.ID(c.Int(1)), objc.ID(c.Int(2))
+	var r Result
+	if img == 0 {
+		r.Err = fmt.Errorf("%w: no snapshot", ErrRuntime)
+		if nserr != 0 {
+			r.Err = fmt.Errorf("%w: %s", ErrRuntime, objc.AppendUTF8(nil, objc.Send(nserr, selLocalizedDesc)))
+		}
+	} else {
+		pool := objc.F.Call0(objc.PoolPush)
+		const pngType = 4 // NSBitmapImageFileTypePNG
+		rep := objc.Send1(objc.Cls("NSBitmapImageRep"), selRepWithData, uintptr(objc.Send(img, selTIFF)))
+		var data objc.ID
+		if rep != 0 {
+			data = objc.Send2(rep, selRepresentation, pngType, uintptr(objc.Send(objc.Cls("NSDictionary"), selDictionary)))
+		}
+		if n := int(objc.Send(data, selLength)); data != 0 && n > 0 {
+			r.PNG = append([]byte(nil), unsafe.Slice((*byte)(ffi.PtrFromC(uintptr(objc.Send(data, selBytes)))), n)...)
+		} else {
+			r.Err = fmt.Errorf("%w: the snapshot could not be encoded", ErrRuntime)
+		}
+		objc.F.Call1(objc.PoolPop, pool)
+	}
+	if v.end(id, r) {
+		v.postCall(CaptureEnded, id)
+	}
+}
+
+func (v *view) postCall(kind EventKind, id uint32) {
+	wk.ring.OfferID(uint64(v.id), int64(kind), int64(id), nil)
+}
+
 // close stops the view and every running download, removes its observers,
 // delegates and host, and releases it: a non-persistent store goes with it.
 func (v *view) close() {
 	pool := objc.F.Call0(objc.PoolPush)
 	defer objc.F.Call1(objc.PoolPop, pool)
+	for id, req := range v.reqs { // a completion after this finds no call
+		req.Cancel()
+		delete(wk.calls, id)
+	}
+	v.reqs = nil
 	for _, d := range v.dls {
 		if !d.ended {
 			objc.Send1(d.dl, selCancelDownload, 0)

@@ -6,7 +6,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -461,4 +463,95 @@ func profileChild(t *testing.T, phase, url, val string) map[string]string {
 		t.Fatalf("phase %s: %v\n%s", phase, err, out)
 	}
 	return res
+}
+
+// Eval and Capture (D94): a script's value as JSON, awaited; undefined as
+// null; a throw and a rejection as ErrScript with the page's message; a click
+// that navigates; the page's own globals; and a capture of a green page.
+func TestEvalAndCapture(t *testing.T) {
+	h := startApp(t)
+	p := newPages(t)
+	v := h.openReady(webview.Options{})
+	h.navigate(v, p.url("/a"), "Page A")
+
+	run := func(script string) webview.Result {
+		t.Helper()
+		var id uint32
+		var err error
+		h.Do(func(*app.App) { id, err = v.Eval(script) })
+		if err != nil {
+			t.Fatalf("Eval(%q): %v", script, err)
+		}
+		var r webview.Result
+		h.wait("the script's result", 20*time.Second, func() bool {
+			var ok bool
+			r, ok = v.Result(id)
+			return ok
+		})
+		if e, ok := h.saw(v, webview.EvalEnded); !ok || e.Request == 0 {
+			t.Errorf("no EvalEnded event with a request (%+v)", e)
+		}
+		return r
+	}
+	cases := []struct{ script, want string }{
+		{"return document.title", `"Page A"`},
+		{"await new Promise(r => setTimeout(r, 20)); return {n: 1 + 1, links: document.querySelectorAll('a').length}", `{"n":2,"links":1}`},
+		{"document.body.dataset.x = 'y'", "null"},
+		{"window.gnuiCount = (window.gnuiCount || 0) + 1; return window.gnuiCount", "1"},
+		{"return window.gnuiCount", "1"},
+		{"return () => 1", "null"},
+	}
+	for _, c := range cases {
+		if r := run(c.script); r.Err != nil || r.JSON != c.want {
+			t.Errorf("Eval(%q) = %q, %v; want %q", c.script, r.JSON, r.Err, c.want)
+		}
+	}
+	for _, script := range []string{"throw new Error('boom ' + 42)", "await Promise.reject(new Error('boom 42'))"} {
+		r := run(script)
+		if !errors.Is(r.Err, webview.ErrScript) || !strings.Contains(r.Err.Error(), "boom 42") {
+			t.Errorf("Eval(%q): err %v, want ErrScript with the message", script, r.Err)
+		}
+	}
+	if r := run("document.querySelector('a').click()"); r.Err != nil {
+		t.Errorf("click: %v", r.Err)
+	}
+	h.wait("Page B after the click", 20*time.Second, func() bool { return v.State().Title == "Page B" && !v.State().Loading })
+	if _, ok := v.Result(1 << 30); ok {
+		t.Error("Result of an unknown request reported a result")
+	}
+
+	h.navigate(v, p.url("/green"), "Green")
+	var id uint32
+	var err error
+	h.Do(func(*app.App) { id, err = v.Capture() })
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	var r webview.Result
+	h.wait("the capture", 20*time.Second, func() bool {
+		var ok bool
+		r, ok = v.Result(id)
+		return ok
+	})
+	if _, ok := h.saw(v, webview.CaptureEnded); !ok {
+		t.Error("no CaptureEnded event")
+	}
+	if r.Err != nil {
+		t.Fatalf("Capture: %v", r.Err)
+	}
+	img, err := png.Decode(bytes.NewReader(r.PNG))
+	if err != nil {
+		t.Fatalf("the capture is not a PNG: %v", err)
+	}
+	b := img.Bounds()
+	cr, cg, cb, _ := img.At(b.Dx()/2, b.Dy()/2).RGBA()
+	t.Logf("capture %dx%d, %d bytes, centre %02x%02x%02x", b.Dx(), b.Dy(), len(r.PNG), cr>>8, cg>>8, cb>>8)
+	if b.Dx() < 100 || b.Dy() < 100 || cg>>8 < 0x90 || cr>>8 > 0x40 || cb>>8 > 0x40 {
+		t.Errorf("the capture is %v with centre %02x%02x%02x, want the green page", b, cr>>8, cg>>8, cb>>8)
+	}
+	h.Do(func(*app.App) {
+		if _, ok := v.Result(id); ok {
+			t.Error("a result was taken twice")
+		}
+	})
 }

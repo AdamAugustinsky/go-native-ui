@@ -90,6 +90,7 @@ const (
 	wvAddNavCompleted      = 15
 	wvRemoveNavCompleted   = 16
 	wvAddPermission        = 23
+	wvCallDevTools         = 36 // CallDevToolsProtocolMethod
 	wvRemovePermission     = 24
 	wvAddProcessFailed     = 25
 	wvRemoveProcessFailed  = 26
@@ -236,6 +237,8 @@ const (
 	hDLState
 	hSuspend
 	hFocus
+	hEval    // a DevTools protocol call of Eval: the call's ID above it
+	hCapture // of Capture
 )
 
 const runtimeGUID = `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`
@@ -286,6 +289,7 @@ var rt struct {
 
 	views   map[uint32]*view
 	byHWND  map[uintptr]*view
+	calls   map[uint32]uint32 // a running Eval or Capture: its view
 	next    uint32
 	nextDL  uint32
 	private uint32 // non-persistent views' profiles made
@@ -324,6 +328,8 @@ type view struct {
 	suspend  bool // a TrySuspend is wanted (hidden)
 
 	tokens [24]int64 // event registration tokens, by handler event
+
+	calls
 
 	// out parameters: heap words the runtime writes
 	outPtr  uintptr
@@ -531,7 +537,7 @@ func load(o *Options) error {
 		return rt.err
 	}
 	rt.ring = platform.NewRing(platform.SourceWebView, 256, 0)
-	rt.views, rt.byHWND = map[uint32]*view{}, map[uintptr]*view{}
+	rt.views, rt.byHWND, rt.calls = map[uint32]*view{}, map[uintptr]*view{}, map[uint32]uint32{}
 	rt.loadTime = time.Since(t0)
 	return nil
 }
@@ -935,6 +941,9 @@ func invoke(o *com.Object, a com.Args) uintptr {
 	switch ev {
 	case hEnv:
 		envDone(int32(a[0]), a[1])
+		return 0
+	case hEval, hCapture:
+		devToolsDone(id, ev, int32(a[0]), a[1])
 		return 0
 	case hBytes, hDLState:
 		if v, d := downloadByID(id); d != nil {
@@ -1389,6 +1398,7 @@ func (v *view) dropController() {
 // non-persistent view's profile is marked for deletion first), and releases
 // its host and window.
 func (v *view) close() {
+	v.forgetCalls()
 	for _, d := range v.dls {
 		if !d.ended {
 			com.Call(d.op, dlCancel)
