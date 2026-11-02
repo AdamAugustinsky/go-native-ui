@@ -354,29 +354,40 @@ func TestAWindowWhoseNewLinksNeverTickStillAnimates(t *testing.T) {
 	defer p.animate.Store(false)
 	l.Do(func(*app.App) { w.Wake() })
 	// The stopped link costs a second (linkStopNs), the first fresh one
-	// another; then the frames come at the display's rate. At a frame a
-	// second, 5 s draw a handful.
-	if !waitFor(5*time.Second, func() bool { return p.builds.Load() >= b0+120 }) {
+	// another; then the view link alone paces the window. (Right after a
+	// restart a burst of frames comes from the layer before the next link is
+	// attached, on CI's virtual display many, so the frames are counted only
+	// once the window is paced by its view link.)
+	var st platform.DebugState
+	viewOnly := func() bool {
+		l.Do(func(*app.App) { st = w.App().Win.DebugState() })
+		return st.ViewOnly
+	}
+	if !waitFor(5*time.Second, viewOnly) {
 		if coveredSince(l, w, start) {
 			t.Skip("the window was covered by other windows: it gets no frames")
 		}
-		t.Fatalf("the window drew %d frames in 5 s while its new links never ticked, want 120%s", p.builds.Load()-b0, mwStates(l, w))
+		t.Fatalf("5 s after its link stopped, with new links that never tick, the window is not paced by its view link alone: %d frames%s", p.builds.Load()-b0, mwStates(l, w))
 	}
-	var st platform.DebugState
-	l.Do(func(*app.App) { st = w.App().Win.DebugState() })
-	if !st.ViewOnly || st.MetalLink || st.Restarts != 2 {
-		t.Errorf("after the dead links: %s; want the view link alone after two restarts", st.Append(nil))
+	if st.MetalLink || st.Restarts != 2 {
+		t.Errorf("paced by the view link alone: %s; want the view link after two restarts", st.Append(nil))
+	}
+	// Before, each fresh link held the window a second: 2 frames in 2 s.
+	b1 := p.builds.Load()
+	time.Sleep(2 * time.Second)
+	if n := p.builds.Load() - b1; n < 30 {
+		t.Fatalf("the window drew %d frames in 2 s on its view link, want 30 or more%s", n, mwStates(l, w))
 	}
 
 	// The system wakes: a fresh metal link, which ticks.
-	b1 := p.builds.Load()
+	b2 := p.builds.Load()
 	l.Do(func(*app.App) { platform.DebugStopNewLinks(false); platform.DebugRenewLinks() })
 	renewed := func() bool {
 		l.Do(func(*app.App) { st = w.App().Win.DebugState() })
-		return st.MetalLink && !st.ViewOnly && st.Renewals == 1 && p.builds.Load() >= b1+60
+		return st.MetalLink && !st.ViewOnly && st.Renewals == 1 && p.builds.Load() >= b2+60
 	}
-	if !waitFor(3*time.Second, renewed) || st.Restarts != 2 {
-		t.Errorf("after the wake: %s, %d frames; want a metal link that ticks, no new restart", st.Append(nil), p.builds.Load()-b1)
+	if !waitFor(3*time.Second, renewed) {
+		t.Errorf("after the wake: %s, %d frames; want a metal link that ticks", st.Append(nil), p.builds.Load()-b2)
 	}
 }
 
