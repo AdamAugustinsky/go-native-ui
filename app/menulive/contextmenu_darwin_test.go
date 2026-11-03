@@ -85,7 +85,7 @@ func (s *ctxApp) onMenuOpen(m platform.DebugMenu) {
 	case "disabled":
 		m.Choose(1) // Archive, disabled: nothing happens, the menu closes
 	case "delete":
-		m.Choose(4)
+		m.Choose(5) // after the separator TidyMenu sets before it
 	case "dismiss":
 		m.Close()
 	}
