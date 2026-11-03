@@ -42,6 +42,9 @@ type BadgeOpts struct {
 	Fill Tint
 	// MaxPt caps a tag's width in points (0: none); longer text ends in "…".
 	MaxPt float32
+	// Radius is the corner radius in points (0: a capsule), and PadX the
+	// horizontal padding (0: the recipe's), for a web chip's square corners.
+	Radius, PadX float32
 	// Max is the largest count shown; above it the badge reads "Max+" (0:
 	// 99). BadgeCountN only.
 	Max int
@@ -135,9 +138,13 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 		fg = o.TextColor
 	}
 	st := &r.Styles[theme.StyleCaption2]
+	padX := pt(sc, rc.PadX[v])
+	if o.PadX > 0 {
+		padX = pt(sc, o.PadX)
+	}
 	w := h
 	if v != BadgeStatus {
-		w = max(h, ui.CeilText(k.TextWidthBytes(st.Font, txt)+2*pt(sc, rc.PadX[v])))
+		w = max(h, ui.CeilText(k.TextWidthBytes(st.Font, txt)+2*padX))
 	}
 	key := ui.HashString(c.ParentKey(), "badge") // badges of one parent are told apart by their order
 	tag := v == BadgeTag
@@ -149,12 +156,16 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 		c.NextShrinkFirst()
 		c.NextMinSize(min(w, pt(sc, rc.TagMin)), 0)
 		k.ApplySize(ui.Px(w).Strict(0), ui.Px(h))
-		c.NextPadding(pt(sc, rc.PadX[v]), 0, pt(sc, rc.PadX[v]), 0)
+		c.NextPadding(padX, 0, padX, 0)
 	} else {
 		k.ApplySize(ui.Px(w), ui.Px(h))
 	}
 	c.NextBG(fillC)
-	c.NextRadius(h / 2)
+	if o.Radius > 0 {
+		c.NextRadius(pt(sc, o.Radius))
+	} else {
+		c.NextRadius(h / 2)
+	}
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
 	c.NextJustify(ui.JustifyCenter)
