@@ -68,7 +68,7 @@ type StackToastOpts struct {
 	// Icon is the symbol at its start (0: the level's, BannerLook.Icon).
 	Icon icon.ID
 	// Title is its first line, in the semibold face, and its accessible
-	// name; Message the line under it, in the secondary label's colour (an
+	// name after the level's ("Error: …", as a banner's); Message the line under it, in the secondary label's colour (an
 	// error's in the readable red, wrapped); Meta sets the message as
 	// metadata (theme.MetaPt, tabular figures): a percentage, a size.
 	Title, Message string
@@ -82,6 +82,13 @@ type StackToastOpts struct {
 	// Actions are small buttons under the text, in a row that wraps;
 	// StackToastSignal.Action says which was clicked.
 	Actions []string
+	// ActionIcon and ActionIconName make an icon button before the close
+	// button, named ActionIconName for assistive technologies (an error's
+	// "Copy this message"): Banner's icon action. Its click is
+	// StackToastSignal.IconAction; nothing shows while ActionIconName is
+	// empty.
+	ActionIcon     icon.ID
+	ActionIconName string
 	// Close is the close button's name ("": Strings.Dismiss) and CloseIcon
 	// its symbol (0: icon.Close); NoClose leaves it out (a transfer that ends
 	// by itself).
@@ -98,8 +105,10 @@ type StackToastOpts struct {
 type StackToastSignal struct {
 	// ID is the toast's box.
 	ID ui.ID
-	// Action is the index of the action clicked, -1 for none.
-	Action int
+	// Action is the index of the action clicked, -1 for none; IconAction
+	// says the icon action (ActionIcon) was.
+	Action     int
+	IconAction bool
 	// Dismissed: the close button was clicked, or the toast's time ran out;
 	// the app stops building it.
 	Dismissed bool
@@ -128,7 +137,8 @@ func (s *ToastStack) Toast(id uint64, o StackToastOpts) StackToastSignal {
 	c.NextGap(k.Pt(ToastStackLook.Gap))
 	c.NextAxis(ui.AxisX)
 	c.NextRole(ui.RoleGroup)
-	c.NextSemName(o.Title)
+	c.NextSemName(bannerName(c, o.Level%NumBannerLevels, o.Title)) // "Error: …", as a banner's
+	c.NextSemValueBytes(base.StrBytes(o.Message))                  // and its message as its value
 	sig.ID = c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|ui.DrawShadow|ui.Hoverable, key, nil)
 	c.Push(sig.ID)
 	lv := o.Level % NumBannerLevels
@@ -170,6 +180,9 @@ func (s *ToastStack) Toast(id uint64, o StackToastOpts) StackToastSignal {
 		c.EndFlow()
 	}
 	k.EndColumn()
+	if o.ActionIconName != "" && IconButton(k, o.ActionIcon, o.ActionIconName, IconButtonOpts{Variant: IconBorderless, Size: theme.SizeSmall}).Clicked {
+		sig.IconAction = true
+	}
 	if !o.NoClose {
 		name := o.Close
 		if name == "" {

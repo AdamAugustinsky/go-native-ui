@@ -1443,7 +1443,7 @@ So a partial frame drawn into a retained back buffer and copied to the drawable 
 - **Key hints** (`rexui.KeyText`, `Kbd`, `WithShortcut`, `ShortcutRow`, `ShortcutRowsOf`, `ShortcutsSheet`): a shortcut written once as macOS writes it, shown as the platform writes it (A3's replacer missed ⌥; Zap always showed ⌘), and the shortcuts sheet from the menu model.
 - **Formatting** (package `format`): time ago, plurals, compact and grouped numbers, short paths, schedules (Hermes' and cron's) and short dates, in English and pt-BR, set with the components' words (`rexui.Strings.Format`).
 - **Words** (`rexui.Strings`): Cancel, Close, Save, Rename, Open, Try Again, More Options, Show in Finder/Explorer (`RevealLabel`), Loading…, Copied, Keyboard Shortcuts, in pt-BR too.
-- **Toasts** (`rexui.BeginToastStack`, `ToastStack.Toast`, `CopiedPill`): a stack in a corner with an inset, progress, actions and a time (`Toast`'s clock, held under the pointer), and the copy confirmation.
+- **Toasts** (`rexui.BeginToastStack`, `ToastStack.Toast`, `CopiedPill`): a stack in a corner with an inset, progress, actions, an icon action (`StackToastOpts.ActionIcon`, Zap's "Copy this message" on an error, as `Banner`'s) and a time (`Toast`'s clock, held under the pointer), and the copy confirmation.
 - **Avatars** (`AvatarOpts.Square`, `Initials`, `InitialsColor`, `Badge`; `rexui.BadgeDot`): a project's tile and the ringed badge dot.
 - **Dimmed backdrop** (`DialogOpts.Dim`, `DimCancels`; `rexui.DimBackdrop`): the window dimmed behind a sheet or a floating panel.
 

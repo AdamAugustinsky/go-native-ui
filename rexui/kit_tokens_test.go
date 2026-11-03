@@ -3,6 +3,7 @@ package rexui_test
 import (
 	"testing"
 
+	"gonativeui/icon"
 	"gonativeui/rexui"
 	"gonativeui/theme"
 	"gonativeui/ui"
@@ -52,6 +53,32 @@ func TestToastStackStacksInItsCorner(t *testing.T) {
 	g.settle()
 	if r := g.c.Rect(ids[1]); r[3] != float32(g.h)-inset {
 		t.Errorf("the toast left moved to %v", r)
+	}
+}
+
+// A stack's toast with an icon action (Zap's "Copy this message") shows it as
+// a named icon button before the close button, and its click is IconAction,
+// not a dismissal.
+func TestToastStackIconAction(t *testing.T) {
+	var copied, gone bool
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		st := rexui.BeginToastStack(g.k, "Toasts", rexui.ToastStackOpts{})
+		sig := st.Toast(1, rexui.StackToastOpts{Level: rexui.BannerError, Title: "Could not send", Message: "no connection", ActionIcon: icon.Check, ActionIconName: "Copy this message"})
+		copied = copied || sig.IconAction
+		gone = gone || sig.Dismissed
+		rexui.EndToastStack(g.k, &st)
+	})
+	g.settle()
+	if n := g.node(ui.RoleGroup, "Error: Could not send"); string(g.sem.Text(n.Value)) != "no connection" { // named and valued as a banner
+		t.Errorf("the toast's value is %q, want its message", g.sem.Text(n.Value))
+	}
+	b := g.node(ui.RoleButton, "Copy this message").Bounds
+	if b[2]-b[0] > 1.5*(b[3]-b[1]) {
+		t.Errorf("the icon action is %v: want a compact icon button", b)
+	}
+	g.click((b[0]+b[2])/2, (b[1]+b[3])/2)
+	if !copied || gone {
+		t.Errorf("a click on the icon action: IconAction %v, dismissed %v; want true, false", copied, gone)
 	}
 }
 
