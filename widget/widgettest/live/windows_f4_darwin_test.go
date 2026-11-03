@@ -326,6 +326,71 @@ func TestAStoppedDisplayLinkIsReplaced(t *testing.T) {
 	}
 }
 
+// After the Mac or its display slept, a CAMetalDisplayLink can be dead from
+// birth, and so can every fresh one made to replace it: each replacement gave
+// the window one frame after a second of silence, and the app ran at a frame
+// a second. A window whose new link never ticks is paced by its view link
+// alone, at the display's rate, and a wake gives it a metal link again.
+func TestAWindowWhoseNewLinksNeverTickStillAnimates(t *testing.T) {
+	p := &mwPane{}
+	l := widgettest.StartLive(t, mwConfig("dead links"), p)
+	var w *app.Win
+	l.Do(func(a *app.App) { w = a.Window() })
+	settle()
+
+	var stopped bool
+	var st0 platform.DebugState
+	l.Do(func(*app.App) {
+		platform.DebugStopNewLinks(true)
+		st0 = w.App().Win.DebugState()
+		stopped = w.App().Win.DebugStopLink()
+	})
+	t.Cleanup(func() { l.Do(func(*app.App) { platform.DebugStopNewLinks(false) }) })
+	if !stopped {
+		t.Fatalf("the window has no CAMetalDisplayLink to stop: %s", st0.Append(nil))
+	}
+	start, b0 := platform.Now(), p.builds.Load()
+	p.animate.Store(true)
+	defer p.animate.Store(false)
+	l.Do(func(*app.App) { w.Wake() })
+	// The stopped link costs a second (linkStopNs), the first fresh one
+	// another; then the view link alone paces the window. (Right after a
+	// restart a burst of frames comes from the layer before the next link is
+	// attached, on CI's virtual display many, so the frames are counted only
+	// once the window is paced by its view link.)
+	var st platform.DebugState
+	viewOnly := func() bool {
+		l.Do(func(*app.App) { st = w.App().Win.DebugState() })
+		return st.ViewOnly
+	}
+	if !waitFor(5*time.Second, viewOnly) {
+		if coveredSince(l, w, start) {
+			t.Skip("the window was covered by other windows: it gets no frames")
+		}
+		t.Fatalf("5 s after its link stopped, with new links that never tick, the window is not paced by its view link alone: %d frames%s", p.builds.Load()-b0, mwStates(l, w))
+	}
+	if st.MetalLink || st.Restarts != 2 {
+		t.Errorf("paced by the view link alone: %s; want the view link after two restarts", st.Append(nil))
+	}
+	// Before, each fresh link held the window a second: 2 frames in 2 s.
+	b1 := p.builds.Load()
+	time.Sleep(2 * time.Second)
+	if n := p.builds.Load() - b1; n < 30 {
+		t.Fatalf("the window drew %d frames in 2 s on its view link, want 30 or more%s", n, mwStates(l, w))
+	}
+
+	// The system wakes: a fresh metal link, which ticks.
+	b2 := p.builds.Load()
+	l.Do(func(*app.App) { platform.DebugStopNewLinks(false); platform.DebugRenewLinks() })
+	renewed := func() bool {
+		l.Do(func(*app.App) { st = w.App().Win.DebugState() })
+		return st.MetalLink && !st.ViewOnly && st.Renewals == 1 && p.builds.Load() >= b2+60
+	}
+	if !waitFor(3*time.Second, renewed) {
+		t.Errorf("after the wake: %s, %d frames; want a metal link that ticks", st.Append(nil), p.builds.Load()-b2)
+	}
+}
+
 // A composer in each window: each window's hosted NSTextView (the native
 // editor, N4) takes what is typed into that window, and its signals reach
 // that window's frames; the second window's editor, released, and the window,

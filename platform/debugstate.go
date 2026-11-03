@@ -37,6 +37,8 @@ type DebugState struct {
 	IdleTicks       int
 	Restarts        uint64 // display links that stopped calling back and were replaced (macOS)
 	Trims           uint64 // times an idle window gave back its spare drawables (macOS)
+	ViewOnly        bool   // paced by the view's link alone: a metal link never ticked (macOS)
+	Renewals        uint64 // fresh frame sources after a wake or a screen change (macOS)
 }
 
 func appendAge(b []byte, now, t int64) []byte {
@@ -129,6 +131,13 @@ func (s *DebugState) Append(b []byte) []byte {
 	if s.Trims > 0 {
 		b = append(b, " trims="...)
 		b = strconv.AppendUint(b, s.Trims, 10)
+	}
+	if s.ViewOnly {
+		b = append(b, " viewonly=1"...)
+	}
+	if s.Renewals > 0 {
+		b = append(b, " renewals="...)
+		b = strconv.AppendUint(b, s.Renewals, 10)
 	}
 	return append(b, '}')
 }

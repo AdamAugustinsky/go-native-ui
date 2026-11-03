@@ -74,6 +74,7 @@ var (
 	selGetURL            = objc.SelZ("gnuiGetURL:withReplyEvent:\x00")
 	selWillSleep         = objc.SelZ("gnuiWillSleep:\x00")
 	selDidWake           = objc.SelZ("gnuiDidWake:\x00")
+	selScreensWake       = objc.SelZ("gnuiScreensDidWake:\x00")
 	selSessionActive     = objc.SelZ("gnuiSessionActive:\x00")
 	selSessionInactive   = objc.SelZ("gnuiSessionInactive:\x00")
 	selDockCommand       = objc.SelZ("gnuiDockCommand:\x00")
@@ -248,6 +249,7 @@ func AppLaunched() {
 		sel  objc.SEL
 		name string
 	}{{selWillSleep, "NSWorkspaceWillSleepNotification"}, {selDidWake, "NSWorkspaceDidWakeNotification"},
+		{selScreensWake, "NSWorkspaceScreensDidWakeNotification"},
 		{selSessionActive, "NSWorkspaceSessionDidBecomeActiveNotification"}, {selSessionInactive, "NSWorkspaceSessionDidResignActiveNotification"}} {
 		if name := stringConstant(appKit, o.name); name != 0 {
 			objc.AddObserver(nc, appObj.delegate, o.sel, name, 0)
@@ -270,13 +272,17 @@ func registerAppDelegate() {
 	d.Method(selAppResignedActive, "v@:@", func(*ffi.CB) { deliverNow(AppEvDeactivated, 0, 0, 0, nil) })
 	d.Method(selAppOpenURLs, "v@:@@", appOpenURLs)
 	d.Method(selAppDockMenu, "@@:@", func(c *ffi.CB) { c.Ret(uintptr(appObj.dockMenu)) })
-	d.Method(selAppScreens, "v@:@", func(*ffi.CB) { deliverNow(AppEvScreensChanged, 0, 0, 0, nil) })
+	// A wake, of the system or its screens, or a change of the screens can
+	// leave the windows' display links silent: each gets a fresh one
+	// (renewLinks).
+	d.Method(selAppScreens, "v@:@", func(*ffi.CB) { renewLinks(); deliverNow(AppEvScreensChanged, 0, 0, 0, nil) })
+	d.Method(selScreensWake, "v@:@", func(*ffi.CB) { renewLinks() })
 	d.Method(selAppLastWindow, "c@:@", func(c *ffi.CB) { c.RetBool(false) }) // the app object decides (KeepRunning)
 	d.Method(selAppSecureRestore, "c@:@", func(c *ffi.CB) { c.RetBool(true) })
 	d.Method(selGetURL, "v@:@@", appGetURL)
 	d.Method(selQuitEvent, "v@:@@", appQuitEvent)
 	d.Method(selWillSleep, "v@:@", func(*ffi.CB) { deliverNow(AppEvWillSleep, 0, 0, 0, nil) })
-	d.Method(selDidWake, "v@:@", func(*ffi.CB) { deliverNow(AppEvDidWake, 0, 0, 0, nil) })
+	d.Method(selDidWake, "v@:@", func(*ffi.CB) { renewLinks(); deliverNow(AppEvDidWake, 0, 0, 0, nil) })
 	d.Method(selSessionActive, "v@:@", func(*ffi.CB) { deliverNow(AppEvSessionActive, 0, 1, 0, nil) })
 	d.Method(selSessionInactive, "v@:@", func(*ffi.CB) { deliverNow(AppEvSessionActive, 0, 0, 0, nil) })
 	d.Method(selDockCommand, "v@:@", func(c *ffi.CB) {

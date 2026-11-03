@@ -65,7 +65,14 @@ type Window struct {
 	// drawn (from the layer) sets metalLayer again.
 	relinkAfterDraw bool
 	drawable        objc.ID // retained drawable from the current CAMetalDisplayLink tick
-	idleTicks       int     // display-link ticks since the last frame request
+	// metalTicks counts the ticks of the current CAMetalDisplayLink. One that
+	// stops with none (born dead) makes the window viewOnly: paced by the
+	// view's CADisplayLink until renewLink, whose fresh links are tried again.
+	metalTicks uint64
+	viewOnly   bool
+	renewals   uint64 // renewLink calls (DebugState)
+	deadLink   bool   // DebugStopNewLinks made this link: its ticks are dropped
+	idleTicks  int    // display-link ticks since the last frame request
 	// Nested loops (an AppKit loop, or a block's, that does not return to
 	// Wait: NSCorrectionPanel's): frameOut is set while an EvFrame a tick
 	// queued (at frameOutT) has not reached the app (Wait, Pending); a tick

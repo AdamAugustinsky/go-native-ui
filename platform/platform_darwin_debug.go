@@ -104,6 +104,7 @@ func (w *Window) DebugState() DebugState {
 		Drawable: w.drawable != 0, Live: w.live, Relink: w.relink,
 		Ticks: w.ticks, TicksSinceFrame: w.ticksSinceFrame, LastTickT: w.lastTickT, LastFrameT: w.lastFrameT,
 		Pauses: w.pauses, IdleTicks: w.idleTicks, Restarts: w.restarts, Trims: w.trims,
+		ViewOnly: w.viewOnly, Renewals: w.renewals,
 	}
 	if w.link != 0 {
 		s.LinkPausedOS = objc.SendBool(w.link, selIsPausedLink)
@@ -146,6 +147,18 @@ func (w *Window) DebugStopLink() bool {
 	w.linkPaused = false
 	return true
 }
+
+// DebugStopNewLinks is a test hook (macOS only): while on, every
+// CAMetalDisplayLink attached from then on never calls back (its ticks are
+// dropped), as a fresh one may not after a display slept. Main thread.
+func DebugStopNewLinks(on bool) { stopNewLinks = on }
+
+// stopNewLinks is DebugStopNewLinks's switch.
+var stopNewLinks bool
+
+// DebugRenewLinks is a test hook (macOS only): what the system's wake does
+// to every window's frame source (renewLinks). Main thread.
+func DebugRenewLinks() { renewLinks() }
 
 // DebugTrimAfter is a test hook (macOS only): how long a window driven by a
 // CAMetalDisplayLink stays idle before it gives back its spare drawables

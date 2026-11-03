@@ -129,6 +129,28 @@ attaches a new `CAMetalDisplayLink`. Each restart:
 restart, the two F4 tests above pass on CI. The spike still fails its gate
 when a stall happens: it reports any 1 s silence as unpaced.
 
+## After a sleep: links dead from birth (2026-11-02)
+
+Zap, left for hours or through a closed lid, came back at about one frame
+a second. The recovery above explains the rate: after a sleep a
+`CAMetalDisplayLink` can stop, and every fresh one attached to replace it
+can be dead from birth too (others report the same after display sleep:
+OpenJDK 8304825 and 8312198 for `CVDisplayLink`, SpectraWall 5888ed4 for
+`CAMetalDisplayLink`). Each restart drew one frame from `nextDrawable`, the
+view link's next tick attached another dead link, and the next frame waited
+`linkStopNs` again.
+
+So `restartLink` now notes whether the stopped link ever ticked
+(`metalTicks`). A link that never ticked leaves the window paced by its view
+`CADisplayLink` alone (`viewOnly`, `viewonly=1` in the state line), drawing
+with the layer's `nextDrawable`. The system's wake, its screens' wake and a
+change of the screens (`renewLinks`) give every window a fresh link and try
+the metal link again (`renewals=N`). Test:
+`TestAWindowWhoseNewLinksNeverTickStillAnimates` (`DebugStopNewLinks`). Not
+yet reproduced with a real sleep; the restart line now says `of it N` (the
+stopped link's own ticks) and `view link only`, which tells the two cases
+apart in a user's stderr.
+
 ## What would tell more
 
 - On CI: the presented handler (`addPresentedHandler:`) of every drawable.
