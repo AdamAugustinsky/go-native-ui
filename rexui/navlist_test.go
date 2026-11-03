@@ -19,6 +19,9 @@ type navFixture struct {
 	last      base.NavSignal
 	activated int
 	cancelled bool
+	// unsized makes the list's view 0 high in the first frame (a pane that
+	// glides open), its rows laid out all the same
+	unsized bool
 }
 
 func newNavFixture(o rexui.NavListOpts) *navFixture {
@@ -48,7 +51,11 @@ func (f *navFixture) build(g *rig) {
 	if rexui.SearchField(k, "Find", &f.q, "Find", rexui.FieldOpts{}).Cancelled {
 		f.cancelled = true
 	}
-	k.NextSize(ui.Pct(1), ui.Grow(1))
+	h := ui.Grow(1)
+	if f.unsized {
+		h, f.unsized = ui.Px(0), false
+	}
+	k.NextSize(ui.Pct(1), h)
 	l := rexui.BeginNavList(k, "Results", &f.nav, len(f.names), f.o)
 	for i, name := range f.names {
 		if navHeader(i) {
@@ -183,6 +190,27 @@ func TestNavListPagesByTheRowsHeights(t *testing.T) {
 	g.settle()
 	if f.nav.Sel != 1 {
 		t.Errorf("Home reached %d, want 1 (past the header)", f.nav.Sel)
+	}
+}
+
+// TestNavListSelectedFromTheStartDoesNotScroll: a selection the app makes
+// before the list's first frame (the open conversation of a sidebar) on a row
+// that shows leaves the list where it is, though the view had no height in
+// the first frame: the reveal waits for the view to be laid out instead of
+// taking it as no height and scrolling the row to its top.
+func TestNavListSelectedFromTheStartDoesNotScroll(t *testing.T) {
+	f := newNavFixture(rexui.NavListOpts{})
+	f.unsized = true
+	f.nav.Select(3)
+	g := newRig(t, theme.Light, nil, f.build)
+	g.settle()
+	list := g.node(ui.RoleList, "Results").Bounds
+	first := rowBounds(g, f.names[1])
+	if first[1] < list[1]-0.5 {
+		t.Errorf("the list scrolled: the first row is at %v in %v", first, list)
+	}
+	if b := rowBounds(g, f.names[3]); b[1] < list[1]-0.5 || b[3] > list[3]+0.5 {
+		t.Errorf("row 3 at %v is out of view in %v", b, list)
 	}
 }
 

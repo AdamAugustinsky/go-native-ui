@@ -537,16 +537,19 @@ func (n *ListNav) row(k *Kit, r int, id ui.ID, name []byte, skip bool) {
 	g.off, g.n, g.skip = uint32(len(n.names)), uint16(min(len(name), 0xFFFF)), skip
 	n.names = append(n.names, name[:g.n]...)
 	rr := c.Rect(id)
-	if n.view != 0 && rr[3] > rr[1] {
+	switch {
+	case n.view == 0:
+		g.top, g.bot, g.frame = rr[1], rr[3], n.cur
+	case rr[3] > rr[1] && n.viewH(c) > 0:
 		vr := c.Rect(n.view)
 		_, sy := c.Scroll(n.view)
 		g.top = rr[1] - vr[1] + float32(sy)
 		g.bot = rr[3] - vr[1] + float32(sy)
 		g.frame = n.cur
-	} else if n.view == 0 {
-		g.top, g.bot, g.frame = rr[1], rr[3], n.cur
-	} else {
-		g.frame = 0 // not laid out yet
+	default:
+		// not laid out yet: the row, or the view (a view without a height
+		// yet would scroll a row that shows to its top)
+		g.frame = 0
 	}
 	if n.reveal && r == n.Sel && n.view != 0 && g.frame != 0 {
 		n.reveal = false
