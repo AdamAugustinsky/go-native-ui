@@ -63,6 +63,11 @@ type FlatPane struct {
 	// the card along Sides (none when Sides is 0 or Line is None).
 	Line  Tint
 	Sides ui.Sides
+	// Drag, when not 0, makes the card's top Drag points move the window
+	// (a web app's titlebar region: Electron's -webkit-app-region: drag),
+	// for a window whose titlebar band lies under its cards. What the card
+	// builds there keeps its clicks.
+	Drag float32
 }
 
 // PaneFocus is the pane card in use for an app that lays its cards out in
@@ -160,6 +165,10 @@ func BeginPaneCard(k *base.Kit, o PaneCardOpts) PaneCard {
 			theme.At(c, 0, 0, w, h)
 			c.NextBG(fill)
 			c.Box(base.Floating|ui.DrawBackground, "flat fill")
+		}
+		if f.Drag > 0 {
+			theme.At(c, 0, 0, w, min(theme.Snap(k.Pt(f.Drag)), h))
+			c.Box(base.Floating|ui.WindowDrag, "flat drag")
 		}
 	} else if r.Chrome != nil && w > 0 && h > 0 {
 		pc.surf = theme.Surface{Key: ui.KeyN(paneFocusBase, uint64(key)+1), Slot: slot, Rect: [4]float32{0, 0, w, h},

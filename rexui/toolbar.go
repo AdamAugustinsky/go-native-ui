@@ -81,6 +81,11 @@ type ToolbarOpts struct {
 	// Traffic draws the traffic lights at the style's place (offscreen
 	// renders; in a window the system draws them).
 	Traffic bool
+	// Width, when not 0, ends the band Width pixels from the window's left:
+	// a web-style window whose band is only the corner over its sidebar
+	// (the traffic lights' row), the regions beside it moving the window
+	// themselves (FlatPane.Drag) so that their headers keep their clicks.
+	Width float32
 	// Glass gives the Rex band's items (Style ToolbarRex: Item, BeginGroup
 	// and BeginShared) the glass capsules of the other styles, macOS 26's
 	// toolbar items (a RexHit-high capsule, the system's material where the
@@ -344,6 +349,9 @@ func BeginToolbar(k *base.Kit, label string, o ToolbarOpts) Toolbar {
 	}
 	w, _ := c.Size()
 	tb.w = float32(w)
+	if o.Width > 0 {
+		tb.w = min(tb.w, o.Width)
+	}
 	if hd := o.Header; hd[2] > hd[0] {
 		tb.header(hd, label)
 		return tb
