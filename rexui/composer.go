@@ -638,7 +638,20 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		ringVisual = base.Visual{Inactive: inactive, Disabled: true}
 	default:
 		st.edgeUp, st.edgeDown = false, false
+		// the drawn field is one line: an Expanded composer keeps the hosted
+		// editor's least height under it, the text at its top
+		tall := st.variant == ComposerExpanded && rc.ExpandedMinH > rc.SendSize
+		if tall {
+			c.NextSize(ui.Grow(1), ui.Children(1))
+			c.NextAxis(ui.AxisY)
+			c.Push(c.Box(0, "expanded"))
+		}
 		sig.Editor, drawn, ti = composerField(k, st, label, look, cc)
+		if tall {
+			c.NextSize(ui.Pct(1), ui.Px(pt(sc, rc.ExpandedMinH-rc.SendSize)))
+			c.Box(0, "expanded room")
+			c.Pop()
+		}
 		sig.EdgeUp, sig.EdgeDown = st.edgeUp, st.edgeDown
 		sig.Changed, sig.Focused = drawn.Changed, drawn.Focused
 		sig.Composing = k.Composing(drawn)

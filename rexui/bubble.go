@@ -109,6 +109,9 @@ type BubbleRecipe struct {
 	// Ring is a selected bubble's outline, RingW its width in points.
 	Ring  Tint
 	RingW float32
+	// Rim is a hairline round an outgoing bubble (a web app's white card of
+	// the person's message on a grey column); the zero Tint: none.
+	Rim Tint
 	// Code is the fill of a code block, CodePad its padding and CodeRadius its
 	// radius, in points.
 	Code                Tint
@@ -260,6 +263,8 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 	}
 	if o.Selected {
 		c.NextBorder(rc.Ring.RGBA(r), pt(sc, rc.RingW))
+	} else if rim := rc.Rim.RGBA(r); v == BubbleOutgoing && rc.Rim != (Tint{}) && rim != 0 {
+		c.NextBorder(rim, r.Px.BorderW)
 	}
 	c.NextBG4(fill, fill, bottom, bottom)
 	c.NextRadii(tl, tr, br, bl)
@@ -281,7 +286,7 @@ func beginBubble(k *base.Kit, key ui.Key, o BubbleOpts, plain bool) Bubble {
 		c.NextSemState(ui.SemSelected)
 	}
 	flags := ui.DrawBackground | disabledFlag(k)
-	if o.Selected {
+	if o.Selected || v == BubbleOutgoing && rc.Rim != (Tint{}) {
 		flags |= ui.DrawBorder
 	}
 	b.ID = c.BoxKeyed(flags, ui.KeyN(key, 1), nil)

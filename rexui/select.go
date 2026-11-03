@@ -30,6 +30,11 @@ type SelectOpts struct {
 	Variant SelectVariant
 	// Size is the control size.
 	Size theme.Size
+	// Lead, with HasLead, is a symbol before the value (a web app's select:
+	// a folder before a project, a branch before a branch's name), in the
+	// value's colour.
+	Lead    icon.ID
+	HasLead bool
 }
 
 // SelectRecipe is the look of pop-up buttons; their fills are ButtonDefault's.
@@ -44,6 +49,14 @@ type SelectRecipe struct {
 	// PadX is the label's distance from the start per variant, in points;
 	// 0 takes the size's (SizeSpec.PadX). A borderless pop-up button's is 8.
 	PadX [NumSelectVariants]float32
+	// Down draws a pop-up button's chevron as one chevron pointing down, a
+	// web app's select's, rather than AppKit's double one; FitWidth makes a
+	// borderless pop-up button as wide as its lead, value and chevron, a
+	// web app's toolbar pill, unless NextWidth says otherwise.
+	Down, FitWidth bool
+	// Text, when not the zero Tint, colours a borderless pop-up button's
+	// value, lead and chevron (a web toolbar pill's quieter text).
+	Text Tint
 }
 
 // SelectLook is the pop-up buttons' recipe.
@@ -80,7 +93,12 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 	v := o.Variant % NumSelectVariants
 	rc := &ButtonRecipes[ButtonDefault]
 	s := &r.Sizes[o.Size%theme.NumSizes]
-	p := k.PressState(label, base.HoverOff)
+	pill := SelectLook.FitWidth && v == SelectBorderless
+	hover := base.HoverOff
+	if pill {
+		hover = base.HoverOn // a web pill fills under the pointer
+	}
+	p := k.PressState(label, hover)
 	pop := k.Popup()
 	open := pop.OpenBy(base.PopupSelect, p.Key)
 
@@ -98,10 +116,19 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 	}
 	if v == SelectBorderless {
 		fill = 0
+		if pill {
+			fill = theme.WithAlpha(r.Colors[theme.RowHover], max(p.Visual.Hot, p.Visual.Down))
+			if open {
+				fill = r.Colors[theme.RowHover]
+			}
+		}
+		if SelectLook.Text != (Tint{}) && !p.Visual.Disabled {
+			fg = SelectLook.Text.RGBA(r)
+		}
 	}
 	h := theme.Snap(s.Height)
 	radius := s.Radius
-	if rc.Capsule { // the push buttons' shape: Rex's capsule
+	if rc.Capsule && !pill { // the push buttons' shape: Rex's capsule; a web pill keeps the size's radius
 		radius = h / 2
 	}
 	var state ui.SemState
@@ -119,14 +146,44 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 	if v == SelectPullDown {
 		role = ui.RoleButton
 	}
-	id := k.BeginPress(&p, role, k.Fixed(SelectLook.Width), ui.Px(h), ui.DrawBackground|ui.Clip, nil)
-	rr := c.Rect(id)
-	w := rr[2] - rr[0]
 	chev := icon.ChevronUpDown
+	if SelectLook.Down {
+		chev = icon.ChevronDown
+	}
 	if v == SelectPullDown {
 		chev = icon.PullDown
 	}
 	cw, _ := k.IconSize(chev)
+	if pill {
+		// the pill's own width: lead, value and chevron, padded as a web
+		// select (8 at each end, 6 between)
+		gap := k.Pt(6)
+		c.NextGap(gap)
+		c.NextPadding(padX, 0, padX, 0)
+		id := k.BeginPress(&p, role, ui.Children(1), ui.Px(h), ui.DrawBackground, nil)
+		if o.HasLead {
+			if f, disp := k.Icons().Prepare(c, o.Lead, fg); f != 0 {
+				lw, lh := k.IconSize(o.Lead)
+				c.NextSize(ui.Px(lw), ui.Px(lh))
+				c.BoxKeyed(f, ui.KeyN(p.Key, 3), disp)
+			}
+		}
+		c.NextSize(ui.TextSize(0), ui.Px(h))
+		c.NextMaxSize(k.Pt(SelectLook.Width), 0)
+		c.NextFont(s.Font.Font)
+		c.NextTextColor(fg)
+		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(p.Key, 1), base.StrBytes(shown))
+		if f, disp := k.Icons().Prepare(c, chev, fg); f != 0 {
+			_, ch := k.IconSize(chev)
+			c.NextSize(ui.Px(cw), ui.Px(ch))
+			c.BoxKeyed(f, ui.KeyN(p.Key, 2), disp)
+		}
+		c.Pop()
+		return selectEnd(k, id, &p, sel, options, v, open, radius)
+	}
+	id := k.BeginPress(&p, role, k.Fixed(SelectLook.Width), ui.Px(h), ui.DrawBackground|ui.Clip, nil)
+	rr := c.Rect(id)
+	w := rr[2] - rr[0]
 	cx := k.Pt(SelectLook.ChevronRight[v])
 	c.NextSize(ui.Px(max(w-padX-cx-cw/2, 0)), ui.Px(h))
 	c.NextFont(s.Font.Font)
@@ -138,6 +195,15 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 		c.BoxKeyed(f|base.Floating, ui.KeyN(p.Key, 2), disp)
 	}
 	c.Pop()
+	return selectEnd(k, id, &p, sel, options, v, open, radius)
+}
+
+// selectEnd is Select's behaviour once its button is built: the focus ring,
+// the options' menu or popup, and the signal.
+func selectEnd(k *base.Kit, id ui.ID, p *base.Press, sel *int, options []string, v SelectVariant, open bool, radius float32) SelectSignal {
+	c := k.Context()
+	pop := k.Popup()
+	rr := c.Rect(id)
 	k.FocusRing(id, p.Visual, radius)
 
 	if c.NativeMenus() { // the platform's pop-up menu (N1), never the drawn popup
