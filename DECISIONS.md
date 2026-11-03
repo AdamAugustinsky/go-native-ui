@@ -1501,3 +1501,17 @@ So a partial frame drawn into a retained back buffer and copied to the drawable 
 **Cost.** Every golden with a popover, menu, dialog, palette or scroll bar changes. The stripped linux/amd64 gallery is 10,481,927 bytes (+12 KB, 3.8 KB under the 10 MiB budget), windows/amd64 +14 KB.
 
 **Checked.** `TestTitleTagYieldsInOrder` (the tag shrinks first, the title next, the time never), `TestThemeOverlayBars` (overlay bars under the legacy style, shown on hover and faded after, `Legacy` kept), `TestTidyMenu`, and the menu, dropdown, palette and sheet goldens in light and dark.
+
+## D99. A3 Lab's web look: flat regions, the web app's tokens, web selects (2026-11-03)
+
+**Decision.** The A3 web app is the reference for A3 Lab's native apps' look; the framework carries what it takes to draw it:
+- **`theme/a3lab`** holds the web app's stylesheet tokens (a3-app `ui/src/styles.css`: paper, ink, rust and carbon; per mode the main column, sidebar, card and code colours, the text's and lines' opacities over the ink, rust's text, wash and outline). `Apply` puts them into a theme as owned roles: the field is the sidebar's paper, panes the main column, raised surfaces the cards' white; labels the ink at 100/72/52/36 %; lines, row states and the sidebar's selection the ink's wash; rust the accent and focus ring, rust's text the links.
+- **`rexui.PaneCardOpts.Flat`** (`FlatPane`) draws a pane card as a web app's region: a fill from edge to edge, square, no shadow, glass, rim or focus dimming, and a hairline on chosen sides. The card still clips, takes the focus presses and names its group. With `SetPaneGrid(0, 0)` the regions meet edge to edge.
+- **Selects as web toolbar pills.** `SelectLook.Down` draws one chevron pointing down; `SelectLook.FitWidth` makes a borderless pop-up button as wide as its lead symbol (`SelectOpts.Lead`), value and chevron, with the size's radius and the row hover under the pointer; `SelectLook.Text` colours it.
+- **Smaller pieces.** `BubbleRecipe.Rim` outlines an outgoing bubble (a white card on a grey column). A drawn Expanded composer keeps the hosted editor's least height (`ExpandedMinH`) under its one line, so offscreen renders match the window. A theme that owns `SidebarSel` keeps it whatever the accent (it followed the accent always).
+
+**Why.** On 2026-11-03 Adam said the A3 webapp looks "MILES better" than the native app. Side-by-side captures on the same demo agent showed the gap was the Rex chrome (floating cards with an inset, a titlebar band, T3's blue and zinc), not missing features: the web app is a flat sidebar on paper with a hairline, a lighter main column, white cards and one rust accent. Zap and HyperPedia are A3 Lab apps and take the same tokens with one call.
+
+**Not changed.** Rex stays the default theme and its pane cards the default; nothing changes for an app that does not opt in. The shared popover, menu and dialog surface is D98's (overlay-polish), not this.
+
+**Checked.** `theme/a3lab/a3lab_test.go` resolves a Rex theme with `Apply` in both modes and checks the accent, field, panes, cards, links, row and sidebar selections; with the `SidebarSel` ownership fix reverted it fails. The rest is drawn: a3-app's web-parity captures (`docs/evidence/web-parity`) compare each main screen with the web app's.

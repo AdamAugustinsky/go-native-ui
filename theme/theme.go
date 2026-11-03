@@ -489,6 +489,9 @@ func (r *Resolved) applyRoles() {
 			}
 		}
 		derive(&c, m, r.rolesBase[m][SidebarSel])
+		if r.own[SidebarSel] { // a theme that owns the sidebar's selection keeps it whatever the accent
+			c[SidebarSel] = r.rolesBase[m][SidebarSel]
+		}
 		r.roles[m] = c
 	}
 }
