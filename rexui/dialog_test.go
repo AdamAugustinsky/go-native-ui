@@ -16,6 +16,7 @@ type dialogHarness struct {
 	save, cancelled     int
 	buf                 ui.TextBuffer
 	d                   rexui.Dialog
+	opts                rexui.DialogOpts
 }
 
 func (h *dialogHarness) build(g *rig) {
@@ -25,7 +26,9 @@ func (h *dialogHarness) build(g *rig) {
 	if rexui.Button(k, "Under", rexui.ButtonOpts{}).Clicked {
 		h.underClicks++
 	}
-	h.d = rexui.BeginDialog(k, "rename", &h.open, rexui.DialogOpts{Title: "Rename “Report”"})
+	o := h.opts
+	o.Title = "Rename “Report”"
+	h.d = rexui.BeginDialog(k, "rename", &h.open, o)
 	if h.d.Visible {
 		rexui.TextField(k, "Name", &h.buf, "Name", rexui.FieldOpts{})
 		h.d.BeginActions()
@@ -184,15 +187,47 @@ func TestDialogMatchesAppKitSheets(t *testing.T) {
 
 // A macOS sheet does not dim the window behind it: nothing but the sheet
 // covers it, in light and in dark.
-func TestDialogDoesNotDimTheWindow(t *testing.T) {
-	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
-		g, _ := newDialogRig(t, m)
+func TestDialogDimsTheWindowByDefault(t *testing.T) {
+	scrim := func(g *rig) bool {
 		for i := range g.list.Quads {
 			q := &g.list.Quads[i]
-			if q.Mode == gpu.ModeShape && q.Rect == [4]float32{0, 0, float32(g.w), float32(g.h)} && q.Color[0]&0xFF != 0 {
-				t.Errorf("mode %d: a scrim covers the window behind the sheet", m)
+			if q.Rect == [4]float32{0, 0, float32(g.w), float32(g.h)} && q.Color[0]&0xFF != 0 {
+				return true
 			}
 		}
+		return false
+	}
+	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
+		if g, _ := newDialogRig(t, m); !scrim(g) {
+			t.Errorf("mode %d: no scrim covers the window behind the sheet", m)
+		}
+	}
+	h := &dialogHarness{opts: rexui.DialogOpts{Dim: -1}}
+	g := newRig(t, theme.Light, nil, h.build)
+	h.open = true
+	g.settle()
+	if scrim(g) {
+		t.Error("Dim < 0: a scrim covers the window, as no macOS sheet does")
+	}
+}
+
+// With DimCancels a press on the scrim is Cancel, and a press on the sheet's
+// own background, which its content leaves bare, is not.
+func TestDialogPressOnTheSheetIsNotOnTheScrim(t *testing.T) {
+	h := &dialogHarness{opts: rexui.DialogOpts{DimCancels: true}}
+	g := newRig(t, theme.Light, nil, h.build)
+	h.open = true
+	g.settle()
+	f := g.node(ui.RoleTextField, "Name").Bounds
+	g.click(f[2]-2, f[1]-6) // above the field's end, in the sheet
+	g.settle()
+	if !h.open || h.cancelled != 0 {
+		t.Fatal("a press on the sheet's background cancelled the dialog")
+	}
+	g.click(4, float32(g.h)-4)
+	g.settle()
+	if h.open || h.cancelled != 1 {
+		t.Error("a press on the scrim did not cancel the dialog")
 	}
 }
 

@@ -203,6 +203,12 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 	c.Box(0, "left")
 
 	flags := ui.DrawBackground | NextOverlaySurface(k, r.Radii.Sheet)
+	if d.dimmed {
+		// the sheet takes the pointer where its content does not, so a
+		// press or the wheel on its empty parts never reaches the dim under
+		// it (a press there is Cancel with DimCancels)
+		flags |= ui.Hoverable
+	}
 	c.NextBG(rc.Fill.RGBA(r))
 	if !r.Settings.ReduceTransparency {
 		// the glass grows with the sheet, never sharper than one texel of
