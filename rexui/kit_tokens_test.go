@@ -63,13 +63,15 @@ func TestToastStackIconAction(t *testing.T) {
 	var copied, gone bool
 	g := newRig(t, theme.Light, nil, func(g *rig) {
 		st := rexui.BeginToastStack(g.k, "Toasts", rexui.ToastStackOpts{})
-		sig := st.Toast(1, rexui.StackToastOpts{Level: rexui.BannerError, Title: "Could not send", ActionIcon: icon.Check, ActionIconName: "Copy this message"})
+		sig := st.Toast(1, rexui.StackToastOpts{Level: rexui.BannerError, Title: "Could not send", Message: "no connection", ActionIcon: icon.Check, ActionIconName: "Copy this message"})
 		copied = copied || sig.IconAction
 		gone = gone || sig.Dismissed
 		rexui.EndToastStack(g.k, &st)
 	})
 	g.settle()
-	g.node(ui.RoleGroup, "Error: Could not send") // named with its level, as a banner
+	if n := g.node(ui.RoleGroup, "Error: Could not send"); string(g.sem.Text(n.Value)) != "no connection" { // named and valued as a banner
+		t.Errorf("the toast's value is %q, want its message", g.sem.Text(n.Value))
+	}
 	b := g.node(ui.RoleButton, "Copy this message").Bounds
 	if b[2]-b[0] > 1.5*(b[3]-b[1]) {
 		t.Errorf("the icon action is %v: want a compact icon button", b)

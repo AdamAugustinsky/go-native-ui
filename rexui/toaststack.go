@@ -138,6 +138,7 @@ func (s *ToastStack) Toast(id uint64, o StackToastOpts) StackToastSignal {
 	c.NextAxis(ui.AxisX)
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(bannerName(c, o.Level%NumBannerLevels, o.Title)) // "Error: …", as a banner's
+	c.NextSemValueBytes(base.StrBytes(o.Message))                  // and its message as its value
 	sig.ID = c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|ui.DrawShadow|ui.Hoverable, key, nil)
 	c.Push(sig.ID)
 	lv := o.Level % NumBannerLevels
