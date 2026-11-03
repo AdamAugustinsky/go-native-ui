@@ -21,9 +21,13 @@ const fl = theme.Floating
 type chrome struct {
 	fld    Field
 	meshes []*Mesh
+	round  Mesh // the field in a rounded window (RoundedBackground)
 }
 
-var _ theme.Chrome = (*chrome)(nil)
+var (
+	_ theme.Chrome        = (*chrome)(nil)
+	_ theme.RoundedChrome = (*chrome)(nil)
+)
 
 // ensure builds the background field for the window's size and the theme's
 // mix; it is a no-op while neither has changed.
@@ -65,6 +69,32 @@ func (ch *chrome) Background(c *ui.Context, r *theme.Resolved) {
 	w, h := c.Size()
 	theme.At(c, 0, 0, float32(w), float32(h))
 	c.Mesh(fl, keyBG, ch.fld.cells[:ch.fld.ncells])
+}
+
+// RoundedBackground is Background in a window with corners radius pixels
+// round: over a backdrop the scrim takes the corners; otherwise the field is
+// laid as a surface's mesh is, its corner cells 2·radius across and rounded,
+// so the corners are the field's own colours.
+func (ch *chrome) RoundedBackground(c *ui.Context, r *theme.Resolved, radius float32) {
+	if radius <= 0 {
+		ch.Background(c, r)
+		return
+	}
+	ch.ensure(c, r)
+	w, h := c.Size()
+	W, H := float32(w), float32(h)
+	if r.Backdrop {
+		theme.At(c, 0, 0, W, H)
+		sc := ch.fld.colors().scrim
+		c.NextBG(tone(r, sc[0], sc[1], scrimAlphaLight, scrimAlphaDark, 1))
+		c.NextRadius(radius)
+		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(keyBG, 1<<20), nil)
+		return
+	}
+	radius = min(radius, W/4, H/4) // the corner cells must fit
+	ch.round.update(&ch.fld, [4]float32{0, 0, W, H}, radius, true)
+	theme.At(c, 0, 0, W, H)
+	c.Mesh(fl, keyBG, ch.round.fillQuads(0, 0))
 }
 
 // SurfaceShadow builds the two shadow layers of a pane: a tight one and an

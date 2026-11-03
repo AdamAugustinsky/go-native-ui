@@ -470,6 +470,7 @@ type Mesh struct {
 	valid     bool
 	rect      [4]float32
 	rad       float32
+	field     bool // the field's colours, not the glass's
 	w, h      int
 	k, t      float32
 	n         int
@@ -502,11 +503,16 @@ func cut(dst *[maxMeshLines]float32, lo, hi, rad float32, nodes []float32) int {
 }
 
 // Update makes m the mesh of rect r (pixel rectangle, corner radius rad).
-func (m *Mesh) Update(f *Field, r [4]float32, rad float32) {
-	if m.valid && m.rect == r && m.rad == rad && m.w == f.w && m.h == f.h && m.k == f.k && m.t == f.t {
+func (m *Mesh) Update(f *Field, r [4]float32, rad float32) { m.update(f, r, rad, false) }
+
+// update is Update in the unfocused glass's colours, or (field) in the
+// field's own: the window's background in rounded corners.
+func (m *Mesh) update(f *Field, r [4]float32, rad float32, field bool) {
+	if m.valid && m.rect == r && m.rad == rad && m.w == f.w && m.h == f.h && m.k == f.k && m.t == f.t && m.field == field {
 		return
 	}
-	m.valid, m.rect, m.rad, m.w, m.h, m.k, m.t = true, r, rad, f.w, f.h, f.k, f.t
+	m.valid, m.rect, m.rad, m.w, m.h, m.k, m.t, m.field = true, r, rad, f.w, f.h, f.k, f.t, field
+	refW := float32(f.w) / f.k
 	m.fillValid = false
 	var xs, ys [maxMeshLines]float32
 	nxs := cut(&xs, r[0], r[2], rad, f.nodesX[:f.nx])
@@ -515,7 +521,11 @@ func (m *Mesh) Update(f *Field, r [4]float32, rad float32) {
 	for j := 0; j < nys; j++ {
 		yr := f.yRef(ys[j])
 		for i := 0; i < nxs; i++ {
-			grid[j][i] = f.fillAt(xs[i]/f.k, yr)
+			if field {
+				grid[j][i] = f.colors().fieldAt(f.t, xs[i]/f.k, refW-xs[i]/f.k, yr)
+			} else {
+				grid[j][i] = f.fillAt(xs[i]/f.k, yr)
+			}
 		}
 	}
 	m.n = 0

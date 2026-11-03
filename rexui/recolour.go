@@ -61,6 +61,12 @@ type WindowOpts struct {
 	// light and in dark: Rex's scrim alone lets a busy desktop wash out what
 	// sits on the field. Zero lays none.
 	Cover [2]float32
+	// Radius rounds the window's corners, in points: a borderless panel's
+	// (platform.Panel.Radius). The field, or the scrim and Cover over the
+	// material, take the corners, and without the material a hairline
+	// (theme.PaneHairline) edges them, as the system's material is edged.
+	// Zero: square, the field filling the window.
+	Radius float32
 }
 
 // BeginWindow lays the theme's field under everything the window builds and
@@ -77,14 +83,27 @@ func BeginWindow(k *base.Kit, o WindowOpts) {
 	c, r := k.Context(), k.Theme()
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.Push(c.Box(base.Floating, "window"))
-	if r.Chrome != nil {
+	w, h := c.Size()
+	rad := float32(0)
+	if o.Radius > 0 {
+		rad = k.Pt(o.Radius)
+	}
+	if rc, ok := r.Chrome.(theme.RoundedChrome); ok && rad > 0 {
+		rc.RoundedBackground(c, r, rad)
+	} else if r.Chrome != nil {
 		r.Chrome.Background(c, r)
 	}
 	if r.Backdrop && o.Cover != ([2]float32{}) {
-		w, h := c.Size()
 		theme.At(c, 0, 0, float32(w), float32(h))
 		c.NextBG(theme.WithAlpha(r.Colors[theme.Field], theme.Lerp(o.Cover[0], o.Cover[1], r.T)))
+		c.NextRadius(rad)
 		c.Box(base.Floating|ui.DrawBackground, "field over glass")
+	}
+	if rad > 0 && !r.Backdrop {
+		theme.At(c, 0, 0, float32(w), float32(h))
+		c.NextBorder(r.Colors[theme.PaneHairline], r.Lines.Hairline)
+		c.NextRadius(rad)
+		c.Box(base.Floating|ui.DrawBorder, "edge")
 	}
 	c.Pop()
 	c.NextSize(ui.Pct(1), ui.Pct(1))

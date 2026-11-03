@@ -60,6 +60,16 @@ type Chrome interface {
 	Titlebar(c *ui.Context, r *Resolved, t Titlebar) TitlebarResult
 }
 
+// RoundedChrome is a Chrome whose background can take a window's rounded
+// corners (a borderless panel's, platform.Panel.Radius): rexui.BeginWindow
+// with a WindowOpts.Radius calls it in place of Background.
+type RoundedChrome interface {
+	// RoundedBackground builds Background inside a rounded rectangle the
+	// window's size, its corners radius pixels round: the field, or the
+	// scrim over the system's material.
+	RoundedBackground(c *ui.Context, r *Resolved, radius float32)
+}
+
 // Surface describes one surface (a pane, a card) for Chrome. The caller sets
 // Focus and Opacity every frame.
 type Surface struct {

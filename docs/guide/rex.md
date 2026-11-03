@@ -74,7 +74,9 @@ forgets that check (`rexui.HasMaterial(w)` says whether the window has one).
 Then lay the field under the window's content with `rexui.BeginWindow`, and
 close it with `EndWindow`. Rex's scrim alone lets a busy desktop wash out
 what sits on the field, so give `WindowOpts.Cover` some of the field's colour
-over the material (A3 uses 0.72 in light and 0.64 in dark):
+over the material (A3 uses 0.72 in light and 0.64 in dark). A borderless
+panel with rounded corners (`platform.Panel.Radius`) gives the same radius
+to `WindowOpts.Radius`, and the field takes its corners:
 
 ```go rexui/recolour.go
 func BeginWindow(k *base.Kit, o WindowOpts) {

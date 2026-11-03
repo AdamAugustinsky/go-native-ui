@@ -1449,7 +1449,7 @@ So a partial frame drawn into a retained back buffer and copied to the drawable 
 
 **Why.** Adam, 2026-11-02: generic UI belongs in go-native-ui; the apps' copies had already drifted (A3's micro duration 0.15 against Zap's 0.1, its ⌥ missing on Windows, Zap's ⌘ on every OS, two grid lints 25 lines apart with the same hole).
 
-**Not done.** The favicon normaliser (A3's `favicon` package) stays in the app: it is an HTML/ICO fetcher, not an image codec. `BeginWindow` has no rounded variant without the material (HyperPedia's panels draw the field's corners themselves). Zap and HyperPedia move onto these in a later lane.
+**Not done.** The favicon normaliser (A3's `favicon` package) stays in the app: it is an HTML/ICO fetcher, not an image codec. Zap and HyperPedia move onto these in a later lane. `WindowOpts.Radius` (2026-11-03, HyperPedia's lane) is the rounded variant a borderless panel needs: the field in rounded corners through `theme.RoundedChrome` (Rex lays it as a surface's mesh, in the field's colours) edged by a hairline, or the scrim and `Cover` rounded over the material (`TestBeginWindowRounded`).
 
 **Tested.** `format` (each text in both languages), `TestKeyTextPerPlatform`, `TestSpacingGridOffenders` (the scaled-literal hole), `TestToastStackStacksInItsCorner`, `TestPaneFocusFollowsPresses`, `TestDarkCastTintsOpaqueGreys`.
 
