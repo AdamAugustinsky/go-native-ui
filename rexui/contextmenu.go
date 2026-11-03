@@ -91,6 +91,64 @@ func ContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item 
 	return 0, false
 }
 
+// MenuAt is ContextMenu for a menu the app opens itself, at (x, y) in window
+// pixels, in the frame open is true: a component whose right-click the app
+// tells apart itself (Zap's message bubble, which holds links, reactions and
+// media, so the bubble's own box is rarely the one clicked). It is native
+// where the app has native menus and drawn elsewhere, with ContextMenu's
+// keys, and its items are tidied the same way (TidyMenu). id is a box built
+// in every frame while the menu may be open (the screen's own): the result
+// comes back to it. Call it in every such frame. It reports the chosen item,
+// and closed once the menu has gone (chosen, dismissed, or never opened
+// because build made no items), so the app can stop marking what the menu
+// is about.
+//
+//	if right { v.menuOpen, v.at = true, pointer }
+//	if v.menuOpen {
+//		item, ok, closed := rexui.MenuAt(k, screenID, right, v.at[0], v.at[1], v.items)
+//		if ok { v.act(item) }
+//		v.menuOpen = !closed
+//	}
+func MenuAt(k *base.Kit, id ui.ID, open bool, x, y float32, build func(items *[]ui.MenuItem)) (item int, ok, closed bool) {
+	c := k.Context()
+	if id == 0 {
+		return 0, false, true
+	}
+	if c.NativeMenus() {
+		if open {
+			items := k.MenuScratch()
+			build(items)
+			TidyMenu(items)
+			if len(*items) == 0 || !c.ContextMenu(id, x, y, *items) {
+				return 0, false, true
+			}
+		}
+		item, out := c.ContextMenuResult(id)
+		return item, out == ui.MenuChosen, out != ui.MenuPending
+	}
+	pop := k.Popup()
+	owner := c.KeyOf(id)
+	if open && !k.Disabled() {
+		items := k.MenuScratch()
+		build(items)
+		TidyMenu(items)
+		if len(*items) == 0 {
+			return 0, false, true
+		}
+		k.OpenPopup(base.PopupItems, owner, 0, [4]float32{x, y, x, y})
+	}
+	if !pop.OpenBy(base.PopupItems, owner) {
+		return 0, false, true
+	}
+	k.KeepPopup()
+	cm := contextMenu{k: k, chosen: -1}
+	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, ui.PlaceBelow, ui.HashString(owner, "menuat"))
+	if cm.chosen >= 0 {
+		return cm.item, true, true
+	}
+	return 0, false, !pop.OpenBy(base.PopupItems, owner)
+}
+
 // DropdownMenu is the menu of a button (T3 Code's and the web's dropdown
 // menus, the composer's "+" and "…"): a click on the component with root box
 // id (a button's Signal.ID), or Enter or Space on it, opens a drawn menu below
