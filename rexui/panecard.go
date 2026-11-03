@@ -45,6 +45,24 @@ type PaneCardOpts struct {
 	Full float32
 	// Still draws the card as the pane in use at once: a still render.
 	Still bool
+	// Flat, when not nil, draws the card as a web app's region rather than
+	// Rex's floating glass (FlatPane): the app lays its flat cards edge to
+	// edge, with no inset or gutter.
+	Flat *FlatPane
+}
+
+// FlatPane is a pane card drawn flat, the way a web app draws its sidebar
+// and its main column: Fill from edge to edge, square, with no shadow,
+// glass, rim or focus dimming, and a hairline in Line along Sides (a
+// sidebar's right edge). The card still clips its content, takes the focus
+// presses and names its group.
+type FlatPane struct {
+	// Fill is the region's colour (None: the window's field shows).
+	Fill Tint
+	// Line is the hairline's colour, drawn the theme's border width inside
+	// the card along Sides (none when Sides is 0 or Line is None).
+	Line  Tint
+	Sides ui.Sides
 }
 
 // PaneFocus is the pane card in use for an app that lays its cards out in
@@ -87,6 +105,7 @@ type PaneCard struct {
 	// drawn: the surface was built; sweep: the content is laid at Full and
 	// clipped
 	drawn, sweep bool
+	flat         *FlatPane
 }
 
 var paneFocusBase = ui.HashString(base.KeyRoot, "rexui/pane focus")
@@ -120,9 +139,12 @@ func BeginPaneCard(k *base.Kit, o PaneCardOpts) PaneCard {
 		c.NextRole(ui.RoleGroup)
 		c.NextSemName(o.Name)
 	}
+	if o.Flat != nil {
+		flags |= ui.Clip | ui.Clickable // what Rex's surface box is
+	}
 	outer := c.BoxKeyed(flags, key, nil)
 	c.Push(outer)
-	pc := PaneCard{ID: outer}
+	pc := PaneCard{ID: outer, flat: o.Flat}
 	rr := c.Rect(outer)
 	w, h := rr[2]-rr[0], rr[3]-rr[1]
 	target := o.Rest
@@ -133,7 +155,13 @@ func BeginPaneCard(k *base.Kit, o PaneCardOpts) PaneCard {
 	if o.Still || reduced(k) {
 		rate = theme.Instant
 	}
-	if r.Chrome != nil && w > 0 && h > 0 {
+	if f := o.Flat; f != nil {
+		if fill := f.Fill.RGBA(r); fill != 0 {
+			theme.At(c, 0, 0, w, h)
+			c.NextBG(fill)
+			c.Box(base.Floating|ui.DrawBackground, "flat fill")
+		}
+	} else if r.Chrome != nil && w > 0 && h > 0 {
 		pc.surf = theme.Surface{Key: ui.KeyN(paneFocusBase, uint64(key)+1), Slot: slot, Rect: [4]float32{0, 0, w, h},
 			Origin: [2]float32{rr[0], rr[1]}, Focus: c.AnimateValue(ui.KeyN(paneFocusBase, uint64(key)), target, rate), Opacity: 1, Top: true}
 		r.Chrome.SurfaceShadow(c, r, pc.surf)
@@ -163,6 +191,15 @@ func EndPaneCard(k *base.Kit, pc *PaneCard) {
 	}
 	if pc.drawn {
 		r.Chrome.EndSurface(c, r, pc.surf, pc.kg)
+	}
+	if f := pc.flat; f != nil && f.Sides != 0 {
+		if line := f.Line.RGBA(r); line != 0 {
+			rr := c.Rect(pc.ID)
+			theme.At(c, 0, 0, rr[2]-rr[0], rr[3]-rr[1])
+			c.NextBorder(line, r.Px.BorderW)
+			c.NextBorderSides(f.Sides)
+			c.Box(base.Floating|ui.DrawBorder, "flat line")
+		}
 	}
 	c.Pop() // the card
 }
