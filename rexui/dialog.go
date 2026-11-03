@@ -17,9 +17,11 @@ type DialogOpts struct {
 	// (0: the plain titlebar's height, 32: under the titlebar, as a sheet is
 	// attached to it). Pass the toolbar's height under a taller toolbar.
 	Top float32
-	// Dim lays black at this opacity over the window behind the sheet (0:
-	// none, as behind a macOS sheet; Zap's floating panels take 0.16),
-	// fading in with the sheet; a click on it is Cancel when DimCancels.
+	// Dim is what covers the window behind the sheet, fading in with it: 0
+	// is DialogLook.Scrim (T3 Code's dialog backdrop), a positive value lays
+	// black at that opacity instead (Zap's floating panels take 0.16), and a
+	// negative one leaves the window bare, as behind a macOS sheet. A click
+	// on it is Cancel when DimCancels.
 	Dim        float32
 	DimCancels bool
 }
@@ -58,9 +60,15 @@ type DialogRecipe struct {
 	// opacity as it opens. Under Reduce Transparency, and where a renderer
 	// has no blur, the sheet is Fill, opaque.
 	Blur BackdropRecipe
-	// Elevation is the sheet's elevation (theme.ElevModal: its edge and
-	// shadow).
+	// Elevation is the sheet's elevation (theme.ElevModal), which the
+	// floating surface's edge and shadows (OverlayLook) now draw; it is kept
+	// for apps that read it.
 	Elevation theme.Elevation
+	// Scrim covers the window behind a dialog (DialogOpts.Dim 0): T3 Code's
+	// dialog-backdrop, the window's background at 60 % (64 % in dark) over a
+	// 4 px blur of it. Under Reduce Transparency it is the background at
+	// that opacity, without the blur.
+	Scrim BackdropRecipe
 }
 
 // DialogLook is the dialogs' recipe.
@@ -72,6 +80,7 @@ var DialogLook = DialogRecipe{
 	Blur: BackdropRecipe{Sigma: 16, Down: 4, Tint: Of(theme.Raised), Mix: [2]float32{0.86, 0.86},
 		Saturation: [2]float32{1.4, 1.2}},
 	Elevation: theme.ElevModal,
+	Scrim:     BackdropRecipe{Sigma: 4, Down: 2, Tint: Of(theme.Window), Mix: [2]float32{0.60, 0.64}, Saturation: [2]float32{1, 1}},
 }
 
 var dialogBase = ui.HashString(base.KeyRoot, "rexui/dialog")
@@ -103,8 +112,10 @@ type Dialog struct {
 }
 
 // BeginDialog starts a modal dialog while *open is true: a sheet hanging
-// from the top of the window, centred. The window behind is inert and
-// does not dim, as it does not behind a macOS sheet. Build
+// from the top of the window, centred, on the floating surface the popovers
+// and menus share (OverlayLook's edge and shadows). The window behind is
+// inert and covered by DialogLook.Scrim, unless DialogOpts.Dim says
+// otherwise. Build
 // its content, then its actions, then call EndDialog:
 //
 //	d := rexui.BeginDialog(k, "rename", &v.renaming, rexui.DialogOpts{Title: "Rename “Report”"})
@@ -155,11 +166,17 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 	c.NextRole(ui.RoleDialog)
 	c.NextSemName(o.Title)
 	c.BeginOverlay(okey, ui.OverlayModal, [4]float32{0, 0, float32(w), float32(h)}, ui.PlaceCenter)
-	if o.Dim > 0 {
+	if o.Dim >= 0 {
 		// the dim, then the sheet's flow in a floating box after it, which
 		// draws over it (floating boxes draw in the order they are built,
 		// after the flow)
-		if DimBackdrop(k, "dim", o.Dim) && o.DimCancels {
+		var hit bool
+		if o.Dim > 0 {
+			hit = DimBackdrop(k, "dim", o.Dim)
+		} else {
+			hit = dialogScrim(k, t)
+		}
+		if hit && o.DimCancels {
 			d.Cancelled = true
 			*open = false
 			c.RequestFrame()
@@ -185,22 +202,7 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.Box(0, "left")
 
-	e := &r.Elevations[rc.Elevation%theme.NumElevations]
-	var sh [2]ui.Shadow
-	for i, l := range e.Shadows {
-		if l.Blur > 0 {
-			sh[i] = ui.Shadow{OffY: l.Y, Sigma: l.Blur, Color: l.Color(r.Colors[theme.Shadow], r.T)}
-		}
-	}
-	flags := ui.DrawBackground
-	if sh[0].Sigma > 0 {
-		c.NextShadows(sh[0], sh[1])
-		flags |= ui.DrawShadow
-	}
-	if e.Edge > 0 {
-		c.NextBorder(r.Colors[e.EdgeRole], e.Edge)
-		flags |= ui.DrawBorder
-	}
+	flags := ui.DrawBackground | NextOverlaySurface(k, r.Radii.Sheet)
 	c.NextBG(rc.Fill.RGBA(r))
 	if !r.Settings.ReduceTransparency {
 		// the glass grows with the sheet, never sharper than one texel of
@@ -211,7 +213,6 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 		b.Base = rc.Fill.RGBA(r) | 0xFF // what it sees over a window's material
 		c.NextBackdrop(b)
 	}
-	c.NextRadius(r.Radii.Sheet)
 	k.NextPadding(rc.PadX, rc.PadTop, rc.PadX, rc.PadBottom)
 	k.NextGap(r.Space.ControlGap / k.Scale())
 	wpt := o.Width
@@ -307,6 +308,25 @@ func EndDialog(k *base.Kit, d *Dialog) {
 	}
 	c.EndOverlay()
 	c.PopOpacity()
+}
+
+// dialogScrim is DialogLook.Scrim over the whole of the current parent at
+// t of its opacity, under what is built after it as floating boxes; it
+// reports a click on it.
+func dialogScrim(k *base.Kit, t float32) bool {
+	c, r := k.Context(), k.Theme()
+	w, h := c.Size()
+	theme.At(c, 0, 0, float32(w), float32(h))
+	rc := &DialogLook.Scrim
+	b := rc.Backdrop(k)
+	c.NextBG(theme.WithAlpha(b.Tint, b.Mix*t)) // what shows where there is no blur
+	if !r.Settings.ReduceTransparency {
+		b.Mix *= t
+		b.Sigma = max(b.Sigma*t, b.Down)
+		c.NextBackdrop(b)
+	}
+	c.NextAuditExempt(ui.AuditCovered.Mask())
+	return c.Signal(c.Box(base.Floating|ui.Clickable|ui.DrawBackground, "scrim")).Clicked
 }
 
 // DimBackdrop lays black at opacity dim (the opacity stack's too) over the

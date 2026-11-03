@@ -388,6 +388,7 @@ func TestBigOutline(t *testing.T) {
 // that overflows shows its bar at rest, in room beside its rows; with
 // overlay scrollers the bar is hidden at rest and the rows take the width.
 func TestListFollowsScrollerStyle(t *testing.T) {
+	followSystemScrollers(t)
 	v := &listView{n: 40, style: rexui.ListFullWidth}
 	v.st.Sel.Reserve(v.n)
 	legacy := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
@@ -428,6 +429,7 @@ func TestListFollowsScrollerStyle(t *testing.T) {
 // it, at the bar's left edge; the corner above the bar is AppKit's corner
 // view (#262626 on the dark list), and the bar's knob sits in its slot.
 func TestTableHeaderCornerAboveALegacyBar(t *testing.T) {
+	followSystemScrollers(t)
 	var st base.TableState
 	cols := []base.Column{{ID: 1, Title: "Name", Width: 200, Fill: true}, {ID: 2, Title: "Size", Width: 80}}
 	legacy := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
@@ -487,6 +489,7 @@ func TestTableHeaderCornerAboveALegacyBar(t *testing.T) {
 // (or short) list is not scrollable, has no scroll bar even with legacy
 // scrollers, and still shows its stripes.
 func TestFillerStripesAreNotContent(t *testing.T) {
+	followSystemScrollers(t)
 	for _, n := range []int{0, 3} {
 		v := &listView{n: n, striped: true}
 		v.st.Sel.Reserve(max(n, 1))
@@ -621,6 +624,7 @@ func TestOutlineCollapseReportsTheSelectionChange(t *testing.T) {
 // macOS 27.2 26B5101f: legacy #7A7A7A on white and #9F9F9F on #1E1E1E,
 // overlay #808080 and #9A9A9A).
 func TestListScrollKnobMatchesAppKit(t *testing.T) {
+	followSystemScrollers(t)
 	for _, tc := range []struct {
 		mode   theme.Mode
 		legacy bool
@@ -671,6 +675,7 @@ func TestListScrollKnobMatchesAppKit(t *testing.T) {
 // edge, and what the header draws in the last column (here the sort mark of
 // a sorted, right-aligned column that fills the room) is inside its box.
 func TestTableHeaderAndRowsShareTheirWidth(t *testing.T) {
+	followSystemScrollers(t)
 	for _, legacyBars := range []bool{false, true} {
 		for _, style := range []rexui.ListStyle{rexui.ListFullWidth, rexui.ListInset} {
 			var st base.TableState

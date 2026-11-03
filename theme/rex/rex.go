@@ -27,6 +27,9 @@ func Theme() *theme.Theme {
 		Fonts:        fonts,
 		Motion:       motion,
 		SystemAccent: true,
+		// Rex's scroll views draw overlay bars, as T3 Code and the web apps
+		// it follows, even where the system shows legacy ones (D98).
+		OverlayScrollers: true,
 		// Rex's panes are circular arcs, not macOS's squircle: the corner of
 		// the reference screenshot's pane fits a circle of 10 pt to 0.27 px
 		// and a continuous corner only to 0.56 px (normal distance of the

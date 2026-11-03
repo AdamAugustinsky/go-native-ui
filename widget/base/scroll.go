@@ -40,6 +40,10 @@ type ScrollState struct {
 	// scroller style: they take no room and show while it scrolls (a strip
 	// that keeps its height, as upstream's chip rows).
 	Overlay bool
+	// Legacy keeps the system's legacy bars, when it shows them, in a theme
+	// whose views draw overlay bars (theme.Theme.OverlayScrollers): a view
+	// whose bar must always show.
+	Legacy bool
 
 	grab    float32
 	lastT   int64
@@ -220,9 +224,10 @@ func (k *Kit) VListBarRoom(label string, st *ScrollState) float32 {
 // legacyBars reports whether scroll bars are the legacy kind, always shown
 // beside the content, rather than overlay ones shown over it while scrolling.
 // It follows the system's setting live (theme.Settings.Scroller), unless the
-// view's are Overlay.
+// view's are Overlay or the theme's are (theme.Theme.OverlayScrollers, which
+// a view's Legacy declines).
 func (k *Kit) legacyBars(st *ScrollState) bool {
-	return k.r.Settings.Scroller == theme.ScrollerLegacy && !st.Overlay
+	return k.r.Settings.Scroller == theme.ScrollerLegacy && !st.Overlay && (st.Legacy || !k.r.OverlayScrollers)
 }
 
 // ScrollBar is the state and geometry of one bar of a scroll view, in pixels
@@ -330,15 +335,18 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 			onBar = true
 		}
 	}
-	// Overlay bars show while the view scrolls, then fade; the pointer on a
-	// bar that shows (to grab it) keeps it.
-	if active || dragging || onBar || now == 0 {
+	// Overlay bars show while the view scrolls and while the pointer is on
+	// it (a web scroll area's hover), then fade; the pointer on a bar that
+	// shows (to grab it) keeps it.
+	in := c.Input()
+	over := k.r.OverlayScrollers && in.Inside && in.MouseX >= or[0] && in.MouseX < or[2] && in.MouseY >= or[1] && in.MouseY < or[3]
+	if active || dragging || onBar || over || now == 0 {
 		st.lastT = now
 	}
 	target := float32(0)
 	switch {
-	case legacy || dragging:
-		target = 1
+	case legacy || dragging || over:
+		target = 1 // no wake: leaving the view is a frame, and the fade starts there
 	case now == 0 || now-st.lastT < scrollFadeNs:
 		target = 1
 		if now != 0 {

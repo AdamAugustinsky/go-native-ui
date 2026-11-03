@@ -16,7 +16,10 @@ const (
 	// BadgeStatus is a dot: a presence, a connection, a build.
 	BadgeStatus
 	// BadgeTag is a label: Caption 2 in the secondary label colour on a
-	// secondary fill capsule.
+	// secondary fill capsule. In a row too narrow for it, it gives way before
+	// its siblings (ui.Context.NextShrinkFirst) and ends its text with "…",
+	// down to BadgeRecipe.TagMin, so a title beside it keeps its text and a
+	// time or count after it is never squeezed.
 	BadgeTag
 
 	// NumBadgeVariants is the number of variants.
@@ -35,6 +38,10 @@ type BadgeOpts struct {
 	// row whose fill is Color needs a text that contrasts with it). The zero
 	// Tint keeps the variant's.
 	TextColor Tint
+	// Fill replaces a tag's fill (the zero Tint keeps the secondary fill).
+	Fill Tint
+	// MaxPt caps a tag's width in points (0: none); longer text ends in "…".
+	MaxPt float32
 	// Max is the largest count shown; above it the badge reads "Max+" (0:
 	// 99). BadgeCountN only.
 	Max int
@@ -54,6 +61,9 @@ type BadgeRecipe struct {
 	// Fill and Text are the colours per variant (a status has no text); Off
 	// and OffText are a disabled badge's, a colour and not an opacity.
 	Fill, Text, Off, OffText [NumBadgeVariants]Tint
+	// TagMin is the narrowest a tag shrinks to, in points: two letters and
+	// "…" in Caption 2 with its padding.
+	TagMin float32
 }
 
 // BadgeLook is the badges' recipe.
@@ -64,6 +74,7 @@ var BadgeLook = BadgeRecipe{
 	Text:    [NumBadgeVariants]Tint{Of(theme.OnAccent), None, Of(theme.Label2)},
 	Off:     [NumBadgeVariants]Tint{Of(theme.Fill1), Of(theme.Fill1), Of(theme.Fill3)},
 	OffText: [NumBadgeVariants]Tint{Of(theme.TextDisabled), None, Of(theme.TextDisabled)},
+	TagMin:  36,
 }
 
 // Badge builds a badge showing label: the text of a tag or a count that is
@@ -117,6 +128,9 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 			fillC = o.Color.RGBA(r)
 		}
 	}
+	if v == BadgeTag && o.Fill != (Tint{}) && !k.Disabled() {
+		fillC = o.Fill.RGBA(r)
+	}
 	if o.TextColor != (Tint{}) && !k.Disabled() && v != BadgeStatus && v != BadgeTag {
 		fg = o.TextColor
 	}
@@ -126,7 +140,19 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 		w = max(h, ui.CeilText(k.TextWidthBytes(st.Font, txt)+2*pt(sc, rc.PadX[v])))
 	}
 	key := ui.HashString(c.ParentKey(), "badge") // badges of one parent are told apart by their order
-	k.ApplySize(ui.Px(w), ui.Px(h))
+	tag := v == BadgeTag
+	if tag {
+		// a tag gives way first, to its minimum, and ends its text in "…"
+		if o.MaxPt > 0 {
+			w = min(w, pt(sc, o.MaxPt))
+		}
+		c.NextShrinkFirst()
+		c.NextMinSize(min(w, pt(sc, rc.TagMin)), 0)
+		k.ApplySize(ui.Px(w).Strict(0), ui.Px(h))
+		c.NextPadding(pt(sc, rc.PadX[v]), 0, pt(sc, rc.PadX[v]), 0)
+	} else {
+		k.ApplySize(ui.Px(w), ui.Px(h))
+	}
 	c.NextBG(fillC)
 	c.NextRadius(h / 2)
 	c.NextAxis(ui.AxisX)
@@ -147,11 +173,18 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 	// axes by the text's own rule. A box of the text's width and the font's line
 	// height, centred, leaves the text up to a pixel off: a snapped box a half
 	// pixel low.
-	c.NextSize(ui.Px(w), ui.Px(h))
+	flags := ui.DrawText
+	if tag {
+		// the padded capsule's width, after a narrow row shrank it
+		c.NextSize(ui.Grow(1), ui.Px(h))
+		flags |= ui.EllipsisOverflowX
+	} else {
+		c.NextSize(ui.Px(w), ui.Px(h))
+	}
 	c.NextAlign(ui.AlignCenter)
 	c.NextFont(st.Font)
 	c.NextTextColor(fg.RGBA(r))
-	c.BoxKeyed(ui.DrawText, ui.KeyN(key, 1), txt)
+	c.BoxKeyed(flags, ui.KeyN(key, 1), txt)
 	c.Pop()
 	return id
 }

@@ -29,6 +29,18 @@ type rig struct {
 	time  int64
 }
 
+// systemScrollers makes the rigs' Rex theme follow the system's scroller
+// style, as AppKit's views do, for the tests of legacy bars: Rex's own views
+// draw overlay bars (theme.Theme.OverlayScrollers).
+var systemScrollers bool
+
+// followSystemScrollers makes the rigs opened in t follow the system's
+// scroller style.
+func followSystemScrollers(t *testing.T) {
+	systemScrollers = true
+	t.Cleanup(func() { systemScrollers = false })
+}
+
 // newRig makes a rig in mode m with the system values sys (nil: the theme's
 // own) that builds build each frame, and runs three frames.
 func newRig(t *testing.T, m theme.Mode, sys *theme.SystemValues, build func(g *rig)) *rig {
@@ -51,7 +63,9 @@ func openRig(t *testing.T, m theme.Mode, sys *theme.SystemValues, build func(g *
 	c.Reserve(4096)
 	c.AtlasSync(&fakeui.Uploader{})
 	g := &rig{t: t, c: c, w: 1000, h: 400, scale: 2, build: build}
-	g.k = base.NewKit(c, ts, rex.Theme())
+	th := rex.Theme()
+	th.OverlayScrollers = !systemScrollers
+	g.k = base.NewKit(c, ts, th)
 	g.k.SetMode(m)
 	g.k.PinSystem(sys)
 	g.k.ReduceMotion = true

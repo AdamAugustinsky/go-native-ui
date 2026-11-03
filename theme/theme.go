@@ -71,6 +71,12 @@ type Theme struct {
 	// SystemAccent says the theme takes the system accent colour when the
 	// platform supplies one (Resolved.SetAccent); otherwise it ignores it.
 	SystemAccent bool
+	// OverlayScrollers gives the theme's scroll views overlay bars whatever
+	// the system's scroller style (Settings.Scroller): thin, over the
+	// content, shown while it scrolls and while the pointer is on the view,
+	// and faded at rest, as the web and T3 Code draw them. A view keeps the
+	// system's legacy bars with base.ScrollState.Legacy.
+	OverlayScrollers bool
 	// Corners is the shape of rounded corners; zero is the platform's.
 	Corners CornerCurve
 
@@ -155,6 +161,8 @@ type Resolved struct {
 	// Continuous says the corners are continuous, not circular (Theme.Corners
 	// resolved).
 	Continuous bool
+	// OverlayScrollers is Theme.OverlayScrollers.
+	OverlayScrollers bool
 	// Styles holds the text styles' fonts, indexed by TextStyle.
 	Styles [NumTextStyles]StyleFont
 	// Sizes holds the control sizes in pixels, indexed by Size.
@@ -298,6 +306,7 @@ func (t *Theme) Resolve(ts TextSystem, scale float32, mode Mode) Resolved {
 // macOS ones, lengths are scaled to pixels and the fonts created.
 func (t *Theme) resolveTokens(r *Resolved, ts TextSystem, scale float32) {
 	r.rolesBase, r.followSys, r.own, r.motion = t.Roles, t.SystemColors, t.Own, t.Motion
+	r.OverlayScrollers = t.OverlayScrollers
 	r.Continuous = t.Corners == CornersContinuous || t.Corners == CornersDefault && runtime.GOOS == "darwin"
 	if r.rolesBase[0] == (Colors{}) && r.rolesBase[1] == (Colors{}) {
 		r.rolesBase = Measured

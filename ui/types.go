@@ -349,6 +349,10 @@ type Shadow struct {
 	// Sigma is the gaussian blur sigma in pixels; 0 disables the layer.
 	Sigma float32
 	Color uint32 // RGBA8, 0xRRGGBBAA
+	// Spread grows the shadow's rectangle on every side before the blur, in
+	// pixels, and its corner radii with it (CSS box-shadow's spread): a
+	// negative spread keeps a long soft shadow under the box, not round it.
+	Spread float32
 }
 
 // Sides selects the edges of a box outline that DrawBorder draws. A corner

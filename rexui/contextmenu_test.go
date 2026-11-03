@@ -1,6 +1,7 @@
 package rexui_test
 
 import (
+	"strings"
 	"testing"
 
 	"gonativeui/rexui"
@@ -421,5 +422,28 @@ func TestDropdownMenu(t *testing.T) {
 	g.frame()
 	if !chosen || item != 3 {
 		t.Fatalf("by keyboard: chosen %v item %d, want 3", chosen, item)
+	}
+}
+
+// TidyMenu drops stray separators and sets the first destructive item apart.
+func TestTidyMenu(t *testing.T) {
+	sep := ui.MenuSeparator
+	items := []ui.MenuItem{sep, {ID: 1, Title: "Open"}, sep, sep, {ID: 2, Title: "Copy"}, {ID: 3, Title: "Delete", Destructive: true}, {ID: 4, Title: "Erase", Destructive: true}, sep}
+	rexui.TidyMenu(&items)
+	var got []string
+	for _, it := range items {
+		if it.Separator {
+			got = append(got, "-")
+		} else {
+			got = append(got, it.Title)
+		}
+	}
+	if want := "Open - Copy - Delete Erase"; strings.Join(got, " ") != want {
+		t.Errorf("tidied: %q, want %q", strings.Join(got, " "), want)
+	}
+	again := append([]ui.MenuItem(nil), items...)
+	rexui.TidyMenu(&again)
+	if len(again) != len(items) {
+		t.Errorf("a tidy menu changed: %d items, then %d", len(items), len(again))
 	}
 }

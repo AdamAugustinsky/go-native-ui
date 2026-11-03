@@ -56,6 +56,23 @@ func (b *box) give(a int) float32 {
 func (c *Context) shrinkLine(p *box, a int, excess float32) float32 {
 	boxes := c.boxes
 	frozen := func(cb *box) bool { return cb.lo[a] > 0 && cb.size[a] <= cb.lo[a] }
+	// the boxes that give way first (NextShrinkFirst), as far as they can
+	var first float32
+	for ch := p.first; ch != 0; ch = boxes[ch].next {
+		if cb := &boxes[ch]; cb.giveFirst && !cb.floatingOn(a) {
+			first += cb.give(a)
+		}
+	}
+	if first > 0 {
+		take := min(excess, first)
+		for ch := p.first; ch != 0; ch = boxes[ch].next {
+			if cb := &boxes[ch]; cb.giveFirst && !cb.floatingOn(a) {
+				got := take * cb.give(a) / first
+				cb.size[a] -= got
+				excess -= got
+			}
+		}
+	}
 	for round := 0; round < 8 && excess > 0.001; round++ {
 		var fix float32
 		for ch := p.first; ch != 0; ch = boxes[ch].next {

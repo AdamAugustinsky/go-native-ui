@@ -365,18 +365,14 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 	sig.Dismissed = ov.Dismissed
 
 	// the panel
-	el := &r.Elevations[theme.ElevRaised]
-	sh := el.Shadows[0]
 	c.NextBG(theme.Over(r.Colors[theme.Raised], r.Colors[theme.Window]|0xFF))
-	c.NextBorder(r.Colors[el.EdgeRole], r.Lines.Hairline)
-	c.NextRadius(pt(sc, rc.Radius))
-	c.NextShadow(ui.Shadow{OffY: sh.Y, Sigma: sh.Blur, Color: sh.Color(r.Colors[theme.Shadow], r.T)})
+	surf := NextOverlaySurface(k, pt(sc, rc.Radius)) // the floating surface
 	c.NextPad(pad)
 	c.NextAxis(ui.AxisY)
 	c.NextSize(ui.Px(w), ui.Children(1))
 	c.NextRole(ui.RoleList)
 	c.NextSemName(display)
-	panel := c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|ui.DrawShadow, ui.KeyN(okey, 1), nil)
+	panel := c.BoxKeyed(ui.DrawBackground|surf, ui.KeyN(okey, 1), nil)
 	sig.ID = panel
 	c.Push(panel)
 

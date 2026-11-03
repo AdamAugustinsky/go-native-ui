@@ -25,6 +25,7 @@ func OnContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (ite
 	if c.Signal(id).RightClicked {
 		items := k.MenuScratch()
 		build(items)
+		TidyMenu(items)
 		in := c.Input()
 		c.ContextMenu(id, in.MouseX, in.MouseY, *items)
 	}
@@ -68,6 +69,7 @@ func ContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item 
 		if s.RightClicked || keyed {
 			items := k.MenuScratch()
 			build(items)
+			TidyMenu(items)
 			at := c.Rect(id)
 			at = [4]float32{at[0], at[3], at[0], at[3]}
 			if !keyed {
@@ -119,6 +121,7 @@ func DropdownMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item
 			keyed = s.Activated
 			items := k.MenuScratch()
 			build(items)
+			TidyMenu(items)
 			k.OpenPopup(base.PopupItems, owner, 0, c.Rect(id))
 		}
 	}
@@ -126,7 +129,9 @@ func DropdownMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item
 		return 0, false
 	}
 	if !keyed && !c.Signal(id).Clicked {
-		build(k.MenuScratch()) // the items of this frame
+		items := k.MenuScratch()
+		build(items) // the items of this frame
+		TidyMenu(items)
 	}
 	k.KeepPopup()
 	cm := contextMenu{k: k, chosen: -1, keyed: keyed}
@@ -135,6 +140,39 @@ func DropdownMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item
 		return cm.item, true
 	}
 	return 0, false
+}
+
+// TidyMenu puts a menu's items in the shape T3 Code gives its menus (its
+// Electron menu builder, 2026-11-03): no separator first, last or after
+// another, and one before the first destructive item when it does not start
+// a group already, so Delete stands apart from what is safe to click. The
+// menus of ContextMenu, OnContextMenu and DropdownMenu are tidied this way;
+// submenus are the app's to shape. It works in place and allocates only to
+// grow the slice by the one separator it may add.
+func TidyMenu(items *[]ui.MenuItem) {
+	s := *items
+	out := s[:0]
+	for _, it := range s {
+		if it.Separator && (len(out) == 0 || out[len(out)-1].Separator) {
+			continue
+		}
+		out = append(out, it)
+	}
+	for len(out) > 0 && out[len(out)-1].Separator {
+		out = out[:len(out)-1]
+	}
+	for i, it := range out {
+		if !it.Destructive || it.Separator {
+			continue
+		}
+		if i > 0 && !out[i-1].Separator && !out[i-1].Header {
+			out = append(out, ui.MenuItem{})
+			copy(out[i+1:], out[i:])
+			out[i] = ui.MenuSeparator
+		}
+		break
+	}
+	*items = out
 }
 
 // MenuRecipe is the look of a drawn menu (ContextMenu off macOS): AppKit's
@@ -264,21 +302,21 @@ func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place 
 	}
 	show := k.ShowMnemonics()
 
-	// the panel: a menu's raised surface
-	el := &r.Elevations[theme.ElevRaised]
-	sh := el.Shadows[0]
+	// the panel: the floating surface the popovers and dialogs share,
+	// fading in from its anchor's side
 	c.NextBG(theme.Over(r.Colors[theme.Raised], r.Colors[theme.Window]|0xFF))
-	c.NextBorder(r.Colors[el.EdgeRole], r.Lines.Hairline)
-	c.NextRadius(pt(sc, rc.Radius))
-	c.NextShadow(ui.Shadow{OffY: sh.Y, Sigma: sh.Blur, Color: sh.Color(r.Colors[theme.Shadow], r.T)})
+	surf := NextOverlaySurface(k, pt(sc, rc.Radius))
 	c.NextPadding(pad, pad, pad, pad)
 	c.NextAxis(ui.AxisY)
 	c.NextSize(ui.Px(w), ui.Children(1))
 	c.NextRole(ui.RoleMenu)
-	c.NextFlags(ui.DrawBackground | ui.DrawBorder | ui.DrawShadow)
+	c.NextFlags(ui.DrawBackground | surf)
 	if items.model != nil {
 		c.NextSemName(items.model.Menus()[items.index].Title)
 	}
+	t, dx, dy := OverlayEnter(k, okey, place)
+	c.PushOpacity(t)
+	c.NextOffset(dx, dy)
 	os := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
 	if os.Dismissed {
 		if level == 0 {
@@ -486,6 +524,7 @@ func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place 
 		}
 	}
 	c.EndOverlay()
+	c.PopOpacity()
 	if level == 0 && m.chosen >= 0 {
 		if items.model != nil {
 			k.ChooseCommand(menu.ID(m.item))

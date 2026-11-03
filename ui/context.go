@@ -95,6 +95,7 @@ type boxAttrs struct {
 	anchor    Anchor     // NextAnchor: fixed holds the insets
 	lo, hi    [2]float32 // NextMinSize, NextMaxSize (0: none)
 	self      Cross      // NextAlignSelf: 1 + the Cross, 0 the parent's
+	giveFirst bool       // NextShrinkFirst: gives way before its siblings
 	nudge     [2]float32 // NextOffset: moved from its laid-out place
 
 	txt    core.Span // display text in the current frame's arena
@@ -231,6 +232,7 @@ type Context struct {
 	nextLo     [2]float32
 	nextHi     [2]float32
 	nextSelf   Cross // 1 + the Cross; 0 none
+	nextFirst  bool  // NextShrinkFirst
 	nextFlags  Flags
 	nextAudit  AuditMask  // the exemptions of the next box (NextAuditExempt)
 	nextCover  bool       // the next box is a cover (NextCover)
@@ -853,7 +855,7 @@ func (c *Context) resetStyles() {
 	c.nextStyles = 0
 	c.hasNextPos = false
 	c.nextAnchor, c.nextInset, c.nextNudge = AnchorNone, [2]float32{}, [2]float32{}
-	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
+	c.nextLo, c.nextHi, c.nextSelf, c.nextFirst = [2]float32{}, [2]float32{}, 0, false
 	c.nextFlags = 0
 	c.nextAudit = 0
 	c.nextCover = false
@@ -1043,8 +1045,8 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 		b.fixed = c.nextInset
 	}
 	c.nextAnchor, c.nextNudge = AnchorNone, [2]float32{}
-	b.lo, b.hi, b.self = c.nextLo, c.nextHi, c.nextSelf
-	c.nextLo, c.nextHi, c.nextSelf = [2]float32{}, [2]float32{}, 0
+	b.lo, b.hi, b.self, b.giveFirst = c.nextLo, c.nextHi, c.nextSelf, c.nextFirst
+	c.nextLo, c.nextHi, c.nextSelf, c.nextFirst = [2]float32{}, [2]float32{}, 0, false
 	c.recordSemantics(id)
 	return id
 }

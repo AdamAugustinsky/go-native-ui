@@ -710,3 +710,51 @@ func TestStrokesUseOneQuadPerSegment(t *testing.T) {
 		t.Fatalf("turning strokes allocate %v times", n)
 	}
 }
+
+// A row's title and its tag yield to the row's width in order: the tag
+// gives way first, ending in "…" down to its minimum, then the title; the
+// time after them keeps its width (A3's bot rows, whose tags ran past the
+// sidebar's edge).
+func TestTitleTagYieldsInOrder(t *testing.T) {
+	var name, tag, when ui.ID
+	width := float32(600)
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		c := g.c
+		c.NextSize(ui.Px(width), ui.Px(40))
+		c.NextAxis(ui.AxisX)
+		c.NextGap(6)
+		c.Push(c.Box(0, "row"))
+		name = rexui.Label(g.k, "Manager###n", rexui.LabelOpts{Style: rexui.TextSemibold, Truncate: true})
+		tag = rexui.Badge(g.k, "Gerente do Growth Loop", rexui.BadgeOpts{Variant: rexui.BadgeTag})
+		g.k.NextWidth(ui.Grow(1))
+		g.k.Spacer()
+		when = rexui.Label(g.k, "18h###w", rexui.LabelOpts{})
+		c.Pop()
+	})
+	w := func(id ui.ID) float32 { r := g.c.Rect(id); return r[2] - r[0] }
+	nameW, tagW, whenW := w(name), w(tag), w(when)
+	min := rexui.BadgeLook.TagMin * g.scale
+	for _, tc := range []struct {
+		width             float32
+		nameFull, tagFull bool
+	}{
+		{600, true, true},
+		{nameW + whenW + 12 + (tagW+min)/2, true, false},
+		{nameW/2 + whenW + 12 + min, false, false},
+	} {
+		width = tc.width
+		g.frames(2)
+		if got := w(when); got != whenW {
+			t.Errorf("at %v px the time is %v wide, want %v", tc.width, got, whenW)
+		}
+		if got := w(name); (got == nameW) != tc.nameFull || got <= 0 {
+			t.Errorf("at %v px the title is %v wide of %v: full %v", tc.width, got, nameW, tc.nameFull)
+		}
+		if got := w(tag); (got == tagW) != tc.tagFull || got < min-0.5 {
+			t.Errorf("at %v px the tag is %v wide of %v (min %v): full %v", tc.width, got, tagW, min, tc.tagFull)
+		}
+		if r := g.c.Rect(when); r[2] > tc.width+0.5 {
+			t.Errorf("at %v px the time ends at %v, past the row", tc.width, r[2])
+		}
+	}
+}

@@ -451,6 +451,17 @@ func (c *Context) NextMinSize(w, h float32) { c.nextLo = [2]float32{w, h} }
 //	c.NextMaxSize(e.Pt(680), 0)
 func (c *Context) NextMaxSize(w, h float32) { c.nextHi = [2]float32{w, h} }
 
+// NextShrinkFirst makes the next box give way before its siblings when a
+// row or column is too small for its children: the excess is taken from the
+// boxes marked so (each as far as its strictness and NextMinSize let it, in
+// proportion to what it can give) before the others shrink at all, as a
+// CSS flex-shrink far larger than its siblings'. A title's tag that
+// truncates before the title does:
+//
+//	c.NextShrinkFirst()
+//	c.NextMinSize(e.Pt(36), 0)
+func (c *Context) NextShrinkFirst() { c.nextFirst = true }
+
 // NextAlignSelf places the next box across its parent's axis as a, in place
 // of the parent's NextCross for its children: CSS's align-self. One child at
 // the end of a row whose others are centred, without a wrapper box.

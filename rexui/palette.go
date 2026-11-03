@@ -209,14 +209,10 @@ func BeginPalette(k *base.Kit, label string, st *PaletteState, o PaletteOpts) (P
 	c.NextPadding(pad, pad, pad, pad)
 	c.NextGap(k.Pt(rc.Gap))
 	c.NextBG(rc.Panel.RGBA(r) | 0xFF)
-	c.NextRadius(k.Pt(rc.Radius))
-	c.NextBorder(rc.Edge.RGBA(r), r.Lines.Hairline)
-	el := &r.Elevations[theme.ElevRaised]
-	sh := el.Shadows[0]
-	c.NextShadow(ui.Shadow{OffY: sh.Y, Sigma: sh.Blur, Color: sh.Color(r.Colors[theme.Shadow], r.T)})
+	surf := NextOverlaySurface(k, k.Pt(rc.Radius)) // the floating surface, with the palette's radius
 	c.NextRole(ui.RoleDialog)
 	c.NextSemName(display)
-	p.panel = c.BoxKeyed(base.Floating|ui.DrawBackground|ui.DrawBorder|ui.DrawShadow|ui.Clickable, ui.KeyN(key, 2), nil)
+	p.panel = c.BoxKeyed(base.Floating|ui.DrawBackground|surf|ui.Clickable, ui.KeyN(key, 2), nil)
 	c.Push(p.panel)
 
 	c.NextFieldCommander(&st.Nav, "")

@@ -61,6 +61,11 @@ type PopoverOpts struct {
 	NoPad bool
 	// Label is the accessible name of the popover.
 	Label string
+	// Arrow draws NSPopover's look: an arrow pointing at the anchor, the
+	// 20 pt radius and the shaded fill. Without it the popover is the
+	// floating surface the menus and pickers share (OverlayLook, T3 Code's
+	// popup), PopoverRecipe.Offset from its anchor.
+	Arrow bool
 }
 
 // PopoverRecipe is the look of popovers: an NSPopover on macOS 27.2, measured
@@ -92,6 +97,9 @@ type PopoverRecipe struct {
 	// along its edge, in points: the arrow stays on the straight part of the
 	// edge, clear of the corner.
 	ArrowInset float32
+	// Offset is how far a popover without an arrow is from its anchor, in
+	// points (T3 Code's popups' side offset).
+	Offset float32
 	// Fill is the body: the raised surface (Raised) with Shade laid over it
 	// (#F2F2F2 over white, #2D2D2D over the dark window, measured: a popover's
 	// material is a little off the surface it floats above). Edge is the 1 px
@@ -103,7 +111,7 @@ type PopoverRecipe struct {
 // PopoverLook is the popovers' recipe.
 var PopoverLook = PopoverRecipe{
 	Width: 280, Pad: 16, Radius: 20,
-	ArrowH: 11, Gap: 2, TipR: 2, Flare: 2.5, ArrowInset: 36,
+	ArrowH: 11, Gap: 2, TipR: 2, Flare: 2.5, ArrowInset: 36, Offset: 6,
 	Fill: Of(theme.Raised), Shade: OfAlpha(theme.Label, 0.051, 0.015), Edge: OfAlpha(theme.Shadow, 0.025, 0.08),
 }
 
@@ -194,8 +202,9 @@ func popoverSide(want PopoverEdge, a [4]float32, need, W, H float32) PopoverEdge
 //		v.open = !p.Dismissed
 //	}
 //
-// The popover is not animated (it appears and goes at once), so Reduce Motion
-// changes nothing and an idle window draws no frames.
+// The popover fades in from its anchor's side over OverlayLook.Enter (OverlayEnter;
+// a fade without travel under Reduce Motion), then draws no frames while
+// idle; it goes at once when the app stops building it.
 func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) Popover {
 	c, r := k.Context(), k.Theme()
 	rc := &PopoverLook
@@ -213,6 +222,9 @@ func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) P
 	surfW := pt(sc, width)
 	arrowRoom := pt(sc, rc.ArrowH+rc.Gap)
 	radius := pt(sc, rc.Radius)
+	if !o.Arrow { // the shared floating surface, Offset from the anchor
+		arrowRoom, radius = pt(sc, rc.Offset), pt(sc, OverlayLook.Radius)
+	}
 	hair := r.Lines.Hairline
 	W, H := c.Size()
 
@@ -295,8 +307,10 @@ func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) P
 		dismiss = ui.DismissApplication
 	}
 	c.NextOverlay(ui.OverlayOpts{Dismiss: dismiss})
+	t, dx, dy := OverlayEnter(k, okey, place)
+	c.PushOpacity(t)
 	os := c.BeginOverlay(okey, ui.OverlayPopup, a, place)
-	pop := Popover{PopoverSignal{Edge: edge}}
+	pop := Popover{PopoverSignal: PopoverSignal{Edge: edge}}
 	switch o.Behavior {
 	case PopoverTransient:
 		pop.Dismissed = os.Dismissed || !c.Input().Focused
@@ -308,18 +322,31 @@ func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) P
 	}
 
 	fill := rc.fill(r)
+	flags := ui.DrawBackground | ui.DrawBorder
+	if o.Arrow {
+		c.NextBorder(theme.Over(rc.Edge.RGBA(r), fill), hair) // opaque: the ring is a shade of the fill
+		c.NextRadius(radius)
+		if sa, sb := OverlayLook.shadows(k); sa.Sigma > 0 {
+			c.NextShadows(sa, sb)
+			flags |= ui.DrawShadow
+		}
+	} else {
+		fill = rc.Fill.RGBA(r) | 0xFF
+		flags = ui.DrawBackground | NextOverlaySurface(k, radius)
+	}
 	c.NextBG(fill)
-	c.NextBorder(theme.Over(rc.Edge.RGBA(r), fill), hair) // opaque: the ring is a shade of the fill
-	c.NextRadius(radius)
 	c.NextPad(pad)
 	c.NextSize(ui.Px(surfW), ui.Children(1))
+	c.NextOffset(dx, dy)
 	c.NextAuditExempt(ui.AuditOverflow.Mask()) // the arrow lies outside the body
-	pop.ID = c.BoxKeyed(ui.DrawBackground|ui.DrawBorder, bodyKey, nil)
+	pop.ID = c.BoxKeyed(flags, bodyKey, nil)
 	c.Push(pop.ID)
 	// the arrow is built first, floating in the body's parent's room: it is
 	// positioned in the wrapper's coordinates through the body's own, so it
 	// belongs to the body and is drawn over its edge
-	popArrow(k, bodyKey, edge, along, arrowRoom, fill, hair)
+	if o.Arrow {
+		popArrow(k, bodyKey, edge, along, arrowRoom, fill, hair)
+	}
 	return pop
 }
 
@@ -370,4 +397,5 @@ func EndPopover(k *base.Kit, p *Popover) {
 	c := k.Context()
 	c.Pop() // the body
 	c.EndOverlay()
+	c.PopOpacity()
 }

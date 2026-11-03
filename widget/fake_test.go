@@ -45,7 +45,9 @@ func newRigThemed(t *testing.T, w, h int, build func(k *Kit), th *theme.Theme) *
 	c.Reserve(4096)
 	c.AtlasSync(&fakeui.Uploader{})
 	g := &rig{t: t, ts: ts, c: c, w: w, h: h, scale: 1, build: build}
-	g.k = NewKit(c, ts, rex.Theme())
+	base := rex.Theme()
+	base.OverlayScrollers = false // the AppKit widgets' bars follow the system's style
+	g.k = NewKit(c, ts, base)
 	if th != nil {
 		g.k.SetTheme(th)
 	}

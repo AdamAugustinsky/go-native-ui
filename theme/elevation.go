@@ -28,6 +28,9 @@ type ShadowLayer struct {
 	Y, Blur float32
 	// Alpha is the shadow's final opacity in light (0) and dark (1).
 	Alpha [2]float32
+	// Spread grows (negative: shrinks) the shadow's rectangle before the
+	// blur, in points (CSS box-shadow's spread).
+	Spread float32
 }
 
 // Color is the layer's colour at the light/dark mix t: the RGB of shadow
@@ -55,9 +58,9 @@ type ElevationSpec struct {
 // (y 4 / σ 12 at 20 %, y 8 / σ 24), without a scrim on macOS.
 var MacElevations = [NumElevations]ElevationSpec{
 	ElevFlat:   {Fill: Pane},
-	ElevPane:   {Fill: Pane, Edge: 0.5, EdgeRole: PaneHairline, Shadows: [2]ShadowLayer{{1, 1.5, [2]float32{0.07, 0.40}}, {3, 5, [2]float32{0.05, 0.30}}}},
-	ElevRaised: {Fill: Raised, Edge: 0.5, EdgeRole: Separator, Shadows: [2]ShadowLayer{{4, 12, [2]float32{0.20, 0.45}}}},
-	ElevModal:  {Fill: Raised, Edge: 0.5, EdgeRole: Separator, Shadows: [2]ShadowLayer{{8, 24, [2]float32{0.25, 0.55}}}, Scrim: runtime.GOOS != "darwin"},
+	ElevPane:   {Fill: Pane, Edge: 0.5, EdgeRole: PaneHairline, Shadows: [2]ShadowLayer{{1, 1.5, [2]float32{0.07, 0.40}, 0}, {3, 5, [2]float32{0.05, 0.30}, 0}}},
+	ElevRaised: {Fill: Raised, Edge: 0.5, EdgeRole: Separator, Shadows: [2]ShadowLayer{{4, 12, [2]float32{0.20, 0.45}, 0}}},
+	ElevModal:  {Fill: Raised, Edge: 0.5, EdgeRole: Separator, Shadows: [2]ShadowLayer{{8, 24, [2]float32{0.25, 0.55}, 0}}, Scrim: runtime.GOOS != "darwin"},
 }
 
 func (e ElevationSpec) scaled(k float32) ElevationSpec {
@@ -65,6 +68,7 @@ func (e ElevationSpec) scaled(k float32) ElevationSpec {
 	for i := range e.Shadows {
 		e.Shadows[i].Y *= k
 		e.Shadows[i].Blur *= k
+		e.Shadows[i].Spread *= k
 	}
 	return e
 }

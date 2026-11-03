@@ -71,6 +71,11 @@ type LabelOpts struct {
 	// points on the style's line: what is machine text (a path, a code to
 	// type in). MetaPt wins when both are set.
 	MonoPt float32
+	// Truncate lets a one-line label shrink in a row too narrow for it and
+	// end in "…", after the boxes that give way first (a BadgeTag beside
+	// it): a row's title. Without it the label keeps its width and its end
+	// fades out where the box cuts it.
+	Truncate bool
 }
 
 // MetaFont is Rex's metadata face at sizePt points: the UI face with
@@ -101,6 +106,9 @@ func Label(k *base.Kit, s string, o LabelOpts) ui.ID {
 	if o.Wrap {
 		return c.Box(ui.DrawText|ui.WrapText, s)
 	}
+	if o.Truncate {
+		return c.Box(ui.DrawText|ui.EllipsisOverflowX, s)
+	}
 	return c.Box(ui.DrawText|ui.FadeOverflowX, s)
 }
 
@@ -112,6 +120,9 @@ func LabelBytes(k *base.Kit, b []byte, o LabelOpts) ui.ID {
 	labelStyle(k, &o)
 	c.NextSemNameBytes(b)
 	flags := ui.DrawText | ui.FadeOverflowX
+	if o.Truncate && !o.Wrap {
+		flags = ui.DrawText | ui.EllipsisOverflowX
+	}
 	if o.Wrap {
 		flags = ui.DrawText | ui.WrapText
 	}
@@ -134,6 +145,8 @@ func labelStyle(k *base.Kit, o *LabelOpts) {
 	}
 	if o.Wrap {
 		k.ApplySize(ui.Pct(1), ui.TextSize(0))
+	} else if o.Truncate {
+		k.ApplySize(ui.TextSize(0).Strict(0), ui.Px(st.Cell))
 	} else {
 		k.ApplySize(ui.TextSize(0), ui.Px(st.Cell))
 	}

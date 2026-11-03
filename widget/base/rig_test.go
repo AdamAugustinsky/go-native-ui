@@ -24,6 +24,9 @@ type rig struct {
 	time  int64
 }
 
+// overlayScrollers is the rig theme's OverlayScrollers.
+var overlayScrollers = false
+
 func newRig(t *testing.T, w, h int, scale float32, build func(k *Kit)) *rig {
 	t.Helper()
 	// the icon atlas rasterises symbols through AppKit on macOS, which wants a
@@ -35,7 +38,11 @@ func newRig(t *testing.T, w, h int, scale float32, build func(k *Kit)) *rig {
 	c.Reserve(4096)
 	c.AtlasSync(&fakeui.Uploader{})
 	g := &rig{t: t, c: c, w: w, h: h, scale: scale, build: build}
-	g.k = NewKit(c, ts, rex.Theme())
+	// the kit's own scroll bars follow the system's style: Rex's overlay
+	// bars (Theme.OverlayScrollers) have tests of their own
+	th := rex.Theme()
+	th.OverlayScrollers = overlayScrollers
+	g.k = NewKit(c, ts, th)
 	g.in.Inside, g.in.Focused = true, true
 	g.in.MouseX, g.in.MouseY = -100, -100
 	g.list.Quads = make([]gpu.Quad, 0, 1<<13)

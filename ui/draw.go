@@ -362,9 +362,16 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 				continue
 			}
 			grow := 3*s.Sigma + 1
-			sr := [4]float32{r[0] + s.OffX, r[1] + s.OffY, r[2] + s.OffX, r[3] + s.OffY}
-			if empty(intersect([4]float32{sr[0] - grow, sr[1] - grow, sr[2] + grow, sr[3] + grow}, clip)) {
+			sp := s.Spread
+			sr := [4]float32{r[0] + s.OffX - sp, r[1] + s.OffY - sp, r[2] + s.OffX + sp, r[3] + s.OffY + sp}
+			if empty(sr) || empty(intersect([4]float32{sr[0] - grow, sr[1] - grow, sr[2] + grow, sr[3] + grow}, clip)) {
 				continue
+			}
+			radii := b.radii
+			if sp != 0 {
+				for j := range radii {
+					radii[j] = max(radii[j]+sp, 0)
+				}
 			}
 			col := b.col(s.Color)
 			if opaque {
@@ -378,12 +385,12 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 						continue
 					}
 					q := c.quad(l)
-					q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, band, [4]uint32{col, col, col, col}, b.radii, s.Sigma
+					q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, band, [4]uint32{col, col, col, col}, radii, s.Sigma
 				}
 				continue
 			}
 			q := c.quad(l)
-			q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, clip, [4]uint32{col, col, col, col}, b.radii, s.Sigma
+			q.Rect, q.Clip, q.Color, q.Radii, q.Soft = sr, clip, [4]uint32{col, col, col, col}, radii, s.Sigma
 		}
 	}
 

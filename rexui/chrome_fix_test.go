@@ -299,6 +299,7 @@ func TestToolbarOverflowMenu(t *testing.T) {
 // wide, 3 pt in, in its slot; with overlay scrollers the rows take the
 // whole width again.
 func TestSidebarLegacyScroller(t *testing.T) {
+	followSystemScrollers(t)
 	sys := theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
 	g := openRig(t, theme.Light, &sys, func(*rig) {})
 	g.w, g.h = 1000, 400

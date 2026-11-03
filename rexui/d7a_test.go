@@ -79,7 +79,7 @@ func TestPopoverMatchesAppKit(t *testing.T) {
 		var body ui.ID
 		anchor := [4]float32{300, 100, 400, 148}
 		g := newRig(t, theme.Mode(m), nil, func(g *rig) {
-			p := rexui.BeginPopover(g.k, "pop", anchor, rexui.PopoverOpts{Width: 260, Behavior: rexui.PopoverApplicationDefined})
+			p := rexui.BeginPopover(g.k, "pop", anchor, rexui.PopoverOpts{Width: 260, Behavior: rexui.PopoverApplicationDefined, Arrow: true})
 			rexui.Label(g.k, "Popover content", rexui.LabelOpts{})
 			rexui.EndPopover(g.k, &p)
 			body = p.ID
@@ -798,7 +798,7 @@ func TestPopoverArrowOnEverySide(t *testing.T) {
 	for _, edge := range []rexui.PopoverEdge{rexui.PopoverBelow, rexui.PopoverAbove, rexui.PopoverRight, rexui.PopoverLeft} {
 		var body ui.ID
 		g := newRig(t, theme.Light, nil, func(g *rig) {
-			p := rexui.BeginPopover(g.k, "pop", anchor, rexui.PopoverOpts{Edge: edge, Width: 240, Behavior: rexui.PopoverApplicationDefined})
+			p := rexui.BeginPopover(g.k, "pop", anchor, rexui.PopoverOpts{Edge: edge, Width: 240, Behavior: rexui.PopoverApplicationDefined, Arrow: true})
 			g.k.NextSize(g.k.Fixed(200), g.k.Fixed(100))
 			g.k.Column("content")
 			g.k.EndColumn()
@@ -896,5 +896,36 @@ func TestToastIconAction(t *testing.T) {
 				t.Errorf("%s: a click on %q gave %d actions", tc.name, name, actions-before)
 			}
 		}
+	}
+}
+
+// A popover comes in from its anchor's side: on its first frames it is
+// translucent and a little nearer the anchor, and it settles in place.
+func TestPopoverEnters(t *testing.T) {
+	var body ui.ID
+	open := false
+	g := newRig(t, theme.Light, nil, func(g *rig) {
+		if !open {
+			return
+		}
+		p := rexui.BeginPopover(g.k, "pop", [4]float32{300, 100, 400, 148}, rexui.PopoverOpts{Behavior: rexui.PopoverApplicationDefined})
+		body = p.ID
+		rexui.Label(g.k, "Details", rexui.LabelOpts{})
+		rexui.EndPopover(g.k, &p)
+	})
+	g.k.ReduceMotion = false
+	open = true
+	g.frames(3)
+	early := g.c.Rect(body)
+	g.frames(40)
+	rest := g.c.Rect(body)
+	if early[1] >= rest[1] {
+		t.Errorf("entering, the body's top is %v; at rest %v: want it nearer the anchor above", early[1], rest[1])
+	}
+	if rest[1]-early[1] > rexui.OverlayLook.Rise*g.scale {
+		t.Errorf("the rise is %v px, more than %v pt", rest[1]-early[1], rexui.OverlayLook.Rise)
+	}
+	if g.c.Animating() {
+		t.Error("still animating after 40 frames")
 	}
 }

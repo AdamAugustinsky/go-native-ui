@@ -464,3 +464,36 @@ func TestKnobLengthIsAppKits(t *testing.T) {
 		}
 	}
 }
+
+// TestThemeOverlayBars: in a theme with overlay bars (Rex's), a view's bars
+// are overlay bars under the system's legacy style too, shown while the
+// pointer is on the view and faded after it leaves; a view that asks for
+// Legacy keeps the legacy bar.
+func TestThemeOverlayBars(t *testing.T) {
+	overlayScrollers = true
+	t.Cleanup(func() { overlayScrollers = false })
+	legacy := &theme.SystemValues{Known: true, Settings: theme.Settings{Scroller: theme.ScrollerLegacy}}
+	g, bars, _ := scrollRig(t)
+	g.k.fol.PinSystem(legacy)
+	g.frames(90)
+	b := &bars[1]
+	if !b.On || b.Legacy || b.Visible {
+		t.Fatalf("an idle bar under the legacy style: %+v", *b)
+	}
+	g.move(200, 150)
+	g.frames(30)
+	if !b.Visible || b.Show < 0.99 {
+		t.Fatalf("the pointer on the view: show %v", b.Show)
+	}
+	g.move(500, 150) // out of the window's view
+	g.frames(120)
+	if b.Visible {
+		t.Fatalf("1 s after the pointer left: show %v", b.Show)
+	}
+	g2, bars2, _ := scrollRigOf(t, &ScrollState{Legacy: true})
+	g2.k.fol.PinSystem(legacy)
+	g2.frames(5)
+	if b := bars2[1]; !b.Legacy || !b.Visible {
+		t.Fatalf("a Legacy view's bar: %+v", b)
+	}
+}
