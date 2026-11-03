@@ -73,8 +73,9 @@ func (ch *chrome) Background(c *ui.Context, r *theme.Resolved) {
 
 // RoundedBackground is Background in a window with corners radius pixels
 // round: over a backdrop the scrim takes the corners; otherwise the field is
-// laid as a surface's mesh is, its corner cells 2·radius across and rounded,
-// so the corners are the field's own colours.
+// laid as a surface's mesh is, its corner cells 2·radius across and rounded
+// (one cell for both ends of a capsule), so the corners are the field's own
+// colours.
 func (ch *chrome) RoundedBackground(c *ui.Context, r *theme.Resolved, radius float32) {
 	if radius <= 0 {
 		ch.Background(c, r)
@@ -91,7 +92,7 @@ func (ch *chrome) RoundedBackground(c *ui.Context, r *theme.Resolved, radius flo
 		c.BoxKeyed(ui.DrawBackground|fl, ui.KeyN(keyBG, 1<<20), nil)
 		return
 	}
-	radius = min(radius, W/4, H/4) // the corner cells must fit
+	radius = min(radius, W/2, H/2) // a capsule at most
 	ch.round.update(&ch.fld, [4]float32{0, 0, W, H}, radius, true)
 	theme.At(c, 0, 0, W, H)
 	c.Mesh(fl, keyBG, ch.round.fillQuads(0, 0))

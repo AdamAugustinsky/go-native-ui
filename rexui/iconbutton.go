@@ -46,6 +46,10 @@ type IconButtonOpts struct {
 	// entry must not be modified): passing a pointer to a recipe kept by the
 	// caller allocates nothing per frame.
 	Recipe *ButtonRecipe
+	// Round makes a bordered button (not borderless or toolbar) a circle
+	// the size's height across, Rex's icon-only action, in place of the icon
+	// with the size's padding each side (a capsule wider than high).
+	Round bool
 }
 
 // IconButtonRecipes are the variants' recipes (ButtonRecipe's fields; the
@@ -130,8 +134,11 @@ func IconButton(k *base.Kit, ic icon.ID, name string, o IconButtonOpts) base.Sig
 		h = theme.Snap(s.Height)
 		w = theme.Snap(iw + 2*s.PadX)
 		radius = s.Radius
-		if rc.Capsule { // Rex's: round ends, a circle when the icon is square
+		if rc.Capsule { // Rex's: round ends
 			radius = h / 2
+		}
+		if o.Round {
+			w, radius = h, h/2
 		}
 	}
 	var flags ui.Flags

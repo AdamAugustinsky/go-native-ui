@@ -484,6 +484,10 @@ type Mesh struct {
 // cut returns the grid lines between lo and hi: both ends, the corner arcs'
 // extents and the Field's nodes in between.
 func cut(dst *[maxMeshLines]float32, lo, hi, rad float32, nodes []float32) int {
+	if hi-lo < 4*rad { // the corner cells would overlap: one cell holds both corners (a capsule's ends)
+		dst[0], dst[1] = lo, hi
+		return 2
+	}
 	n := 0
 	dst[n] = lo
 	n++

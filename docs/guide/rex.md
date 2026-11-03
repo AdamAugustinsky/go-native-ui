@@ -96,7 +96,7 @@ tokens for nothing.
   size. A toggle that is on, and a chosen segment, are a quiet tint of the
   accent (14 % light, 24 % dark) under the label's colour, not a block of the
   accent. These are the defaults; do not reset them.
-- An icon-only action is `IconButton`, round. A bar of actions (a
+- An icon-only action is `IconButton`, round (`IconButtonOpts.Round`). A bar of actions (a
   recorder, a selection bar) is a capsule: `ComposerLook`'s shape or a
   `Capsule` button row, never a rectangle with square ends.
 - A person is `rexui.Avatar` with a `Backdrop` role naming what it sits on

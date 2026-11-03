@@ -56,6 +56,26 @@ type KeyHint struct {
 	Keys, Label string
 }
 
+// KeyHints builds hints in the current parent, a row: each one's keys in a
+// key chip (Kbd) and what they do beside it, in PaletteLook's hint colour and
+// size. A palette's footer is these; so is the footer of a panel that works
+// as one (HyperPedia's).
+func KeyHints(k *base.Kit, hints []KeyHint) {
+	c := k.Context()
+	rc := &PaletteLook
+	key := ui.HashString(c.ParentKey(), "key hints")
+	for i, h := range hints {
+		c.NextAxis(ui.AxisX)
+		c.NextCross(ui.CrossCenter)
+		c.NextGap(k.Pt(6))
+		c.NextSize(ui.Children(1), ui.Children(1))
+		c.Push(c.BoxKeyed(0, ui.KeyN(key, uint64(i)), nil))
+		Kbd(k, h.Keys)
+		Label(k, h.Label+"###l", LabelOpts{Color: rc.Hint, MetaPt: rc.HintPt})
+		c.Pop()
+	}
+}
+
 // PaletteOpts are a palette's options, passed by value.
 type PaletteOpts struct {
 	// Placeholder is the search field's.
@@ -241,7 +261,6 @@ func EndPalette(k *base.Kit, p *Palette) PaletteSignal {
 		return s
 	}
 	c := k.Context()
-	rc := &PaletteLook
 	if p.listing {
 		ns := EndNavList(k, &p.NavList)
 		if ns.Activated && ns.Row >= 0 {
@@ -271,16 +290,7 @@ func EndPalette(k *base.Kit, p *Palette) PaletteSignal {
 		c.NextCross(ui.CrossCenter)
 		c.NextGap(k.Pt(16))
 		c.Push(c.BoxKeyed(0, ui.KeyN(p.key, 4), nil))
-		for i, h := range hints {
-			c.NextAxis(ui.AxisX)
-			c.NextCross(ui.CrossCenter)
-			c.NextGap(k.Pt(6))
-			c.NextSize(ui.Children(1), ui.Children(1))
-			c.Push(c.BoxKeyed(0, ui.KeyN(p.key, 5<<32|uint64(i)), nil))
-			Kbd(k, h.Keys)
-			Label(k, h.Label+"###l", LabelOpts{Color: rc.Hint, MetaPt: rc.HintPt})
-			c.Pop()
-		}
+		KeyHints(k, hints)
 		c.Pop()
 	}
 	c.Pop() // the panel

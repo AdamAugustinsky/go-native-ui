@@ -92,6 +92,30 @@ func TestIconButtonCentresIconInOverride(t *testing.T) {
 	}
 }
 
+// TestIconButtonRound: Round makes a bordered icon button a circle the
+// size's height across at every size, where it is otherwise wider than high.
+func TestIconButtonRound(t *testing.T) {
+	for _, sz := range []theme.Size{theme.SizeSmall, theme.SizeRegular, theme.SizeLarge} {
+		for _, v := range []rexui.IconButtonVariant{rexui.IconBordered, rexui.IconPrimary, rexui.IconDestructive} {
+			var plain, round ui.ID
+			g := newRig(t, theme.Light, nil, column(func(g *rig) {
+				plain = rexui.IconButton(g.k, icon.Plus, "Plain", rexui.IconButtonOpts{Variant: v, Size: sz}).ID
+				round = rexui.IconButton(g.k, icon.Plus, "Round", rexui.IconButtonOpts{Variant: v, Size: sz, Round: true}).ID
+			}))
+			g.settle()
+			p, r := g.c.Rect(plain), g.c.Rect(round)
+			pw, ph := p[2]-p[0], p[3]-p[1]
+			rw, rh := r[2]-r[0], r[3]-r[1]
+			if rw != rh || rh != ph {
+				t.Errorf("size %d variant %d: a round button is %v × %v px, want a circle %v px across (the plain one's height)", sz, v, rw, rh, ph)
+			}
+			if pw == ph {
+				t.Logf("size %d variant %d: the plain button is already square (%v px)", sz, v, pw)
+			}
+		}
+	}
+}
+
 // In an inactive window a default button looks like a push button in every
 // state, pressed included; one held down when the window loses key does not
 // turn to the accent.

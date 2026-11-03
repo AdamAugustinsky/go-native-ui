@@ -63,6 +63,14 @@ func TestBeginWindowRounded(t *testing.T) {
 			t.Errorf("%v: no hairline edges the rounded window", m)
 		}
 
+		// a capsule (a recording bar): one cell rounds both left corners, across the height
+		o.Radius = float32(g.h) / 4 // H/2 in pixels at 2x
+		g.frames(2)
+		if c, ok := at(0, 0); !ok || c.Rect[3] != H || c.Radii[0] != H/2 || c.Radii[3] != H/2 {
+			t.Errorf("%v: a capsule's left end is %+v (found %v), want one cell %v px high rounded %v at both left corners", m, c, ok, H, H/2)
+		}
+		o.Radius = 20
+
 		backdrop = true
 		g.frames(2)
 		scrim, ok := at(0, 0)
