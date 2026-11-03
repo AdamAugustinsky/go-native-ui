@@ -63,6 +63,7 @@ type box struct {
 
 // boxFrame is the part of a box record rebuilt every frame.
 type boxFrame struct {
+	_ [0]func() // not comparable: nothing compares boxes, and the generated == of a box and its parts was ~7 KB in every app (D99)
 	boxLinks
 	style
 	boxAttrs
@@ -83,7 +84,8 @@ type boxLinks struct {
 
 // boxAttrs excludes the style, which newBox overwrites rather than clears.
 type boxAttrs struct {
-	dupLast   ID // last box in this key's derivation chain this frame
+	_         [0]func() // not comparable (see boxFrame)
+	dupLast   ID        // last box in this key's derivation chain this frame
 	dupN      uint32
 	alignNext bool       // the alignment came from NextAlign (Audit)
 	auditOff  AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
@@ -124,6 +126,7 @@ type boxAttrs struct {
 
 // style is copied from the mirrored stack tops when a box is built.
 type style struct {
+	_         [0]func() // not comparable (see boxFrame)
 	pref      [2]Size
 	pad       [4]float32 // l, t, r, b
 	gap       float32

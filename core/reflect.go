@@ -10,8 +10,8 @@ func pointerFree(t reflect.Type) bool {
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
 		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
 		return true
-	case reflect.Array:
-		return pointerFree(t.Elem())
+	case reflect.Array: // an array of no elements holds no pointers (the [0]func() that makes a type non-comparable)
+		return t.Len() == 0 || pointerFree(t.Elem())
 	case reflect.Struct:
 		for i := 0; i < t.NumField(); i++ {
 			if !pointerFree(t.Field(i).Type) {

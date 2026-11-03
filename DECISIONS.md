@@ -1514,4 +1514,6 @@ So a partial frame drawn into a retained back buffer and copied to the drawable 
 
 **Not changed.** Rex stays the default theme and its pane cards the default; nothing changes for an app that does not opt in. The shared popover, menu and dialog surface is D98's (overlay-polish), not this.
 
+**Size.** On top of D98 this put the stripped linux/amd64 gallery 4,359 bytes over the 10 MiB budget. The budget stays. The pool's `ui.box` parts (`boxFrame`, `style`, `boxAttrs`) became non-comparable, as D97 did for `Strings` and `Resolved`: nothing compares boxes, and their generated `==` was about 7 KB in every app. `core.PointerFree` now counts an array of no elements as pointer-free. The gallery is 10,481,927 bytes again (3.8 KB under).
+
 **Checked.** `theme/a3lab/a3lab_test.go` resolves a Rex theme with `Apply` in both modes and checks the accent, field, panes, cards, links, row and sidebar selections; with the `SidebarSel` ownership fix reverted it fails. The rest is drawn: a3-app's web-parity captures (`docs/evidence/web-parity`) compare each main screen with the web app's.
