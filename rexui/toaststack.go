@@ -68,7 +68,7 @@ type StackToastOpts struct {
 	// Icon is the symbol at its start (0: the level's, BannerLook.Icon).
 	Icon icon.ID
 	// Title is its first line, in the semibold face, and its accessible
-	// name; Message the line under it, in the secondary label's colour (an
+	// name after the level's ("Error: …", as a banner's); Message the line under it, in the secondary label's colour (an
 	// error's in the readable red, wrapped); Meta sets the message as
 	// metadata (theme.MetaPt, tabular figures): a percentage, a size.
 	Title, Message string
@@ -137,7 +137,7 @@ func (s *ToastStack) Toast(id uint64, o StackToastOpts) StackToastSignal {
 	c.NextGap(k.Pt(ToastStackLook.Gap))
 	c.NextAxis(ui.AxisX)
 	c.NextRole(ui.RoleGroup)
-	c.NextSemName(o.Title)
+	c.NextSemName(bannerName(c, o.Level%NumBannerLevels, o.Title)) // "Error: …", as a banner's
 	sig.ID = c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|ui.DrawShadow|ui.Hoverable, key, nil)
 	c.Push(sig.ID)
 	lv := o.Level % NumBannerLevels

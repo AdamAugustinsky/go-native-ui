@@ -69,6 +69,7 @@ func TestToastStackIconAction(t *testing.T) {
 		rexui.EndToastStack(g.k, &st)
 	})
 	g.settle()
+	g.node(ui.RoleGroup, "Error: Could not send") // named with its level, as a banner
 	b := g.node(ui.RoleButton, "Copy this message").Bounds
 	if b[2]-b[0] > 1.5*(b[3]-b[1]) {
 		t.Errorf("the icon action is %v: want a compact icon button", b)
