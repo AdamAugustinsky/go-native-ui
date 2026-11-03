@@ -200,7 +200,11 @@ func (d *Demo) Init(a *app.App) error {
 // call it with a fake text system.
 func (d *Demo) Attach(c *ui.Context, ts base.TextSystem) {
 	d.c = c
-	d.wk = widget.NewKit(c, ts, rex.Theme())
+	// the demo shows AppKit's chrome, whose views follow the system's scroller
+	// style; Rex's own views draw overlay bars (D98)
+	th := rex.Theme()
+	th.OverlayScrollers = false
+	d.wk = widget.NewKit(c, ts, th)
 	d.k = d.wk.Kit
 	d.k.SetPreference(d.opt.Preference)
 	d.k.ReduceMotion = d.opt.Still

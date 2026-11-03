@@ -41,7 +41,7 @@ var components = map[string][]string{
 	"select":      {"select.go", "button.go"},
 	"separator":   {"separator.go"},
 	"form":        {"form.go", "card.go", "text.go"},
-	"dialog":      {"dialog.go", "button.go", "text.go", "scrolledge.go", "glyph.go"},
+	"dialog":      {"dialog.go", "button.go", "text.go", "scrolledge.go", "glyph.go", "overlay.go"},
 	"tooltip":     {"tooltip.go"},
 	"text":        {"text.go"},
 	"card":        {"card.go"},
@@ -56,8 +56,8 @@ var components = map[string][]string{
 	"link":        {"link.go", "text.go"},
 	"toggle":      {"toggle.go", "button.go"},
 	"tabs":        {"tabs.go", "glyph.go", "motion.go"},
-	"toolbar":     {"toolbar.go", "caption.go", "scrolledge.go", "glass.go", "tabs.go", "glyph.go", "motion.go", "button.go", "searchfield.go", "textfield.go", "popover.go"},
-	"sidebar":     {"sidebar.go", "contextmenu.go", "glass.go", "glyph.go", "motion.go", "disclosure.go", "button.go", "searchfield.go", "textfield.go"},
+	"toolbar":     {"toolbar.go", "caption.go", "scrolledge.go", "glass.go", "tabs.go", "glyph.go", "motion.go", "button.go", "searchfield.go", "textfield.go", "popover.go", "overlay.go"},
+	"sidebar":     {"sidebar.go", "contextmenu.go", "glass.go", "glyph.go", "motion.go", "disclosure.go", "button.go", "searchfield.go", "textfield.go", "overlay.go"},
 	"pathbar":     {"pathbar.go", "glyph.go"},
 }
 
