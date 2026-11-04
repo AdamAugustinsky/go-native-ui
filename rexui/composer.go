@@ -40,7 +40,7 @@ type ComposerSetup struct {
 	MaxLen int
 	// Enter is the Enter policy: Enter sends (platform.EnterSends, the
 	// default), or Enter adds a line and ⌘Enter sends. The drawn field is
-	// one line and always sends with Enter.
+	// one line and sends with Enter, never with Shift+Enter.
 	Enter platform.EnterPolicy
 }
 
@@ -281,7 +281,7 @@ func (s *ComposerState) SetPlaceholder(p string) {
 }
 
 // SetEnter changes the Enter policy (ComposerSetup.Enter). The drawn field is
-// one line and always sends with Enter.
+// one line and sends with Enter, never with Shift+Enter.
 func (s *ComposerState) SetEnter(p platform.EnterPolicy) {
 	s.enter = p
 	if s.ed != nil && s.ed.Editor != nil {
@@ -656,7 +656,7 @@ func Composer(k *base.Kit, label string, st *ComposerState, o ComposerOpts) Comp
 		sig.Changed, sig.Focused = drawn.Changed, drawn.Focused
 		sig.Composing = k.Composing(drawn)
 		sig.Cancelled = drawn.Cancelled
-		submit = drawn.Submitted
+		submit = drawn.Submitted && !shiftEnter(c.Input()) // Shift+Enter is a line break, which one line cannot take
 		sel := st.drawnSelection()
 		sig.Selected = sel != st.sel
 		st.sel = sel
@@ -1139,4 +1139,16 @@ func composerSend(k *base.Kit, o ComposerOpts, rc *ComposerRecipe, canSend bool)
 	pressed = k.EndPress(&p).Clicked
 	k.EndDisabled()
 	return pressed, p.ID
+}
+
+// shiftEnter reports whether the frame's Enter went down with Shift: a line
+// break in the hosted editors. The drawn field is one line and cannot take
+// it, so it does not send either (it sent, 2026-11-03).
+func shiftEnter(in *ui.Input) bool {
+	for i := 0; i < in.NKeys; i++ {
+		if k := &in.Keys[i]; k.Down && k.Code == ui.KeyEnter && k.Mods&ui.ModShift != 0 {
+			return true
+		}
+	}
+	return false
 }
