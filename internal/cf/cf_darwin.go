@@ -46,7 +46,7 @@ var (
 	fnArrayCreate, fnArrayLen, fnArrayAt                                      uintptr
 	fnURLFromFS, fnURLFromString                                              uintptr
 	fnMsgSend, fnPoolPush, fnPoolPop                                          uintptr
-	keyCallbacks, valueCallbacks                                              uintptr
+	keyCallbacks, valueCallbacks, arrayCallbacks                              uintptr
 	cfLib                                                                     uintptr
 
 	frames = sync.Pool{New: func() any { return new(ffi.Frame) }}
@@ -91,6 +91,7 @@ func Init() error {
 		fnArrayCreate, fnArrayLen, fnArrayAt = sym(cfLib, "CFArrayCreate"), sym(cfLib, "CFArrayGetCount"), sym(cfLib, "CFArrayGetValueAtIndex")
 		fnURLFromFS, fnURLFromString = sym(cfLib, "CFURLCreateFromFileSystemRepresentation"), sym(cfLib, "CFURLCreateWithString")
 		keyCallbacks, valueCallbacks = sym(cfLib, "kCFTypeDictionaryKeyCallBacks"), sym(cfLib, "kCFTypeDictionaryValueCallBacks")
+		arrayCallbacks = sym(cfLib, "kCFTypeArrayCallBacks")
 
 		fnMsgSend = sym(objc, "objc_msgSend")
 		fnPoolPush, fnPoolPop = sym(objc, "objc_autoreleasePoolPush"), sym(objc, "objc_autoreleasePoolPop")
@@ -234,7 +235,7 @@ func DictSet(fr *ffi.Frame, d, key, val uintptr) { fr.Call3(fnDictSet, d, key, v
 func Array(fr *ffi.Frame, objs ...uintptr) uintptr {
 	p := make([]uintptr, len(objs)+1)
 	copy(p, objs)
-	r := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&p[0])).Arg(uintptr(len(objs))).Arg(0).Call(fnArrayCreate).R0()
+	r := fr.Reset().Arg(0).ArgPtr(unsafe.Pointer(&p[0])).Arg(uintptr(len(objs))).Arg(arrayCallbacks).Call(fnArrayCreate).R0()
 	runtime.KeepAlive(p)
 	return r
 }
