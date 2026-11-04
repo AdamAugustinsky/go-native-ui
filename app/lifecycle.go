@@ -175,6 +175,9 @@ type AppConfig struct {
 	// unanswered during EvQuitRequested): the app's own words, in the user's
 	// language ("Saving changes" when empty). Windows only.
 	QuitBlockReason string
+	// Stall, if set, writes a report each time the loop stalls: the main
+	// thread stuck in one phase, or a window that stops drawing (StallWatch).
+	Stall *StallWatch
 }
 
 // Main runs the application: it creates the application object, calls
@@ -209,6 +212,10 @@ func Main(cfg AppConfig, h Handler) error {
 		return err
 	}
 	a.started = true
+	if cfg.Stall != nil {
+		a.stall = newStallWatch(*cfg.Stall, a.ID())
+		defer a.stall.close()
+	}
 	a.flushStartup()
 	err := a.loop()
 	a.finish()
@@ -488,6 +495,7 @@ type appObject struct {
 	inSafe      bool
 	done        bool // the loop ends after this turn (Quit, the last window closing)
 	nextWinID   uint32
+	stall       *stallWatch // AppConfig.Stall, running (nil: none)
 
 	evs        [8]Event // the events being delivered, by nesting depth
 	evDepth    int

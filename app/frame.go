@@ -133,6 +133,8 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	if metered {
 		m.cpu0 = sysinfo.ThreadCPUNs()
 	}
+	was := a.stall.mark(phaseBegin, 0)
+	defer a.stall.mark(was, -1) // a frame drawn from a nested loop gives its phase back, from now (a pump: its end unknown)
 	if !a.Surf.BeginFrame(&a.fr) {
 		return false
 	}
@@ -168,6 +170,7 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	a.settle = false
 	a.syncAppearance()
 	a.syncWindow()
+	a.stall.mark(phaseBuild, 0)
 	for i := 0; i < passes; i++ {
 		a.build(a.fr.W, a.fr.H, dt)
 	}
@@ -186,11 +189,13 @@ func (a *App) drawFrame(inHandler bool, passes int) bool {
 	if a.dbg != nil {
 		a.debugOwed(why)
 	}
+	a.stall.mark(phaseEncode, 0)
 	present := a.encodeFrame() // only what changed, on macOS (D92)
 	if a.dbg != nil {
 		a.dbg.mark(PhaseEncode)
 	}
 	if present {
+		a.stall.mark(phasePresent, 0)
 		a.Surf.EndFrame(&a.fr) // applies the shell changes syncShell staged, in the present's transaction
 	}
 	a.checkDamage()

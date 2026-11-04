@@ -221,6 +221,8 @@ type App struct {
 	consecFails int      // ... in a row
 	lastFrameEv int64    // platform.Now of the last EvFrame, 0 = none
 	lastDrawT   int64    // platform.Now of the last frame drawn (of the start before the first)
+	owedAt      int64    // since when a repaint is owed while the window shows (StallWatch; 0: none)
+	stallAt     int64    // the owedAt of a StallFrames stall reported and not over (0: none)
 	lastDumpT   int64
 	verbose     bool
 	diagBuf     []byte
@@ -604,9 +606,12 @@ func (a *App) loopTurn() error {
 			return a.benchTimeout(now)
 		}
 	}
+	timeout := a.waitTimeout(now)
+	a.stall.mark(phasePump, timeout)
 	a.pumping = true
-	a.pump(a.waitTimeout(now)) // pump_*.go
+	a.pump(timeout) // pump_*.go
 	a.pumping = false
+	a.stall.mark(phaseEvents, 0)
 	for _, w := range a.wins {
 		if a.done {
 			break
@@ -620,16 +625,19 @@ func (a *App) loopTurn() error {
 	if a.done {
 		return nil
 	}
+	a.stall.mark(phaseLoop, 0)
 	for _, w := range a.wins {
 		if w.turn(platform.Now()) {
 			w.present(false, 1)
 		}
 	}
+	a.stall.mark(phaseMenus, 0) // a menu's own loop may last
 	a.pumping = true
 	for _, w := range a.wins {
 		w.popUpMenus()
 	}
 	a.pumping = false
+	a.stall.mark(phaseLoop, 0)
 	for _, w := range a.wins {
 		if w.dbg != nil {
 			w.debugSweep(CauseMenu)
@@ -638,9 +646,11 @@ func (a *App) loopTurn() error {
 	if a.demo != nil {
 		a.demo.run(a)
 	}
+	a.stall.mark(phaseDialogs, 0) // a dialog's own loop may last
 	for _, w := range a.wins {
 		w.flushDialogs() // dialogs asked for outside a frame (an event handler, a hook)
 	}
+	a.stall.mark(phaseApp, 0)
 	if a.hook != nil {
 		a.hook()
 	}
@@ -686,6 +696,7 @@ func (a *App) turn(now int64) (draw bool) {
 	if a.verbose {
 		a.dumpIfStalled(now)
 	}
+	a.checkFrames(now)
 	draw, request := a.p.poll(now)
 	if request {
 		a.req.RequestFrame()
@@ -866,6 +877,7 @@ func (a *App) present(inHandler bool, passes int) bool {
 	}
 	if ok {
 		a.consecFails, a.lastDrawT = 0, now
+		a.drewFrame(now)
 		a.p.drawn(a.more)
 		if bn := a.bench; bn != nil {
 			bn.after(a)
