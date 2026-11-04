@@ -51,6 +51,7 @@ const (
 	StallFrames
 )
 
+// String is the kind in words, as the report writes it.
 func (k StallKind) String() string {
 	switch k {
 	case StallPhase:
@@ -63,6 +64,7 @@ func (k StallKind) String() string {
 
 // StallReport is one stall, as written.
 type StallReport struct {
+	// Kind is what stalled.
 	Kind StallKind
 	// Phase is the loop's phase when it was noticed: pump, events, begin
 	// (acquiring the drawable), build, encode, present, loop, app.
