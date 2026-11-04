@@ -73,6 +73,8 @@ const (
 	emSetTextEx         = 0x0461
 	emSetLangOptions    = 0x0478
 	emGetLangOptions    = 0x0479
+	emGetScrollPos      = 0x04DD
+	emSetScrollPos      = 0x04DE
 	emSetTypographyOpts = 0x04CA
 
 	enChange        = 0x0300
@@ -1069,7 +1071,35 @@ func (e *Editor) updateClient() {
 	e.clientRect()
 	if e.ts != 0 {
 		win32.Com(e.ts, vtTSPropertyBitsChange, txtClientRectChange, txtClientRectChange)
+		e.topIfFits()
 	}
+}
+
+// topIfFits scrolls the text back to its top when the client rectangle holds
+// all of it. A line added while the editor was one line high scrolls RichEdit
+// to the caret in the box it had; when the host then grows to the new Height
+// RichEdit keeps that scroll, so the first line stayed hidden above the box
+// and the others sat a line too high (a composer's Shift+Enter, 2026-11-03).
+func (e *Editor) topIfFits() {
+	if e.contentH > e.rc.bottom-e.rc.top {
+		return // taller than the box: it scrolls, and the caret's line shows
+	}
+	if y := e.scrollY(); y != 0 {
+		var p struct{ x, y int32 }
+		e.quiet++
+		e.send(emSetScrollPos, 0, uintptr(unsafe.Pointer(&p)))
+		e.quiet--
+		e.invalidate()
+	}
+}
+
+// scrollY is how far RichEdit's text is scrolled down, in pixels.
+func (e *Editor) scrollY() int32 {
+	var p struct{ x, y int32 }
+	e.quiet++
+	e.send(emGetScrollPos, 0, uintptr(unsafe.Pointer(&p)))
+	e.quiet--
+	return p.y
 }
 
 // clientRect puts RichEdit's client rectangle in e.rc.

@@ -71,6 +71,22 @@ func (cr *composerRig) sendDisabled() bool {
 	return false
 }
 
+// The drawn field is one line: Shift+Enter, a line break in the hosted
+// editors, sends nothing there; Enter still sends.
+func TestComposerDrawnShiftEnterDoesNotSend(t *testing.T) {
+	cr := newComposerRig(t, 0, rexui.ComposerSetup{Placeholder: "Message"})
+	cr.focus()
+	cr.typeText("hi")
+	cr.key(ui.KeyEnter, ui.ModShift)
+	if cr.submits != 0 {
+		t.Fatalf("Shift+Enter sent (%d)", cr.submits)
+	}
+	cr.key(ui.KeyEnter, 0)
+	if cr.submits != 1 {
+		t.Fatalf("Enter after it reported %d sends", cr.submits)
+	}
+}
+
 // The send button works only with something to send (text other than white
 // space, or an attachment) and no send in flight; Enter sends by the same rule.
 func TestComposerSendEnablement(t *testing.T) {

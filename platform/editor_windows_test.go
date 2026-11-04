@@ -176,6 +176,39 @@ func TestEditorEnterPolicies(t *testing.T) {
 	}
 }
 
+// A line added to an editor one line high, with the host following its
+// Height as a composer's does: RichEdit scrolls to the caret in the box it
+// had, and once the box has grown the text starts at the top again (it stayed
+// scrolled by a line: the first line hidden, the rest a line too high).
+func TestEditorGrowsBackToTheTop(t *testing.T) {
+	w, e := newTestEditor(t, EditorOptions{Enter: EnterNewline, MaxLines: 6})
+	fit := func() {
+		h := 20 + e.Height()
+		place(w, HostRegion{ID: e.Host(), Rect: [4]float32{20, 20, 380, h}, Clip: [4]float32{20, 20, 380, h}})
+		settle(w)
+	}
+	fit()
+	typeText(e, "primeira")
+	pumpSignals(w, e, time.Second, EditorChanged)
+	for n := 2; n <= 4; n++ {
+		h0 := e.Height()
+		pressKey(e, vkReturn)
+		typeText(e, "linha")
+		pumpSignals(w, e, time.Second, EditorHeightChanged)
+		before := e.scrollY()
+		fit()
+		pumpSignals(w, e, 100*time.Millisecond, 0)
+		y := e.scrollY()
+		t.Logf("%d lines: %v → %v pt, scrolled %d px before the box grew, %d after", n, h0, e.Height(), before, y)
+		if e.Height() <= h0 {
+			t.Errorf("%d lines: the height did not grow (%v → %v)", n, h0, e.Height())
+		}
+		if y != 0 {
+			t.Errorf("%d lines in a box that holds them: still scrolled %d px", n, y)
+		}
+	}
+}
+
 // The completion lasts while the editor has the focus: a window of another
 // test process that takes the foreground ends it (WM_KILLFOCUS), and the keys
 // that follow are plain keys ("completion commands []", 40805350430 and
