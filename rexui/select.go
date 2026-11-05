@@ -39,6 +39,7 @@ type SelectOpts struct {
 
 // SelectRecipe is the look of pop-up buttons; their fills are ButtonDefault's.
 type SelectRecipe struct {
+	_ [0]func() // not comparable: nothing compares recipes, and their generated == is linked into every app (D101)
 	// Width is the width of a pop-up button that NextWidth does not size, in
 	// points.
 	Width float32
@@ -57,6 +58,9 @@ type SelectRecipe struct {
 	// Text, when not the zero Tint, colours a borderless pop-up button's
 	// value, lead and chevron (a web toolbar pill's quieter text).
 	Text Tint
+	// Chevron, when not the zero Tint, colours a web pill's chevron
+	// (FitWidth), quieter than its text as a web select's (--fg-35).
+	Chevron Tint
 }
 
 // SelectLook is the pop-up buttons' recipe.
@@ -173,7 +177,11 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 		c.NextFont(s.Font.Font)
 		c.NextTextColor(fg)
 		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(p.Key, 1), base.StrBytes(shown))
-		if f, disp := k.Icons().Prepare(c, chev, fg); f != 0 {
+		cf := fg
+		if SelectLook.Chevron != (Tint{}) && !p.Visual.Disabled {
+			cf = SelectLook.Chevron.RGBA(r)
+		}
+		if f, disp := k.Icons().Prepare(c, chev, cf); f != 0 {
 			_, ch := k.IconSize(chev)
 			c.NextSize(ui.Px(cw), ui.Px(ch))
 			c.BoxKeyed(f, ui.KeyN(p.Key, 2), disp)

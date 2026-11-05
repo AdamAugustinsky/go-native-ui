@@ -88,6 +88,12 @@ type RichStyle struct {
 	BGRole uint16
 	// Radius rounds the corners of the BG fill, in pixels.
 	Radius float32
+	// PadY is how far the BG fill reaches above and below the span's font
+	// (its ascent and descent about the baseline), in pixels, in a box with
+	// RichOpts.LineHeight: there the fill hugs the text as a CSS inline
+	// background does (code at padding 0.1em) instead of filling the tall
+	// line. Without a line height the fill is the line box.
+	PadY float32
 	// Deco are the decorations.
 	Deco Deco
 	// Shift moves the glyphs up by that many pixels (negative: down), for
@@ -123,6 +129,11 @@ type RichOpts struct {
 	// "…" when text was left out.
 	MaxLines int
 	Ellipsis bool
+	// LineHeight, when positive, gives every line that height in pixels
+	// with the text centred in it, as CSS's line-height does (a reading
+	// column's 1.625 × the size); 0 lets each line be as high as its fonts
+	// make it (text.Para.LineHeight).
+	LineHeight float32
 	// EmojiLarge draws a body of one to text.MaxJumboEmoji emoji and nothing
 	// else but white space in JumboFont (RichSignal.Jumbo reports it), as
 	// Messages does; JumboFont is the text font at text.JumboScale times its
@@ -190,6 +201,7 @@ type richRec struct {
 	links            bool
 	jumbo            bool
 	maxW             float32
+	lineH            float32
 	hover            int32 // the span under the pointer, -1 none
 	selScope         int32 // 1 + the index of its selection scope in Context.sel.scopes, 0 none
 	part             uint16
@@ -257,7 +269,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 
 	rec := richRec{
 		id: id, dir: o.Dir, maxLines: int32(max(o.MaxLines, 0)), ellipsis: o.Ellipsis,
-		links: links, maxW: o.MaxW, hover: -1,
+		links: links, maxW: o.MaxW, lineH: max(o.LineHeight, 0), hover: -1,
 		styleOff: int32(len(c.richStyles)), spanOff: int32(len(c.richSpans)), spanN: int32(len(spans)),
 	}
 	c.richSpans = append(c.richSpans, spans...)
@@ -445,7 +457,7 @@ func (c *Context) richSpanAt(pv *text.ParaView, rp richPrev, x, y float32) int {
 }
 
 // LayoutText lays body out as RichText lays out a box of content width width
-// with the same spans, styles and options (Dir, MaxLines, Ellipsis, and
+// with the same spans, styles and options (Dir, MaxLines, Ellipsis, LineHeight, and
 // EmojiLarge with JumboFont), and returns the paragraph the box will draw:
 // the lines (ParaView.Lines, the last line's Width beside it), the widest
 // line's ParaView.Width and ParaView.Height. It is the layouter's own cached
@@ -482,7 +494,7 @@ func (c *Context) LayoutText(body []byte, spans []Span, st *RichStyles, width fl
 	}
 	c.para = text.Para{
 		Text: body, Spans: spans, Fonts: c.layFonts[:n], Width: width,
-		Dir: o.Dir, MaxLines: max(o.MaxLines, 0), Ellipsis: o.Ellipsis,
+		Dir: o.Dir, MaxLines: max(o.MaxLines, 0), Ellipsis: o.Ellipsis, LineHeight: max(o.LineHeight, 0),
 	}
 	pv := c.lay.Paragraph(c.lay.Layout(&c.para))
 	c.para.Text, c.para.Spans = nil, nil
@@ -492,13 +504,14 @@ func (c *Context) LayoutText(body []byte, spans []Span, st *RichStyles, width fl
 // richPara sets c.para to the layout input of the RichText box b at width w.
 func (c *Context) richPara(b *box, r *richRec, w float32) {
 	c.para = text.Para{
-		Text:     c.fr.Cur().Bytes(b.txt),
-		Spans:    c.richSpans[r.spanOff : r.spanOff+r.spanN],
-		Fonts:    r.fonts[:r.nFonts],
-		Width:    w,
-		Dir:      r.dir,
-		MaxLines: int(r.maxLines),
-		Ellipsis: r.ellipsis,
+		Text:       c.fr.Cur().Bytes(b.txt),
+		Spans:      c.richSpans[r.spanOff : r.spanOff+r.spanN],
+		Fonts:      r.fonts[:r.nFonts],
+		Width:      w,
+		Dir:        r.dir,
+		MaxLines:   int(r.maxLines),
+		Ellipsis:   r.ellipsis,
+		LineHeight: r.lineH,
 	}
 }
 
@@ -627,7 +640,7 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 			ox := x0 + lineOrigin(&pv, i, w, b.align)
 			baseline := snap(y0 + ln.Baseline)
 			if pass == 0 {
-				c.emitRichBG(l, b, &pv, i, styles, ox, top, clip)
+				c.emitRichBG(l, b, &pv, i, styles, ox, top, baseline, r.lineH > 0, clip)
 				continue
 			}
 			// Glyphs.
@@ -639,7 +652,7 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 				}
 				if smoothOK&(1<<st) == 0 {
 					smoothOK |= 1 << st
-					if b.flags&NoFontSmoothing == 0 {
+					if b.flags&NoFontSmoothing == 0 && !c.Theme.NoFontSmoothing {
 						smooth[st] = text.SmoothLevel(col)
 					}
 				}
@@ -714,7 +727,7 @@ func (c *Context) emitRich(l *gpu.DrawList, b *box, r *richRec, clip [4]float32)
 // emitRichBG draws the span backgrounds of line i of the RichText box b (the
 // paragraph pv, the line's origin at ox and its top at top), per stretch of
 // glyphs of one span.
-func (c *Context) emitRichBG(l *gpu.DrawList, b *box, pv *text.ParaView, i int, styles []RichStyle, ox, top float32, clip [4]float32) {
+func (c *Context) emitRichBG(l *gpu.DrawList, b *box, pv *text.ParaView, i int, styles []RichStyle, ox, top, baseline float32, hug bool, clip [4]float32) {
 	ln := &pv.Lines[i]
 	for g := ln.G0; g < ln.G1; {
 		e := g + 1
@@ -728,7 +741,12 @@ func (c *Context) emitRichBG(l *gpu.DrawList, b *box, pv *text.ParaView, i int, 
 		if styles[st].BG&255 != 0 {
 			bx0, bx1 := ox+cellLeft(pv, i, g), ox+cellRight(pv, i, e-1)
 			col := b.col(styles[st].BG)
-			q := gpu.Quad{Rect: [4]float32{snap(bx0), snap(top), snap(bx1), snap(top + ln.Height)}, Clip: clip, FadeX: c.emitFade,
+			y0, y1 := top, top+ln.Height
+			if hug { // the span's font box, not the line's
+				fi := c.fontInfo(styles[st].Font)
+				y0, y1 = baseline-fi.ascent-styles[st].PadY, baseline+fi.descent+styles[st].PadY
+			}
+			q := gpu.Quad{Rect: [4]float32{snap(bx0), snap(y0), snap(bx1), snap(y1)}, Clip: clip, FadeX: c.emitFade,
 				Color: [4]uint32{col, col, col, col}}
 			rad := styles[st].Radius
 			q.Radii = [4]float32{rad, rad, rad, rad}

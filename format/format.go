@@ -20,6 +20,7 @@ import (
 // Locale is the words and conventions of one language. A field left empty
 // takes English's (SetLocale).
 type Locale struct {
+	_ [0]func() // not comparable: nothing compares locales, and their generated == was ~2 KB in every app (D101)
 	// Now is a time under a minute ago; Minutes, Hours, Days and Weeks the
 	// units after a count ("5m", "3h", "2d", "4w"): Ago.
 	Now, Minutes, Hours, Days, Weeks string

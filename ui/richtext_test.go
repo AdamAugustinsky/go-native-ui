@@ -599,3 +599,43 @@ func TestLayoutTextIsTheLayoutTheBoxDraws(t *testing.T) {
 		t.Errorf("%v allocations per LayoutText", n)
 	}
 }
+
+// A line height gives every line that height, as CSS's line-height does, and
+// a span's fill then hugs its own font (and PadY) about the baseline instead
+// of filling the tall line: a web app's inline code.
+func TestRichTextLineHeightAndHuggingFills(t *testing.T) {
+	body := "see code and more"
+	st := testStyles()
+	st.Styles[2].PadY = 1
+	r := newRich(t, body, []Span{spanOf(body, "code", 2, 0, 0)}, RichOpts{MaxW: 100, LineHeight: 30})
+	r.st = st
+	r.step()
+	r.step()
+	pv, _, _, _, ok := r.c.RichLayout(r.sig.ID)
+	if !ok || len(pv.Lines) != 2 {
+		t.Fatalf("%d lines, want 2", len(pv.Lines))
+	}
+	for i, ln := range pv.Lines {
+		if ln.Height != 30 || ln.Top != float32(30*i) {
+			t.Errorf("line %d: top %v, height %v; want %v, 30", i, ln.Top, ln.Height, 30*i)
+		}
+	}
+	if rc := r.rect(); rc[3]-rc[1] != 60 {
+		t.Fatalf("box %v, want 60 high", rc)
+	}
+	var fills int
+	for _, q := range r.list.Quads {
+		if q.Mode == gpu.ModeShape && q.Color[0] == colPill {
+			fills++
+			// font 1: ascent 12 and descent 4, 1 px more above and below,
+			// about the baseline the glyphs are drawn on (whole pixels)
+			base := snap(pv.Lines[0].Baseline)
+			if q.Rect[1] != base-13 || q.Rect[3] != base+5 {
+				t.Errorf("code fill %v, want %v..%v about the baseline %v", q.Rect, base-13, base+5, base)
+			}
+		}
+	}
+	if fills != 1 {
+		t.Fatalf("%d code fills, want 1", fills)
+	}
+}

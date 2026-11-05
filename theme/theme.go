@@ -58,6 +58,7 @@ func (m Mode) T() float32 {
 
 // Theme is a complete look. Copy it and change fields to derive a variant.
 type Theme struct {
+	_ [0]func() // not comparable: nothing compares themes, and their generated == was linked into every app (D101)
 	// Name identifies the theme.
 	Name string
 	// Light and Dark are the palettes of the two modes.
@@ -77,6 +78,12 @@ type Theme struct {
 	// and faded at rest, as the web and T3 Code draw them. A view keeps the
 	// system's legacy bars with base.ScrollState.Legacy.
 	OverlayScrollers bool
+	// Antialiased draws the theme's text without the system's font
+	// smoothing, as a browser does under -webkit-font-smoothing: antialiased:
+	// on macOS glyph stems keep their outline's weight instead of the
+	// thickening AppKit gives labels (D101). For an app whose look is a web
+	// app's; AppKit-faithful themes leave it off.
+	Antialiased bool
 	// Corners is the shape of rounded corners; zero is the platform's.
 	Corners CornerCurve
 
@@ -163,6 +170,8 @@ type Resolved struct {
 	Continuous bool
 	// OverlayScrollers is Theme.OverlayScrollers.
 	OverlayScrollers bool
+	// Antialiased is Theme.Antialiased.
+	Antialiased bool
 	// Styles holds the text styles' fonts, indexed by TextStyle.
 	Styles [NumTextStyles]StyleFont
 	// Sizes holds the control sizes in pixels, indexed by Size.
@@ -306,7 +315,7 @@ func (t *Theme) Resolve(ts TextSystem, scale float32, mode Mode) Resolved {
 // macOS ones, lengths are scaled to pixels and the fonts created.
 func (t *Theme) resolveTokens(r *Resolved, ts TextSystem, scale float32) {
 	r.rolesBase, r.followSys, r.own, r.motion = t.Roles, t.SystemColors, t.Own, t.Motion
-	r.OverlayScrollers = t.OverlayScrollers
+	r.OverlayScrollers, r.Antialiased = t.OverlayScrollers, t.Antialiased
 	r.Continuous = t.Corners == CornersContinuous || t.Corners == CornersDefault && runtime.GOOS == "darwin"
 	if r.rolesBase[0] == (Colors{}) && r.rolesBase[1] == (Colors{}) {
 		r.rolesBase = Measured
@@ -531,5 +540,5 @@ func (r *Resolved) Met(f text.FontKey) FontMet {
 
 // UITheme returns the hover and press overlay colours for ui.Context.Theme.
 func (r *Resolved) UITheme() ui.Theme {
-	return ui.Theme{HotOverlay: r.Pal.HoverOverlay, ActiveOverlay: r.Pal.PressOverlay, ContinuousCorners: r.Continuous}
+	return ui.Theme{HotOverlay: r.Pal.HoverOverlay, ActiveOverlay: r.Pal.PressOverlay, ContinuousCorners: r.Continuous, NoFontSmoothing: r.Antialiased}
 }

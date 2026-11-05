@@ -83,11 +83,14 @@ type TextSpec struct {
 	// point. It is Line for most styles; Large Title (31), Title 2 (20.5) and
 	// Title 3 (19) are shorter than their line. 0 takes Line.
 	Cell float32
+	// Tracking is the space after every character in ems, as CSS's
+	// letter-spacing (a web app's headings: -0.015em); 0 is the font's.
+	Tracking float32
 }
 
 // Desc is the font description of s (Scale left zero for Resolve to set).
 func (s TextSpec) Desc() text.FontDesc {
-	return text.FontDesc{SizePt: s.Size, Weight: s.Weight, Mono: s.Mono}
+	return text.FontDesc{SizePt: s.Size, Weight: s.Weight, Mono: s.Mono, Tracking: s.Tracking}
 }
 
 // StyleFont is a resolved text style: its font and where the baseline sits in

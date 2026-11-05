@@ -1,6 +1,7 @@
 package mdview
 
 import (
+	"cmp"
 	"hash/maphash"
 	"strconv"
 
@@ -25,6 +26,7 @@ type MarkdownView struct {
 	size        float32
 	mono        text.FontKey
 	line        float32 // a code line's height in pixels
+	lh          float32 // the body's line height in pixels (0: the fonts')
 	body        ui.RichStyles
 	heads       [3]ui.RichStyles
 	th          ui.RichStyles
@@ -84,6 +86,23 @@ type MarkdownRecipe struct {
 	QuoteW                    float32
 	// QuoteText is the colour of quoted text.
 	QuoteText rexui.Tint
+	// Leading is the body's line height as a multiple of SizePt, as CSS's
+	// line-height (1.625 is a reading column's); HeadLeading the headings'
+	// as a multiple of their size. 0 lets each line be as high as its fonts
+	// make it.
+	Leading, HeadLeading float32
+	// HeadWeight is the headings' weight (600, semibold, as a browser's
+	// headings in most stylesheets); 0 draws levels 1 and 2 bold and the
+	// others semibold.
+	HeadWeight int
+	// CodeSize is inline code's size as a multiple of the text's (CSS's
+	// 0.85em); 0 is a point smaller. CodeRadius rounds its fill, in points;
+	// 0 is 3.
+	CodeSize, CodeRadius float32
+	// CodeLink colours inline code that is a link (a cited path the app
+	// opens); the zero Tint takes the link colour. A web app's code links
+	// keep the text's colour and are underlined under the pointer.
+	CodeLink rexui.Tint
 }
 
 // MarkdownLook is Markdown's recipe: the a3 app's reading text, in Rex.
@@ -109,9 +128,13 @@ func (v *MarkdownView) prepare(k *base.Kit, rc *CodeRecipe) {
 	codeStyles(r, v.mono, &v.code)
 	ml := &MarkdownLook
 	inlineStyles(k, ml, ml.SizePt, theme.WeightRegular, &v.body)
-	inlineStyles(k, ml, ml.Heads[0], theme.WeightBold, &v.heads[0])
-	inlineStyles(k, ml, ml.Heads[1], theme.WeightBold, &v.heads[1])
-	inlineStyles(k, ml, ml.Heads[2], theme.WeightSemibold, &v.heads[2])
+	hw := [3]int{theme.WeightBold, theme.WeightBold, theme.WeightSemibold}
+	if ml.HeadWeight > 0 {
+		hw = [3]int{ml.HeadWeight, ml.HeadWeight, ml.HeadWeight}
+	}
+	for i := range v.heads {
+		inlineStyles(k, ml, ml.Heads[i], hw[i], &v.heads[i])
+	}
 	inlineStyles(k, ml, ml.SizePt, theme.WeightSemibold, &v.th)
 }
 
@@ -131,7 +154,10 @@ func inlineStyles(k *base.Kit, ml *MarkdownRecipe, pt float32, w int, st *ui.Ric
 		var s ui.RichStyle
 		if bits&markdown.CodeSpan != 0 {
 			d.Mono, d.SizePt, d.Italic = true, pt-1, false
-			s.BG, s.Radius = ml.Code.RGBA(r), 3*r.Scale
+			if ml.CodeSize > 0 {
+				d.SizePt = pt * ml.CodeSize
+			}
+			s.BG, s.Radius, s.PadY = ml.Code.RGBA(r), cmp.Or(ml.CodeRadius, 3)*r.Scale, 0.1*d.SizePt*r.Scale // CSS's padding 0.1em, with a line height
 		}
 		s.Font = ts.Font(d)
 		if bits&markdown.Strike != 0 {
@@ -139,6 +165,9 @@ func inlineStyles(k *base.Kit, ml *MarkdownRecipe, pt float32, w int, st *ui.Ric
 		}
 		if bits&markdown.LinkStyle != 0 {
 			s.Color = r.Colors[theme.Link]
+			if bits&markdown.CodeSpan != 0 && ml.CodeLink != (rexui.Tint{}) {
+				s.Color = ml.CodeLink.RGBA(r)
+			}
 			s.Deco |= ui.DecoHoverUnderline
 		}
 		st.Set(int(bits), s)
@@ -198,6 +227,7 @@ func Markdown(k *base.Kit, key ui.Key, d *markdown.Doc, o MarkdownOpts) Markdown
 	}
 	sc := k.Scale()
 	v.prepare(k, &CodeLook)
+	v.lh = leading(sc, ml.SizePt, ml.Leading)
 	k.ApplySize(ui.Pct(1), ui.Children(1))
 	c.NextAxis(ui.AxisY)
 	sig := MarkdownSignal{Copied: -1}
@@ -242,9 +272,10 @@ func Markdown(k *base.Kit, key ui.Key, d *markdown.Doc, o MarkdownOpts) Markdown
 		switch b.Kind {
 		case markdown.Paragraph, markdown.Heading:
 			st := &v.body
-			top := float32(0)
+			top, lh := float32(0), v.lh
 			if b.Kind == markdown.Heading {
-				st = &v.heads[min(int(b.Level), 3)-1]
+				h := min(int(b.Level), 3) - 1
+				st, lh = &v.heads[h], leading(sc, ml.Heads[h], ml.HeadLeading)
 				if i > 0 {
 					top = pt(sc, ml.HeadGap)
 				}
@@ -254,7 +285,7 @@ func Markdown(k *base.Kit, key ui.Key, d *markdown.Doc, o MarkdownOpts) Markdown
 			}
 			c.NextPadding(indent, top, 0, 0)
 			c.NextTextColor(col)
-			rs = c.RichText(bk, d.Body(b), d.SpansOf(b), st, ui.RichOpts{Item: o.Item, Part: part})
+			rs = c.RichText(bk, d.Body(b), d.SpansOf(b), st, ui.RichOpts{Item: o.Item, Part: part, LineHeight: lh})
 			part++
 		case markdown.ListItem:
 			c.NextSize(ui.Pct(1), ui.Children(1))
@@ -263,7 +294,7 @@ func Markdown(k *base.Kit, key ui.Key, d *markdown.Doc, o MarkdownOpts) Markdown
 			c.Push(c.BoxKeyed(0, bk, nil))
 			v.marker(k, ml, b, col)
 			c.NextTextColor(col)
-			rs = c.RichText(ui.KeyN(bk, 2), d.Body(b), d.SpansOf(b), &v.body, ui.RichOpts{Item: o.Item, Part: part})
+			rs = c.RichText(ui.KeyN(bk, 2), d.Body(b), d.SpansOf(b), &v.body, ui.RichOpts{Item: o.Item, Part: part, LineHeight: v.lh})
 			part++
 			c.Pop()
 		case markdown.Code:
@@ -325,6 +356,9 @@ func (v *MarkdownView) marker(k *base.Kit, ml *MarkdownRecipe, b *markdown.Block
 	c, r := k.Context(), k.Theme()
 	sc := k.Scale()
 	line := r.Styles[theme.StyleBody].Line
+	if v.lh > 0 { // the first line's height, so the marker sits on its baseline
+		line = v.lh
+	}
 	c.NextSize(ui.Px(pt(sc, ml.Indent)), ui.Px(line))
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
@@ -354,6 +388,32 @@ func (v *MarkdownView) marker(k *base.Kit, ml *MarkdownRecipe, b *markdown.Block
 		c.NextSize(ui.TextSize(0), ui.Px(line))
 		c.NextRole(ui.RoleNone)
 		c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 1), v.num)
+	case v.lh > 0:
+		// A browser's disc, circle and square: a shape a third of an em wide
+		// (5 px at 14), its centre 0.32em over the first line's baseline,
+		// where Chrome draws it.
+		m := k.TextSystem().Metrics(r.Styles[theme.StyleBody].Font)
+		d := theme.Snap(ml.SizePt / 3 * sc)
+		base := (line-(m.Ascent+m.Descent))/2 + m.Ascent
+		c.NextPadding(0, max(theme.Snap(base-0.32*ml.SizePt*sc-d/2), 0), 0, 0)
+		c.NextSize(ui.Children(1), ui.Pct(1))
+		c.NextCross(ui.CrossStart)
+		c.Push(c.Box(0, "dot"))
+		c.NextSize(ui.Px(d), ui.Px(d))
+		c.NextRadius(d / 2)
+		flags := ui.DrawBackground
+		switch b.Depth {
+		case 1:
+			c.NextBG(col)
+		case 2:
+			c.NextBorder(col, max(theme.Snap(sc), 1))
+			flags = ui.DrawBorder
+		default:
+			c.NextRadius(0)
+			c.NextBG(col)
+		}
+		c.Box(flags, "###b")
+		c.Pop()
 	default:
 		c.NextFont(r.Styles[theme.StyleBody].Font)
 		c.NextTextColor(col)
@@ -433,7 +493,7 @@ func (v *MarkdownView) table(k *base.Kit, ml *MarkdownRecipe, key ui.Key, d *mar
 			c.NextAlign(ui.AlignRight)
 		}
 		c.NextTextColor(r.Colors[theme.Label])
-		rs := c.RichText(ui.KeyN(key, 1<<21+uint64(j)), d.Body(b), d.SpansOf(b), st, ui.RichOpts{Item: item, Part: part})
+		rs := c.RichText(ui.KeyN(key, 1<<21+uint64(j)), d.Body(b), d.SpansOf(b), st, ui.RichOpts{Item: item, Part: part, LineHeight: v.lh})
 		part++
 		if rs.Clicked != 0 {
 			sig.Link = rs.Clicked
@@ -503,4 +563,13 @@ func indexNL(b []byte) int {
 		}
 	}
 	return len(b)
+}
+
+// leading is a line height of size pt × lead in pixels at scale sc, on whole
+// pixels; 0 when lead is 0.
+func leading(sc, size, lead float32) float32 {
+	if lead <= 0 {
+		return 0
+	}
+	return theme.Snap(size * lead * sc)
 }
