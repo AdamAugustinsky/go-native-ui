@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"sync"
 	"testing"
+
+	"github.com/ebitengine/purego"
 )
 
 func TestStringDataRoundTrip(t *testing.T) {
@@ -47,6 +49,20 @@ func TestDictAndArray(t *testing.T) {
 	if got := GoString(fr, ArrayAt(fr, arr, 1)); got != "two" {
 		t.Errorf("ArrayAt(1) = %q", got)
 	}
+	// The array holds its own reference: Reveal hands one to NSWorkspace,
+	// which reads it after the caller's pool has released the URLs.
+	data := Data(fr, []byte{1, 2, 3})
+	count, err := purego.Dlsym(cfLib, "CFGetRetainCount")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := fr.Call1(count, data)
+	held := Array(fr, data)
+	if got := fr.Call1(count, data); got != before+1 {
+		t.Errorf("Array left the retain count at %d, want %d", got, before+1)
+	}
+	CFRelease(fr, held)
+	CFRelease(fr, data)
 	d := Dict(fr)
 	DictSet(fr, d, a, b)
 	CFRelease(fr, d)

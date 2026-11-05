@@ -97,7 +97,7 @@ func (osSystem) reveal(paths []string) error {
 		}
 		urls = append(urls, u)
 	}
-	arr := cf.Array(fr, urls...) // does not retain: the pool owns the URLs
+	arr := cf.Array(fr, urls...) // retains the URLs: NSWorkspace reads them after the pool drains
 	defer cf.CFRelease(fr, arr)
 	ws := cf.Msg(fr, cf.Cls(fr, "NSWorkspace"), cf.Sel(fr, "sharedWorkspace"))
 	if ws == 0 {
