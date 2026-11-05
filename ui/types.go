@@ -410,6 +410,10 @@ type Theme struct {
 	// hover overlay) with the continuous curve macOS draws, a squircle,
 	// instead of circular arcs (gpu.ShapeContinuous). Shadows stay circular.
 	ContinuousCorners bool
+	// NoFontSmoothing draws all text as the box flag NoFontSmoothing does:
+	// on macOS without AppKit's stem thickening, as a browser draws text
+	// under -webkit-font-smoothing: antialiased (theme.Theme.Antialiased).
+	NoFontSmoothing bool
 }
 
 // Rates are the animation rates k in rate = 1−2^(−k·dt), per second.

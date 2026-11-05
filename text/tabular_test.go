@@ -45,3 +45,35 @@ func TestTabularDigits(t *testing.T) {
 		}
 	}
 }
+
+// Tracking adds its spacing after every character, in runs and in paragraphs
+// alike, and caches apart from the same font without it.
+func TestTracking(t *testing.T) {
+	s := newSys(t)
+	d := FontDesc{SizePt: 20, Scale: 2, Weight: 500}
+	dt := d
+	dt.Tracking = -0.025 // a web heading's letter-spacing: -1 px at 20 pt and 2×
+	plain, tight := s.Font(d), s.Font(dt)
+	if plain == tight {
+		t.Fatal("the tracked font is the font without tracking")
+	}
+	const str = "Construir"
+	a, b := shapeStr(s, plain, str), shapeStr(s, tight, str)
+	step := dt.Tracking * d.SizePt * d.Scale
+	n := float32(len(str))
+	if got, want := b.Advance-a.Advance, n*step; math.Abs(float64(got-want)) > 0.05 {
+		t.Fatalf("tracked run is %v px longer, want %v", got, want)
+	}
+	for i := range b.X {
+		if got, want := b.X[i]-a.X[i], float32(i)*step; math.Abs(float64(got-want)) > 0.05 {
+			t.Fatalf("glyph %d moved %v px, want %v", i, got, want)
+		}
+	}
+	width := func(f FontKey) float32 {
+		pv := s.Paragraph(s.Layout(&Para{Text: []byte(str), Fonts: []FontKey{f}}))
+		return pv.Lines[0].Width
+	}
+	if got, want := width(tight)-width(plain), n*step; math.Abs(float64(got-want)) > 0.05 {
+		t.Fatalf("tracked paragraph line is %v px longer, want %v", got, want)
+	}
+}

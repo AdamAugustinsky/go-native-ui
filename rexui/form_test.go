@@ -513,3 +513,49 @@ func TestFormRowLabelWraps(t *testing.T) {
 		t.Errorf("rows with a wrapping label allocate %v per frame", n)
 	}
 }
+
+// A flat grouped form (FormRecipe.Flat) is a web app's settings list: no
+// box, its rows flush with its edges, and a line under every row, the last
+// one too.
+func TestFlatFormIsAWebList(t *testing.T) {
+	saved := rexui.FormLook
+	t.Cleanup(func() { rexui.FormLook = saved })
+	rexui.FormLook.Flat = true
+	var on [2]bool
+	var f rexui.Form
+	var labels [2]ui.ID
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		f = rexui.BeginForm(g.k, "form", rexui.FormOpts{})
+		for i, name := range []string{"Wi-Fi", "Bluetooth"} {
+			f.Row(g.k, name, rexui.RowOpts{})
+			labels[i] = f.Label()
+			rexui.Switch(g.k, name, &on[i], rexui.SwitchOpts{})
+			f.EndRow(g.k)
+		}
+		rexui.EndForm(g.k, &f)
+	}))
+	g.settle()
+	r := g.k.Theme()
+	box, line := rexui.CardLook.Fill.RGBA(r), rexui.CardLook.Divider.RGBA(r)
+	fr := g.c.Rect(f.ID())
+	lines := 0
+	for _, q := range g.list.Quads {
+		if q.Mode != gpu.ModeShape {
+			continue
+		}
+		if q.Color[0] == box && q.Rect == fr {
+			t.Error("the flat form drew its box")
+		}
+		if q.Color[0] == line && q.Rect[0] == fr[0] && q.Rect[2] == fr[2] {
+			lines++
+		}
+	}
+	if lines != 2 {
+		t.Errorf("%d full-width lines, want 2: between the rows and under the last", lines)
+	}
+	for i, id := range labels {
+		if x := g.c.Rect(id)[0]; x != fr[0] {
+			t.Errorf("row %d's label starts at %v, the form at %v: not flush", i, x, fr[0])
+		}
+	}
+}

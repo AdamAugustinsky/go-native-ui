@@ -37,10 +37,15 @@ type CardOpts struct {
 	Slot int
 	// Focus is how focused a CardRex is, 0 to 1 (animate it, as a pane's).
 	Focus float32
+	// Flat draws a CardInset without its box: no fill, its rows flush with
+	// its edges and a line under every row, the last too, as a web app's
+	// settings list (FormRecipe.Flat).
+	Flat bool
 }
 
 // CardRecipe is the look of cards.
 type CardRecipe struct {
+	_ [0]func() // not comparable: nothing compares recipes, and their generated == is linked into every app (D101)
 	// Fill is a box's fill (theme.GroupBox).
 	Fill Tint
 	// Pad is the space inside a box and a Rex card, RowPadX and RowPadY that
@@ -74,6 +79,7 @@ var CardLook = CardRecipe{
 // Card is a card being built: BeginCard returns it, Row adds a form row to a
 // CardInset, EndCard closes it.
 type Card struct {
+	_       [0]func() // not comparable (D101)
 	variant CardVariant
 	outer   ui.ID
 	key     ui.Key
@@ -81,6 +87,7 @@ type Card struct {
 	surf    theme.Surface
 	kg      theme.KeyGen
 	rex     bool // the Rex surface was begun
+	flat    bool // CardOpts.Flat
 }
 
 // BeginCard starts a card and makes its content area the parent: a column
@@ -97,6 +104,7 @@ func BeginCard(k *base.Kit, label string, o CardOpts) Card {
 	c, r := k.Context(), k.Theme()
 	rc := &CardLook
 	cd := Card{variant: o.Variant % NumCardVariants}
+	cd.flat = o.Flat && cd.variant == CardInset
 	if cd.variant == CardRex {
 		k.ApplySize(ui.Pct(1), ui.Pct(1))
 		cd.outer = c.Box(0, label)
@@ -149,7 +157,11 @@ func BeginCard(k *base.Kit, label string, o CardOpts) Card {
 		c.NextGap(0)
 	}
 	c.NextSize(ui.Pct(1), ui.Children(1))
-	c.Push(c.BoxKeyed(ui.DrawBackground, ui.KeyN(cd.key, 4), nil))
+	flags := ui.DrawBackground
+	if cd.flat {
+		flags = 0
+	}
+	c.Push(c.BoxKeyed(flags, ui.KeyN(cd.key, 4), nil))
 	return cd
 }
 
@@ -186,7 +198,11 @@ func (cd *Card) row(k *base.Kit, label string, pt float32) ui.ID {
 	if pt <= 0 {
 		pt = rc.RowH
 	}
-	k.NextPadding(rc.RowPadX, rc.RowPadY, rc.RowPadX, rc.RowPadY)
+	x := rc.RowPadX
+	if cd.flat {
+		x = 0
+	}
+	k.NextPadding(x, rc.RowPadY, x, rc.RowPadY)
 	k.NextHeight(k.Fixed(pt))
 	return k.Row(label)
 }
@@ -196,7 +212,11 @@ func (cd *Card) row(k *base.Kit, label string, pt float32) ui.ID {
 func (cd *Card) rowFit(k *base.Kit, label string, padY float32) ui.ID {
 	rc := &CardLook
 	cd.rows++
-	k.NextPadding(rc.RowPadX, padY, rc.RowPadX, padY)
+	x := rc.RowPadX
+	if cd.flat {
+		x = 0
+	}
+	k.NextPadding(x, padY, x, padY)
 	return k.Row(label)
 }
 
@@ -209,6 +229,9 @@ func (cd *Card) EndRow(k *base.Kit) { k.EndRow() }
 // EndCard closes the card BeginCard started.
 func EndCard(k *base.Kit, cd *Card) {
 	c, r := k.Context(), k.Theme()
+	if cd.flat {
+		cd.separate(k) // the line under the last row
+	}
 	c.Pop() // the content
 	if cd.variant == CardRex {
 		if cd.rex {

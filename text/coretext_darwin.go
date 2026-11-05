@@ -68,6 +68,7 @@ var sy struct {
 	kDesignTrait, kDesignMonospaced                                  uintptr
 	kParagraphStyle                                                  uintptr
 	kFeatureSettings, kFeatureType, kFeatureSelector                 uintptr
+	kKernAttribute                                                   uintptr
 }
 
 var ctxFlags = [...]struct {
@@ -196,6 +197,7 @@ func loadSyms() error {
 		sy.kDesignTrait, sy.kDesignMonospaced = global(ct, "kCTFontUIFontDesignTrait"), global(ct, "kCTFontUIFontDesignMonospaced")
 		sy.kParagraphStyle = global(ct, "kCTParagraphStyleAttributeName")
 		sy.kFeatureSettings = global(ct, "kCTFontFeatureSettingsAttribute")
+		sy.kKernAttribute = global(ct, "kCTKernAttributeName")
 		sy.kFeatureType, sy.kFeatureSelector = global(ct, "kCTFontFeatureTypeIdentifierKey"), global(ct, "kCTFontFeatureSelectorIdentifierKey")
 	})
 	return loadErr
@@ -448,7 +450,17 @@ func (s *System) Font(d FontDesc) FontKey {
 	if d.TabularDigits && font != 0 {
 		font = s.withTabularDigits(font, pt)
 	}
-	fe := fontEnt{desc: d, font: font, attrs: s.dict1(sy.kFontAttribute, font)}
+	fe := fontEnt{desc: d, font: font}
+	if d.Tracking != 0 && sy.kKernAttribute != 0 {
+		// CoreText's kern is added after every character, in points.
+		n := s.number(float64(d.Tracking) * pt)
+		s.keys[0], s.vals[0] = sy.kFontAttribute, font
+		s.keys[1], s.vals[1] = sy.kKernAttribute, n
+		fe.attrs = s.dictN(2)
+		s.release(n)
+	} else {
+		fe.attrs = s.dict1(sy.kFontAttribute, font)
+	}
 	fe.face = s.faceFor(font, d.Scale)
 	sc := float64(d.Scale)
 	fe.metrics = Metrics{

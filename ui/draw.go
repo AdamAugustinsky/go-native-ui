@@ -693,7 +693,7 @@ func (c *Context) emitTruncated(l *gpu.DrawList, b *box, x0, x1, baseline float3
 		return true
 	}
 	var smooth uint8
-	if b.flags&NoFontSmoothing == 0 {
+	if b.flags&NoFontSmoothing == 0 && !c.Theme.NoFontSmoothing {
 		smooth = text.SmoothLevel(col)
 	}
 	for i := 0; i < n; i++ {
@@ -723,7 +723,7 @@ func glyphEnd(v text.RunView, i int) float32 {
 // only known from the entry. Quads outside the clip are dropped.
 func (c *Context) emitGlyphs(l *gpu.DrawList, b *box, v text.RunView, x, baseline float32, tclip [4]float32, fade [2]float32, col uint32) {
 	var smooth uint8
-	if b.flags&NoFontSmoothing == 0 {
+	if b.flags&NoFontSmoothing == 0 && !c.Theme.NoFontSmoothing {
 		smooth = text.SmoothLevel(col)
 	}
 	for i, gid := range v.Glyphs {

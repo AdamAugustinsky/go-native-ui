@@ -35,6 +35,7 @@ type Tokens struct {
 	Hover, Active      float32 // a row under the pointer, a chosen row
 	RustText           uint32  // rust that reads as text (links)
 	RustSoft, RustLine float32 // rust's wash (attention) and outline (focus)
+	RustLineOf         uint32  // the colour RustLine is of: rust, or rust's text colour in dark
 	OK, Danger         uint32
 	DangerSoft         float32
 }
@@ -45,14 +46,14 @@ var (
 		Bg: 0xF7F7F8, Sidebar: Paper, Card: 0xFFFFFF, CodeBg: 0xF1F1F3,
 		Fg: Ink, Fg70: 0.72, Fg50: 0.52, Fg35: 0.36,
 		Line: 0.09, LineStrong: 0.16, Hover: 0.045, Active: 0.08,
-		RustText: 0x964818, RustSoft: 0.09, RustLine: 0.45,
+		RustText: 0x964818, RustSoft: 0.09, RustLine: 0.45, RustLineOf: Rust,
 		OK: 0x2F8F57, Danger: 0xB4372F, DangerSoft: 0.08,
 	}
 	Dark = Tokens{
 		Bg: 0x111117, Sidebar: Ink, Card: 0x1A1A21, CodeBg: Ink,
 		Fg: Paper, Fg70: 0.74, Fg50: 0.52, Fg35: 0.36,
 		Line: 0.08, LineStrong: 0.15, Hover: 0.05, Active: 0.09,
-		RustText: 0xD98E57, RustSoft: 0.16, RustLine: 0.5,
+		RustText: 0xD98E57, RustSoft: 0.16, RustLine: 0.5, RustLineOf: 0xD98E57,
 		OK: 0x5CC68A, Danger: 0xE0756C, DangerSoft: 0.1,
 	}
 )
@@ -65,14 +66,28 @@ func Mode(dark bool) *Tokens {
 	return &Light
 }
 
-// Apply gives th A3 Lab's web colours, owned whatever the system's are: the
+// Apply gives th A3 Lab's web colours and the stylesheet's text and focus
+// look, owned whatever the system's are: the
 // field (what a flat sidebar shows) paper, the panes the main column's
 // colour, what is raised the cards' white; the labels the ink at the
 // stylesheet's opacities, the lines and the rows' states the ink's too;
 // rust as the accent, the selection and the focus ring, rust's text colour
-// on the links; the stylesheet's green and red.
+// on the links; the stylesheet's green and red. Text is drawn as the web
+// app's body (-webkit-font-smoothing: antialiased), the focus ring is its
+// :focus-visible outline, 2 pt wide and 1 pt off the control, and lines are
+// its 1 px borders: a point, not a device pixel. Dialogs take its --r-xl.
 func Apply(th *theme.Theme) {
 	th.SetAccent(Rust<<8|0xFF, Rust<<8|0xFF)
+	th.Antialiased = true
+	if th.Lines == (theme.Lines{}) {
+		th.Lines = theme.MacLines
+	}
+	th.Lines.FocusOutset, th.Lines.FocusWidth = 3, 2
+	th.Lines.Hairline = 1 // border: 1px
+	if th.Radii == (theme.Radii{}) {
+		th.Radii = theme.MacRadii
+	}
+	th.Radii.Sheet = 12 // .dialog, .settings: --r-xl
 	pals := [2]*theme.Palette{&th.Light, &th.Dark}
 	for m, t := range [2]*Tokens{&Light, &Dark} {
 		op := func(c uint32) uint32 { return c<<8 | 0xFF }
@@ -101,8 +116,11 @@ func Apply(th *theme.Theme) {
 		set(theme.SidebarSel, fg(t.Active))
 		set(theme.SidebarSelUnemph, fg(t.Active))
 		set(theme.SidebarSelInactive, fg(t.Hover))
+		set(theme.PaneButton, fg(t.Fg50)) // .icon-btn, .tb-btn: --fg-50, --fg under the pointer
+		set(theme.PaneButtonHover, op(t.Fg))
+		set(theme.PaneButtonChip, op(t.Fg))
 		set(theme.Link, op(t.RustText))
-		set(theme.FocusRing, theme.ColA(Rust, t.RustLine))
+		set(theme.FocusRing, theme.ColA(t.RustLineOf, t.RustLine))
 		set(theme.TextSelection, theme.ColA(Rust, t.RustSoft*2))
 		set(theme.Green, op(t.OK))
 		set(theme.Red, op(t.Danger))

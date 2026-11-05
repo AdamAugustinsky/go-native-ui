@@ -77,6 +77,10 @@ type FontDesc struct {
 	// change. A font without such a feature shapes as usual. It is part of
 	// the font: the same description with and without it caches separately.
 	TabularDigits bool
+	// Tracking is the space added after every character, in ems (CSS's
+	// letter-spacing: -0.015em tightens a heading); 0 is the font's own
+	// spacing. It is part of the font, like TabularDigits.
+	Tracking float32
 }
 
 // Metrics are font metrics in pixels.
@@ -161,6 +165,25 @@ const (
 )
 
 // normalizeDesc fills in defaults so equal fonts compare equal.
+// trackRun adds t pixels after every cluster of a shaped run, as CSS's
+// letter-spacing does: the pen x of each glyph (xs, in visual order) moves by
+// t for each cluster before it, and the run's advance grows by t per
+// cluster, which it returns. Glyphs of one cluster (a base and its marks,
+// a ligature) move together.
+func trackRun(t float32, xs []float32, clus []uint32) float32 {
+	var add float32
+	for i := range xs {
+		if i > 0 && clus[i] != clus[i-1] {
+			add += t
+		}
+		xs[i] += add
+	}
+	if len(xs) == 0 {
+		return 0
+	}
+	return add + t
+}
+
 func normalizeDesc(d FontDesc) FontDesc {
 	if d.Scale <= 0 {
 		d.Scale = 1

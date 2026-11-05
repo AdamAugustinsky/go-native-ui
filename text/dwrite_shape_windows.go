@@ -219,6 +219,9 @@ func (s *System) shapeMiss(f FontKey, b []byte) RunRef {
 	if len(s.u16) > 0 {
 		s.paraRTL = paraStrongRTL(b) // UAX #9 P2/P3 over Bidi_Class (bidi.go)
 		advance = s.shapeLine(fe)
+		if t := fe.desc.Tracking; t != 0 {
+			advance += trackRun(t*fe.desc.SizePt*fe.desc.Scale, s.xbuf, s.cbuf)
+		}
 	}
 	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, s.cbuf, advance)
 }

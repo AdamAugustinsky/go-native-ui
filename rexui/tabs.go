@@ -857,7 +857,7 @@ func (t *TabsBuild) BeginTab(j int) TabCell {
 		v := t.k.VisualOf(key, base.HoverOff)
 		if v.Ring > 0.01 && !v.Inactive && !t.k.Disabled() { // no ring while another window has the keyboard
 			theme.At(c, 0, 0, rc0[2]-rc0[0], rc0[3]-rc0[1])
-			c.NextBorder(theme.WithAlpha(r.Colors[theme.FocusRing], v.Ring), base.FocusRingWidthPt*s)
+			c.NextBorder(theme.WithAlpha(r.Colors[theme.FocusRing], v.Ring), r.Lines.FocusWidth) // the theme's band, inside the pill
 			c.NextRadius(rc.PillRadius * s)
 			c.BoxKeyed(ui.DrawBorder|base.Floating, ui.KeyN(key, 5), nil)
 		}

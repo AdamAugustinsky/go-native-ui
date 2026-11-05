@@ -168,7 +168,9 @@ func Concentric(outer, inset float32) float32 { return max(0, outer-inset) }
 // Resolved theme.
 type Lines struct {
 	// Hairline is one device pixel (0.5 pt at 2×): separators, the scroll
-	// edge's line. It resolves to 1 pixel at every scale.
+	// edge's line. It resolves to whole pixels, at least 1: 0.5 pt is 1
+	// pixel up to 3×, and 1 pt is a web app's border of 1 CSS pixel, 2 device
+	// pixels at 2×.
 	Hairline float32
 	// FocusOutset is how far the focus ring's outer edge lies outside the
 	// control (3), and FocusWidth the ring's visible width (3.5).
@@ -208,6 +210,6 @@ func (l Lines) scaled(k float32) Lines {
 	for _, p := range [...]*float32{&l.FocusOutset, &l.FocusWidth, &l.RowH, &l.HeaderH, &l.Indent, &l.MenuItemH, &l.MenuPadY, &l.MenuSeparatorH, &l.Scroller, &l.ScrollerSmall, &l.ScrollerSmallLegacy, &l.ScrollerKnobInset, &l.ScrollerKnobMin, &l.ScrollerKnobMinSmall, &l.ScrollerKnobMinOverlay} {
 		*p *= k
 	}
-	l.Hairline = 1
+	l.Hairline = max(1, float32(int(l.Hairline*k))) // whole pixels: 0.5 pt is 1 up to 3×
 	return l
 }

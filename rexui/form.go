@@ -60,6 +60,7 @@ type RowOpts struct {
 
 // FormRecipe is the look of forms. Lengths are points.
 type FormRecipe struct {
+	_ [0]func() // not comparable: nothing compares recipes, and their generated == is linked into every app (D101)
 	// SectionGap is the space between two grouped sections, and HeaderGap
 	// the space above a section's header (after the section or footer
 	// before): the stack of AppKitRef's Settings form spaces boxes 8 apart
@@ -98,6 +99,10 @@ type FormRecipe struct {
 	// description (10; designed, System Settings' rows with one are about
 	// 50 pt high).
 	DetailPadY float32
+	// Flat lays a grouped form's sections out as a web app's settings list:
+	// rows without the box, flush with the form's edges, a line under each
+	// (CardOpts.Flat).
+	Flat bool
 }
 
 // FormLook is the forms' recipe.
@@ -116,6 +121,7 @@ var FormLook = FormRecipe{
 // Form is a form being built: BeginForm returns it, Row adds a row, Section
 // and EndSection group rows of a FormGrouped form, EndForm closes it.
 type Form struct {
+	_        [0]func() // not comparable (D101)
 	variant  FormVariant
 	outer    ui.ID
 	key      ui.Key
@@ -223,13 +229,17 @@ func (f *Form) Section(k *base.Kit, header string) {
 	if header != "" {
 		st := &r.Styles[TextStyles[rc.HeaderStyle%NumTextStyles]]
 		c.NextSize(ui.Pct(1), ui.Px(st.Line))
-		c.NextPadding(k.Pt(rc.TextX), 0, 0, 0)
+		tx := k.Pt(rc.TextX)
+		if rc.Flat { // flush with the rows
+			tx = 0
+		}
+		c.NextPadding(tx, 0, 0, 0)
 		c.Push(c.BoxKeyed(0, ui.KeyN(key, 1), nil))
 		Label(k, header, LabelOpts{Style: rc.HeaderStyle, Color: rc.Header})
 		c.Pop()
 		f.space(k, rc.HeaderBelow)
 	}
-	f.card = BeginCard(k, header, CardOpts{Variant: CardInset})
+	f.card = BeginCard(k, header, CardOpts{Variant: CardInset, Flat: rc.Flat})
 	f.inCard = true
 }
 

@@ -327,3 +327,20 @@ func TestGraphemeRandomBytes(t *testing.T) {
 		}
 	}
 }
+
+// trackRun adds the spacing after every cluster: the glyphs of a cluster move
+// together, and the advance grows by one step per cluster, the last included
+// (CSS's letter-spacing).
+func TestTrackRun(t *testing.T) {
+	xs := []float32{0, 10, 10, 20} // a, b with a mark, c
+	clus := []uint32{0, 1, 1, 3}
+	if add := trackRun(-2, xs, clus); add != -6 {
+		t.Fatalf("advance grew by %v, want -6 (three clusters)", add)
+	}
+	if want := []float32{0, 8, 8, 16}; !slices.Equal(xs, want) {
+		t.Fatalf("pens %v, want %v", xs, want)
+	}
+	if add := trackRun(1, nil, nil); add != 0 {
+		t.Fatalf("an empty run grew by %v", add)
+	}
+}

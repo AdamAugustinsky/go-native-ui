@@ -429,3 +429,43 @@ func TestLargeCodeFramesAllocateNothing(t *testing.T) {
 		t.Fatalf("large code frames allocated %d objects of ours:\n%s", n, sites)
 	}
 }
+
+// A web app's reading text (MarkdownRecipe.Leading and friends): paragraphs
+// and list items on lines of 1.625 × the size, headings on 1.3, and a list's
+// disc a third of an em wide in place of the bullet glyph.
+func TestMarkdownLeadingAndDiscs(t *testing.T) {
+	saved := mdview.MarkdownLook
+	t.Cleanup(func() { mdview.MarkdownLook = saved })
+	ml := &mdview.MarkdownLook
+	ml.SizePt, ml.Leading, ml.HeadLeading, ml.HeadWeight, ml.CodeSize = 14, 1.625, 1.3, theme.WeightSemibold, 0.85
+	g := newMDRig(t, 1)
+	var p markdown.Parser
+	p.Parse([]byte("First paragraph.\n\n- an item\n\n## A heading")).CopyTo(&g.docs[0])
+	g.frames(4)
+	for _, c := range []struct {
+		role ui.Role
+		text string
+		h    float32
+	}{
+		{ui.RoleLabel, "First paragraph.", 46}, // 14 × 1.625 × 2, whole pixels
+		{ui.RoleLabel, "an item", 46},
+		{ui.RoleHeading, "A heading", 16 + 42}, // HeadGap above, then ## at 16 pt: 16 × 1.3 × 2
+	} {
+		n, ok := g.node(c.role, c.text)
+		if !ok {
+			t.Fatalf("no %q", c.text)
+		}
+		if h := n.Bounds[3] - n.Bounds[1]; h != c.h {
+			t.Errorf("%q is %v px high, want %v", c.text, h, c.h)
+		}
+	}
+	discs := 0
+	for _, q := range g.dl.Quads {
+		if q.Mode == gpu.ModeShape && q.Rect[2]-q.Rect[0] == 9 && q.Rect[3]-q.Rect[1] == 9 && q.Radii[0] == 4.5 {
+			discs++
+		}
+	}
+	if discs != 1 {
+		t.Fatalf("%d discs of 9 px, want 1 (14 pt / 3 at 2×)", discs)
+	}
+}

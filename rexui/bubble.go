@@ -93,6 +93,7 @@ func (o *BubbleOpts) look() *BubbleRecipe {
 // BubbleRecipe is the look of message bubbles: Messages' after §3.4 of the
 // design (designed: AppKit has no bubble).
 type BubbleRecipe struct {
+	_ [0]func() // not comparable: nothing compares recipes, and their generated == is linked into every app (D101)
 	// PadX and PadY are the padding, Radius the corner radius, TailRadius the
 	// squared corner's, MaxShare the widest a bubble gets as a share of its
 	// column, and RowGap the space round a row, all in points.
@@ -116,6 +117,10 @@ type BubbleRecipe struct {
 	// radius, in points.
 	Code                Tint
 	CodePad, CodeRadius float32
+	// Line is the height of a line of text, in points, as CSS's line-height
+	// (a web app's 14 px text at 1.625 is 22.75); 0 lets the fonts set it. A
+	// code block and a system line keep their fonts'.
+	Line float32
 }
 
 // BubbleLook is the bubbles' recipe.
@@ -507,6 +512,8 @@ func MessageBubble(k *base.Kit, key ui.Key, body []byte, spans []ui.Span, o Mess
 	ro := ui.RichOpts{MaxW: b.maxW, Item: o.Item, Part: o.Part}
 	if v == BubbleSystem {
 		ro.MaxW = 0
+	} else if rc.Line > 0 && !o.Code {
+		ro.LineHeight = rc.Line * sc
 	}
 	if jumbo {
 		ro.EmojiLarge = true

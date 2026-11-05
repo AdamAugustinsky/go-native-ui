@@ -74,6 +74,9 @@ func (s *goSystem) shapeMiss(f FontKey, b []byte) RunRef {
 		}
 		start = end
 	}
+	if d := s.fonts[f].desc; d.Tracking != 0 {
+		pen += trackRun(d.Tracking*d.SizePt*d.Scale, s.xbuf, s.cbuf)
+	}
 	return s.runs.insert(f, b, s.gbuf, s.xbuf, s.fbuf, s.cbuf, pen)
 }
 
