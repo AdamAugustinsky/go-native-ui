@@ -341,6 +341,9 @@ func (c *Context) dismiss(k Key) {
 	}
 }
 
+// overlayEdgePt is the room a popup keeps from the window's left and right edges, in points.
+const overlayEdgePt = 8
+
 // placeOverlay positions an overlay root against its anchor once its size is
 // known, keeping it inside the window.
 func (c *Context) placeOverlay(b *box) {
@@ -348,6 +351,13 @@ func (c *Context) placeOverlay(b *box) {
 	W, H := float32(c.w), float32(c.h)
 	w, h := b.size[0], b.size[1]
 	a := ov.anchor
+	// a popup keeps clear of the window's sides, as AppKit's menus and popovers do (it touched
+	// them: a model picker opened near the right edge ran to the last pixel); a dialog centred
+	// on the window and a tooltip keep the plain clamp
+	var m float32
+	if ov.kind != OverlayModal && ov.kind != OverlayTooltip && ov.place != PlaceCenter {
+		m = c.Pt(overlayEdgePt)
+	}
 	var x, y float32
 	switch ov.place {
 	case PlaceBelow:
@@ -355,10 +365,16 @@ func (c *Context) placeOverlay(b *box) {
 		if y+h > H && a[1]-h >= 0 {
 			y = a[1] - h
 		}
+		if x+w > W-m && a[2]-w >= m { // no room to the right: right edges aligned, as a menu
+			x = a[2] - w // from a button near the window's end opens
+		}
 	case PlaceAbove:
 		x, y = a[0], a[1]-h
 		if y < 0 && a[3]+h <= H {
 			y = a[3]
+		}
+		if x+w > W-m && a[2]-w >= m {
+			x = a[2] - w
 		}
 	case PlaceRight:
 		x, y = a[2], a[1]
@@ -373,8 +389,11 @@ func (c *Context) placeOverlay(b *box) {
 	case PlaceCenter:
 		x, y = (a[0]+a[2]-w)/2, (a[1]+a[3]-h)/2
 	}
-	x = max(min(x, W-w), 0)
-	y = max(min(y, H-h), 0)
+	if w+2*m > W { // too wide for the margin: the window's edge, as before
+		m = 0
+	}
+	x = max(min(x, W-w-m), m)
+	y = max(min(y, H-h), 0) // owners size popups to the height they fit (a composer's list)
 	b.origin = [2]float32{x, y}
 	setRect(b)
 }

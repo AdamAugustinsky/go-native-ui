@@ -418,7 +418,9 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 		c.NextTextColor(fg)
 		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(rkey, 1), base.StrBytes(completionTitle(items, strs, i)))
 		if items != nil && items[i].Detail != "" {
-			c.NextSize(ui.Pct(1), ui.Px(rowH))
+			// the room the title leaves (Pct(1) was the whole row: the detail ran past the
+			// row's padding and the highlight's edge)
+			c.NextSize(ui.Grow(1), ui.Px(rowH))
 			c.NextFont(r.Styles[theme.StyleCallout].Font)
 			c.NextTextColor(fg2)
 			c.NextAlign(ui.AlignRight)
