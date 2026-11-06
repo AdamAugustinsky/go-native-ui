@@ -80,6 +80,12 @@ const (
 	velTimeout = 100e6
 	// maxRubber is the number of boxes that can be stretched at once.
 	maxRubber = 4
+	// sidewaysMin is how far (pixels, both axes) a gesture that starts over
+	// a sideways trap (sidewaysTrap) travels before its axis is chosen, and
+	// sidewaysBias how much more horizontal than vertical it must be to go
+	// sideways: within about 27° of the horizontal.
+	sidewaysMin  = 8
+	sidewaysBias = 2
 	// maxApplied is the number of boxes a frame's scrolling reports
 	// movement for (Signal.Scroll): each scroll event moves one box at most,
 	// so a frame's MaxScrolls events cannot fill it.
@@ -119,6 +125,7 @@ const (
 // rubber is the stretch of one box, per axis: negative past the start (the
 // content pulled down or right), positive past the end.
 type rubber struct {
+	_         [0]func() // not comparable, as gesture
 	key       Key
 	s, force  [2]float64
 	x0, v0, t [2]float64
@@ -129,19 +136,22 @@ type rubber struct {
 
 // gesture is the trackpad gesture in progress.
 type gesture struct {
-	fingers   bool // between Began and Ended or Cancelled
-	momentum  bool // between momentum Began and Ended
-	ignoreMom bool // the momentum bounced or was stopped: the rest is dropped
-	seen      bool // the gesture's Began came here: its momentum may follow
-	key       Key  // the box the gesture latched to, 0 before its first delta
-	axis      int8 // the locked axis, -1 while undecided
+	_         [0]func() // not comparable: no generated == (the gallery's size budget)
+	fingers   bool      // between Began and Ended or Cancelled
+	momentum  bool      // between momentum Began and Ended
+	ignoreMom bool      // the momentum bounced or was stopped: the rest is dropped
+	seen      bool      // the gesture's Began came here: its momentum may follow
+	key       Key       // the box the gesture latched to, 0 before its first delta
+	axis      int8      // the locked axis, -1 while undecided
 	cum       [2]float64
 	lastT     int64
 	vel       [2]float64 // pixels per second of the last deltas
+	pend      [2]float64 // deltas held while a gesture over a sideways trap is undecided
 }
 
 // scrollPhys is the trackpad state of a Context.
 type scrollPhys struct {
+	_       [0]func() // not comparable, as gesture
 	g       gesture
 	rb      [maxRubber]rubber
 	n       int
@@ -370,8 +380,9 @@ func (c *Context) scrollPlain(e *ScrollEvent) {
 	}
 	delta := [2]float64{-float64(e.DX) * mul, -float64(e.DY) * mul}
 	// A wheel's notches over a box that scrolls only sideways scroll it
-	// sideways: the box under the pointer takes them, and its Y would drop them.
-	if !e.Precise && delta[0] == 0 && c.boxes[ID(v)].flags&scrollMask == ScrollX {
+	// sideways, unless a box around it scrolls vertically: a strip of tabs
+	// takes them, a code block in a document leaves them to the document.
+	if !e.Precise && delta[0] == 0 && c.boxes[ID(v)].flags&scrollMask == ScrollX && c.scrollAround(ID(v), 1) == 0 {
 		delta = [2]float64{delta[1], 0}
 	}
 	for a := 0; a < 2; a++ {
@@ -379,10 +390,10 @@ func (c *Context) scrollPlain(e *ScrollEvent) {
 			continue
 		}
 		id := ID(v)
-		for id != 0 && !c.boxes[id].scrollOn(a) {
+		for id != 0 && !c.boxes[id].wheelOn(a) {
 			id = c.boxes[id].parent
 		}
-		if id == 0 || !c.boxes[id].scrollOn(a) {
+		if id == 0 {
 			continue
 		}
 		b := &c.boxes[id]
@@ -479,6 +490,23 @@ func (c *Context) gestureDelta(e *ScrollEvent, momentum bool) {
 	if d == [2]float64{} {
 		return
 	}
+	if g.key == 0 && g.axis < 0 && !momentum {
+		// Over a sideways trap the axis waits for the gesture to show which
+		// way it goes, and only a clearly horizontal one goes sideways.
+		if _, hit := c.scrollAt(e); c.sidewaysTrap(hit) {
+			g.pend[0] += d[0]
+			g.pend[1] += d[1]
+			ax, ay := math.Abs(g.pend[0]), math.Abs(g.pend[1])
+			if ax+ay < sidewaysMin && e.Phase != PhaseEnded && e.Phase != PhaseCancelled {
+				return
+			}
+			g.axis = 1
+			if ax > sidewaysBias*ay {
+				g.axis = 0
+			}
+			d, g.pend = g.pend, [2]float64{}
+		}
+	}
 	a := g.lock(d)
 	d[1-a] = 0
 	g.track(e.Time, d, c.dt)
@@ -568,7 +596,7 @@ func (c *Context) latchTarget(a int, hit ID) Key {
 	var first Key
 	for id := hit; id != 0; id = c.boxes[id].parent {
 		b := &c.boxes[id]
-		if !b.scrollOn(a) || b.flags&Disabled != 0 {
+		if !b.wheelOn(a) {
 			continue
 		}
 		if b.content[a] > float64(b.size[a])+0.5 {
@@ -579,6 +607,39 @@ func (c *Context) latchTarget(a int, hit ID) Key {
 		}
 	}
 	return first
+}
+
+// overflows reports whether the wheel scrolls box b on axis a (wheelOn) and
+// it has more content than view there.
+func (b *box) overflows(a int) bool {
+	return b.wheelOn(a) && b.content[a] > float64(b.size[a])+0.5
+}
+
+// scrollAround is the nearest box around id (id excluded) that the wheel
+// scrolls on axis a (wheelOn), or 0.
+func (c *Context) scrollAround(id ID, a int) ID {
+	for id = c.boxes[id].parent; id != 0; id = c.boxes[id].parent {
+		if c.boxes[id].wheelOn(a) {
+			return id
+		}
+	}
+	return 0
+}
+
+// sidewaysTrap reports whether scroll box hit lies in a box that scrolls
+// only sideways and overflows (a code block's lines), itself in one that
+// scrolls vertically (the document): a gesture there has to choose.
+func (c *Context) sidewaysTrap(hit ID) bool {
+	for id := hit; id != 0; id = c.boxes[id].parent {
+		b := &c.boxes[id]
+		if b.overflows(1) {
+			return false // the first box to take vertical scrolling comes first
+		}
+		if b.overflows(0) {
+			return c.scrollAround(id, 1) != 0
+		}
+	}
+	return false
 }
 
 // push moves box b by d pixels on axis a through its rubber band: a stretch

@@ -93,6 +93,7 @@ type boxAttrs struct {
 	fadeEnd   float32    // its children fade out over its last fadeEnd pixels (NextFadeEnd)
 	obscured  [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
 	stopWheel bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
+	passWheel bool       // the wheel and the trackpad scroll the box around it, not it (PassWheel)
 	fixed     [2]float32
 	anchor    Anchor     // NextAnchor: fixed holds the insets
 	lo, hi    [2]float32 // NextMinSize, NextMaxSize (0: none)

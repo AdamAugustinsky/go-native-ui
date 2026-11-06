@@ -56,7 +56,7 @@ func (c *Context) hitWalk(id ID, x, y float32) {
 		if b.flags&hitMask != 0 && b.flags&Disabled == 0 {
 			c.hotID = id
 		}
-		if b.flags&scrollMask != 0 {
+		if b.flags&scrollMask != 0 && !b.passWheel {
 			c.scrollKey, c.sp.hit = b.key, id
 		} else if b.stopWheel {
 			c.scrollKey, c.sp.hit = 0, 0
@@ -481,6 +481,13 @@ func (c *Context) Obscured(id ID) (top, bottom float32) {
 // under it is one: AppKit's titlebar views do not pass the wheel on to the
 // content (measured on 27.2 through NSWindow's routing).
 func (c *Context) StopWheel(id ID) { c.boxes[id].stopWheel = true }
+
+// PassWheel makes scroll box id, this frame, scroll only when the app or
+// ui.ScrollIntoView moves it: the wheel and the trackpad over it scroll the
+// scroll box around it instead. A virtual list's internal boxes, which
+// scroll to place their content, are such boxes: a gesture over them is the
+// list's.
+func (c *Context) PassWheel(id ID) { c.boxes[id].passWheel = true }
 
 // ListRange declares box id a virtual list of rows fixed-height rows and
 // returns the half-open row range [first, last) to build: the rows that

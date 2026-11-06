@@ -719,6 +719,74 @@ func TestHostOwnsItsGesture(t *testing.T) {
 	}
 }
 
+// A host that passes scrolling (PassScroll, a page in a transcript): a
+// vertical gesture over it and a wheel reach ui, every event once, and AppKit
+// does not see them (the event loop returns before sendEvent:).
+func TestPassScrollHostLeavesVerticalToUI(t *testing.T) {
+	type res struct {
+		err              error
+		noEvents         bool
+		gesture, wheel   int
+		passed, appKitAt int
+	}
+	var r res
+	phases := [][2]uintptr{{cgMayBegin, 0}, {cgBegan, 0}, {cgChanged, 0}, {cgEnded, 0}, {0, cgMomBegin}, {0, cgMomContinue}, {0, cgMomEnd}}
+	onMain(func() {
+		w, err := Open(Options{Title: "pass scroll", Width: 400, Height: 300, Hidden: true})
+		if err != nil {
+			r.err = err
+			return
+		}
+		defer w.Close()
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		objc.F.Reset().Arg(uintptr(w.win)).Arg(uintptr(selSetFrameOrigin)).ArgPoint(0, 0).Call(objc.MsgSend)
+		s := w.scale
+		rig := &hostRig{w: w}
+		v := newViewOf(nsViewClass(), 0, 0, 200, 100)
+		id, err := w.NewHost(HostView, HostOptions{View: uintptr(v), PassScroll: true})
+		objc.Send(v, selReleaseObj)
+		if err != nil {
+			r.err = err
+			return
+		}
+		w.SetHosts([]HostRegion{{ID: id, Rect: pxRect(s, 100, 100, 300, 200), Clip: pxRect(s, 100, 100, 300, 200)}})
+		w.FlushShell()
+		w.q.reset()
+		for _, p := range phases {
+			ev := rig.gesture(150, 150, -20, p[0], p[1])
+			if ev == 0 {
+				r.noEvents = true
+				return
+			}
+			if w.scrollEvent(ev, 1) {
+				r.passed++
+			} else {
+				r.appKitAt++
+			}
+			w.hosts.scrollDelivered()
+		}
+		r.gesture = len(w.q.ev)
+		w.q.reset()
+		if w.scrollEvent(rig.scroll(150, 150, -3), 2) {
+			r.passed++
+		}
+		r.wheel = len(w.q.ev)
+	})
+	switch {
+	case r.err != nil:
+		t.Skipf("cannot open a window here: %v", r.err)
+	case r.noEvents:
+		t.Skip("no scroll events can be made here")
+	}
+	if r.gesture != len(phases) || r.wheel != 1 {
+		t.Errorf("ui got %d of the gesture's %d events and %d wheel events (want all, and 1)", r.gesture, len(phases), r.wheel)
+	}
+	if r.passed != len(phases)+1 || r.appKitAt != 0 {
+		t.Errorf("%d events kept from AppKit, %d left to it: want all kept", r.passed, r.appKitAt)
+	}
+}
+
 // The mark that keeps one delivery of a scroll from being queued twice lasts
 // for that delivery only: the same event delivered again (reposted) is
 // queued again.

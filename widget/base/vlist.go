@@ -651,6 +651,7 @@ func (v *VList) openPile() {
 	c.NextPadding(0, 0, 0, 0)
 	p := c.BoxKeyed(fl, ui.KeyN(v.okey, 3), nil)
 	c.SetScroll(p, 0, vlPileScroll)
+	c.PassWheel(p) // it scrolls to place the pile; a gesture over the pile is the body's
 	c.Push(p)
 	v.inPile = true
 }

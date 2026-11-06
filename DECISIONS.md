@@ -1550,3 +1550,18 @@ So a partial frame drawn into a retained back buffer and copied to the drawable 
 **Size.** The stripped linux/amd64 gallery grew 2.7 KB and crossed a 4 KB page (263 bytes over the budget). `format.Locale`, `theme.Theme` and four rexui recipes (`BubbleRecipe`, `CardRecipe`, `FormRecipe`, `SelectRecipe`) and `Card`/`Form` became non-comparable, as D97 and D99 did: nothing compares them, and `Locale`'s generated `==` alone was about 2 KB. The gallery is 10,481,927 bytes again, as on main (3,833 under).
 
 **Checked.** `TestRichTextLineHeightAndHuggingFills` (lines of 30 px, the code fill 18 px about the drawn baseline), `TestTrackRun` and `TestTracking` (runs and paragraphs on macOS and Windows), `TestMarkdownLeadingAndDiscs`, `TestFlatFormIsAWebList` (fails without the line under the last row), `TestApplyTextAndLines`, and a3lab's colour roles. Every default stays as it was: no golden of the framework changed.
+
+## D102. Scrolling a document does not stop at what is inside it (2026-11-06)
+
+**Decision.** A wheel or a trackpad gesture that scrolls a document (a chat transcript) keeps scrolling it over the boxes inside, unless the gesture clearly means one of them:
+- **Sideways boxes.** A wheel's notches over a box that scrolls only sideways (a code block) scroll it sideways only when no box around it scrolls vertically: a strip of tabs still takes them, a code block in a transcript leaves them to the transcript. A trackpad gesture that starts over such a box, inside a vertical scroller, waits 8 px to choose its axis and goes sideways only within about 27° of horizontal (`sidewaysMin`, `sidewaysBias`); a gesture over a box that scrolls both ways keeps the predominant-axis rule.
+- **`ui.Context.PassWheel`.** A scroll box that scrolls only when the app or a reveal moves it: the wheel and the trackpad over it, and over the scroll boxes inside it, scroll the box around it. `base.VList`'s pile (the items it keeps against the view's end) is one. Before, a gesture over a code block in a list that sat at its end latched to the pile, which the list sets again every frame, so the list did not move at all.
+- **`platform.HostOptions.PassScroll`, `webview.Options.PassScroll` (macOS).** Over a hosted view that passes scrolling, a wheel and a gesture whose first event is more vertical than sideways go to ui, and AppKit does not see them; sideways gestures stay the host's. A page shown inside a scrolling document (a3-app's agent visuals) no longer takes the document's scrolling.
+
+**Why.** Adam, 2026-11-06, about a3-app's conversation: scrolling "simply stops scrolling the page and scrolls the component (sometimes horizontally) instead" at code blocks, tables and HTML visuals. Each of the three cases above was one of those stops.
+
+**Not done.** Windows' WebView2 is a child window in another process and still takes the wheel over a visual. A vertical scroller inside a document (none in a3-app's transcript) still keeps the gesture it latched, as NSScrollView does.
+
+**Size.** linux/amd64 gallery crossed two 4 KB pages; `gesture`, `scrollPhys`, `rubber` and `menu.Strings` became non-comparable (nothing compares them; `menu.Strings`' == over 27 strings was 1.9 KB). The gallery is 10,481,927 bytes, as on main; windows/amd64 −1.5 KB, darwin/arm64 +64 bytes.
+
+**Checked.** `TestSidewaysBoxInADocument` and `TestPassWheel` (each fails on main: the wheel scrolled the code sideways, the gesture moved the pile and not the document), `TestPassScrollHostLeavesVerticalToUI` (real NSEvents in a window: every event of a vertical gesture and a wheel reaches ui, none reaches AppKit). In a3-app, `TestWheelOverCodeScrollsTheConversation` fails on main and passes here.

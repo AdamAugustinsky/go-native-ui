@@ -8,6 +8,10 @@ func (b *box) floatingOn(a int) bool { return b.flags&(FloatingX<<uint(a)) != 0 
 
 func (b *box) scrollOn(a int) bool { return b.flags&(ScrollX<<uint(a)) != 0 }
 
+// wheelOn reports whether the wheel and the trackpad scroll box b on axis a:
+// it scrolls there, is not Disabled and does not pass them on (PassWheel).
+func (b *box) wheelOn(a int) bool { return b.scrollOn(a) && b.flags&Disabled == 0 && !b.passWheel }
+
 // layoutAxis returns the index (0 = x, 1 = y) of the axis children are laid
 // out along.
 func (b *box) layoutAxis() int {

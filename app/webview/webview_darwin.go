@@ -319,7 +319,7 @@ func osNew(w *platform.Window, o *Options) (backend, platform.HostID, uint32, er
 	if objc.SendBool1(wv, selRespondsTo, uintptr(selSetInspectable)) {
 		objc.Send1(wv, selSetInspectable, uintptr(b2u(o.Inspectable)))
 	}
-	host, err := w.NewHost(platform.HostView, platform.HostOptions{View: uintptr(wv), Focusable: true})
+	host, err := w.NewHost(platform.HostView, platform.HostOptions{View: uintptr(wv), Focusable: true, PassScroll: o.PassScroll})
 	if err != nil {
 		objc.Send1(wv, selSetNavDelegate, 0)
 		objc.Send1(wv, selSetUIDelegate, 0)
