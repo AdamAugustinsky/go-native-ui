@@ -46,6 +46,8 @@ func (it *Item) key() uint64 {
 // thumbnail, cropped when wider); with neither it is as large as its aspect
 // lets it inside MaxW × MaxH, never larger than its pixels (an inline image).
 type PictureOpts struct {
+	// W and H are the box to cover (0: unset); MaxW and MaxH bound a picture
+	// sized by its aspect.
 	W, H, MaxW, MaxH float32
 	// Radius rounds it; Hairline draws the theme's separator round it.
 	Radius   float32

@@ -26,6 +26,7 @@ const (
 // Tile is one of a strip's tiles.
 type Tile struct {
 	Item
+	// Kind is how the tile draws: a thumbnail, a video plate or a chip.
 	Kind TileKind
 	// Meta is the quiet text after the name (a duration, a size).
 	Meta string
@@ -53,6 +54,8 @@ var StripLook = StripRecipe{
 // StripOpts are a strip's symbols: Play on a video's plate, Audio and File on
 // the chips (0: none).
 type StripOpts struct {
+	// Play, Audio and File are the symbols of a video's plate and of the
+	// audio and file chips.
 	Play, Audio, File icon.ID
 }
 
