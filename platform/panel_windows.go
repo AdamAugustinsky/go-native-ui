@@ -94,7 +94,7 @@ func (w *Window) frameKind(o *Options) {
 		if p.Floating || p.StatusBar {
 			w.exStyle |= wsExTopmost
 		}
-		if p.NonActivating {
+		if p.NonActivating && !p.KeyWhileInactive {
 			w.exStyle |= wsExNoActivate
 		}
 		return
@@ -182,7 +182,7 @@ func (w *Window) showPanel() {
 		w.cloaked = false
 		w.setCloak(false)
 	}
-	na := w.panel.NonActivating
+	na := w.panel.NonActivating && !w.panel.KeyWhileInactive // (Windows has no app to leave inactive)
 	if w.hidden {
 		w.hidden = false
 		cmd := uintptr(swShow)
@@ -216,7 +216,7 @@ func (w *Window) panelMsg(hwnd, m, wp, lp uintptr) (r uintptr, done bool) {
 		x, y := w.screenToClient(hwnd, lp)
 		return panelHit(x, y, &w.drags), true
 	case wmMouseActivate:
-		if w.panel.NonActivating {
+		if w.panel.NonActivating && !w.panel.KeyWhileInactive {
 			return maNoActivate, true
 		}
 	case wmActivate:
