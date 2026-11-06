@@ -56,7 +56,10 @@ func (w *Window) handle(ev objc.ID) {
 		w.pointerIn = false
 		w.q.push(Event{Kind: EvPointerLeave, Time: t})
 	case 22: // scroll wheel
-		w.scrollEvent(ev, t)
+		if w.scrollEvent(ev, t) {
+			w.hosts.scrollDelivered()
+			return // ui's, from a host that passes it (PassScroll): its view must not scroll too
+		}
 	case 10, 11: // key down / up
 		keyIdx = w.keyEvent(ev, typ, t)
 	case 18, 30, 32: // rotate, magnify, smart magnify (the trackpad's gestures)

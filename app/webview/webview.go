@@ -202,6 +202,11 @@ type Options struct {
 	// paths.Cache(a.ID()) and "WebView2". macOS ignores it: WebKit keeps a
 	// profile's data under ~/Library/WebKit/<bundle id>/.
 	DataDir string
+	// PassScroll leaves vertical scrolling over the view to the app: a page
+	// shown inside a scrolling document (a chat's visual) does not stop the
+	// document's scrolling, while sideways gestures still scroll the page
+	// (macOS; platform.HostOptions.PassScroll).
+	PassScroll bool
 }
 
 // State is what the view shows now. Its strings are valid until the next

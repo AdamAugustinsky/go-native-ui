@@ -136,10 +136,14 @@ func (w *Window) leftButton(typ uintptr, m Mods) Button {
 // scrollEvent queues a scroll-wheel event.
 // The event carries where it happened (FlagPos), also when it bubbled up
 // from a native host the pointer is over.
-func (w *Window) scrollEvent(ev objc.ID, t int64) {
-	if w.scrollToHost(ev) {
+//
+// It reports whether AppKit must not see the event: ui took it from a host
+// that passes vertical scrolling (HostOptions.PassScroll).
+func (w *Window) scrollEvent(ev objc.ID, t int64) (pass bool) {
+	host, pass := w.scrollToHost(ev)
+	if host {
 		w.hosts.queuedScroll = 0
-		return // the host gets it; one it does not use comes back (host_darwin.go)
+		return false // the host gets it; one it does not use comes back (host_darwin.go)
 	}
 	e := scrollEventOf(ev, w.scale, t)
 	e.X, e.Y = w.locate(ev)
@@ -152,6 +156,7 @@ func (w *Window) scrollEvent(ev objc.ID, t int64) {
 	if !w.hosts.bubbling {
 		w.hosts.queuedScroll = ev // for this delivery (host_darwin.go)
 	}
+	return pass
 }
 
 // locate is where mouse event ev happened in the window's content, in

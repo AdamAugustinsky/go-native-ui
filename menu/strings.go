@@ -10,6 +10,10 @@ import "gonativeui/platform"
 // rexui.StringsPtBR.Menu is Brazilian Portuguese. A title the app gives always
 // wins.
 type Strings struct {
+	// Not comparable, as rexui.Strings: nothing compares them, and the ==
+	// over 27 strings was 1.9 KB of every binary.
+	_ [0]func()
+
 	// About, Hide and Quit title the commands of those roles in a drawn
 	// menu or the tray's; AboutApp, HideApp and QuitApp title them in the
 	// macOS application menu, where %s is the application's name.

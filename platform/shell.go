@@ -139,6 +139,11 @@ type HostOptions struct {
 	// View is the NSView* a HostView hosts (0: a plain NSView). The host
 	// retains it while it lives.
 	View uintptr
+	// PassScroll leaves vertical scrolling over the host to ui: a wheel, and
+	// a trackpad gesture that starts more vertical than sideways, scroll the
+	// boxes under it (a page shown in a scrolling document), while sideways
+	// gestures stay the host's (macOS).
+	PassScroll bool
 }
 
 // HostRegion is where a host is this frame, in physical pixels from the

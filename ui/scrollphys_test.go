@@ -870,3 +870,82 @@ func TestGestureNotSeenToBeginIsNotUIs(t *testing.T) {
 		t.Fatalf("a gesture seen from its Began, with its momentum, moved the box to %v, want 17", y)
 	}
 }
+
+// TestSidewaysBoxInADocument: over a box that scrolls only sideways inside
+// one that scrolls vertically (a code block in a transcript), a wheel's
+// notches and a gesture that starts a little diagonal scroll the document;
+// only a clearly horizontal gesture scrolls the box, and it keeps the
+// gesture.
+func TestSidewaysBoxInADocument(t *testing.T) {
+	r, in := nestedRig(t, ScrollX)
+	r.c.WheelJumps = true
+	r.in.AddScroll(0, -1, false)
+	r.step()
+	if x, _ := r.c.Scroll(*in); x != 0 || r.y(r.box) != float64(r.c.WheelStep) {
+		t.Fatalf("wheel: inner at %v, outer at %v; want 0 and %v", x, r.y(r.box), r.c.WheelStep)
+	}
+
+	r, in = nestedRig(t, ScrollX)
+	r.ev(PhaseMayBegin, PhaseNone, 0, 0)
+	r.step()
+	r.ev(PhaseBegan, PhaseNone, -3, -1) // starts sideways, then goes down
+	r.step()
+	for i := 0; i < 3; i++ {
+		r.ev(PhaseChanged, PhaseNone, -1, -6)
+		r.step()
+	}
+	if x, _ := r.c.Scroll(*in); x != 0 || r.y(r.box) != 19 {
+		t.Fatalf("diagonal start: inner at %v, outer at %v; want 0 and 19", x, r.y(r.box))
+	}
+	r.ev(PhaseEnded, PhaseNone, 0, 0)
+	r.step()
+
+	r.ev(PhaseMayBegin, PhaseNone, 0, 0)
+	r.step()
+	r.ev(PhaseBegan, PhaseNone, -6, -1)
+	r.step()
+	r.ev(PhaseChanged, PhaseNone, -6, -2)
+	r.step()
+	r.ev(PhaseChanged, PhaseNone, -6, -6) // locked: the box keeps it
+	r.step()
+	if x, _ := r.c.Scroll(*in); x != 18 || r.y(r.box) != 19 {
+		t.Fatalf("horizontal: inner at %v, outer at %v; want 18 and 19", x, r.y(r.box))
+	}
+}
+
+// TestPassWheel: a gesture and a wheel over a box that passes them on (a
+// virtual list's pile), here over a sideways box in it, scroll the box
+// around it, and it keeps its offset.
+func TestPassWheel(t *testing.T) {
+	r := newGestureRig(t)
+	var in ID
+	r.build = func(c *Context) {
+		c.NextSize(Px(100), Px(100))
+		r.box = c.Open(ScrollY|Clip, "outer")
+		c.NextSize(Px(100), Px(0))
+		in = c.Open(ScrollY, "pile")
+		c.PassWheel(in)
+		c.NextSize(Px(100), Px(100))
+		c.Open(ScrollX|Clip, "code") // under the pointer, as a code block in the pile
+		c.NextSize(Px(1000), Px(100))
+		c.Box(0, "lines")
+		c.Close()
+		c.NextSize(Px(100), Px(200))
+		c.Box(0, "items")
+		c.Close()
+		c.NextSize(Px(100), Px(300))
+		c.Box(0, "below")
+		c.Close()
+	}
+	r.step()
+	r.step()
+	r.move(50, 50)
+	r.pull(-10, 3)
+	r.ev(PhaseEnded, PhaseNone, 0, 0)
+	r.step()
+	r.in.AddScroll(0, -1, true)
+	r.step()
+	if _, y := r.c.Scroll(in); r.y(r.box) != 31 || y != 0 {
+		t.Fatalf("outer at %v, pile at %v: want 31 and 0", r.y(r.box), y)
+	}
+}

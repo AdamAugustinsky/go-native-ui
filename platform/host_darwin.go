@@ -5,6 +5,7 @@ package platform
 import (
 	"gonativeui/internal/ffi"
 	"gonativeui/internal/objc"
+	"math"
 )
 
 // Hosted native views (N3b; the contract is docs/PHASE6-PLAN.md, "Hosting
@@ -112,6 +113,7 @@ type hostSlot struct {
 	content      objc.ID // a HostGlass's content view
 	rect, clipR  [4]float32
 	shown        bool // on screen (not hidden)
+	passScroll   bool // HostOptions.PassScroll
 }
 
 // hostState is the window's hosts.
@@ -123,6 +125,7 @@ type hostState struct {
 	focus int // 1 + the slot holding the first responder, 0: the app's view (or nothing)
 	// vis are the rectangles (pixels) of the hosts on screen, for routing.
 	vis       [MaxHosts][4]float32
+	visPass   [MaxHosts]bool // vis[i]'s host passes vertical scrolling (PassScroll)
 	nVis      int
 	pointerIn bool // the last move was over a host (an EvPointerLeave was queued)
 	bubbling  bool // a scroll is travelling up from a host (hostScrollWheel)
@@ -134,6 +137,10 @@ type hostState struct {
 	// gestureHost: the trackpad gesture in progress began over a host, which
 	// owns it until the next one begins (momentum included).
 	gestureHost bool
+	// gesturePass: the gesture in progress began over a host that passed it
+	// to ui (PassScroll): AppKit, which would give it to the host's view,
+	// does not see it.
+	gesturePass bool
 	// pinchHost: the same for the pinch or rotation in progress.
 	pinchHost bool
 	holes     [MaxHosts][4]float32
@@ -193,7 +200,7 @@ func (w *Window) newHost(kind HostKind, o HostOptions, pinned bool) (HostID, err
 	if gen >= 1<<24 {
 		gen = 1
 	}
-	*s = hostSlot{live: true, gen: gen, kind: kind, command: o.Command, enabled: !o.Disabled, clip: clip}
+	*s = hostSlot{live: true, gen: gen, kind: kind, command: o.Command, enabled: !o.Disabled, clip: clip, passScroll: o.PassScroll}
 	var v objc.ID
 	switch kind {
 	case HostButton:
@@ -405,7 +412,7 @@ func (w *Window) applyHosts() {
 					ArgRect(x, y, float64(r.Rect[2]-r.Rect[0])/scale, float64(r.Rect[3]-r.Rect[1])/scale).Call(objc.MsgSend)
 			}
 			s.rect, s.clipR = r.Rect, r.Clip
-			h.vis[h.nVis] = r.Clip
+			h.vis[h.nVis], h.visPass[h.nVis] = r.Clip, s.passScroll
 			h.nVis++
 		}
 		if show != s.shown {
@@ -420,13 +427,16 @@ func (w *Window) applyHosts() {
 
 // overHost reports whether pixel (x, y) is over a host on screen (not the
 // pinned buttons of Options.Buttons, which keep the spike's routing).
-func (w *Window) overHost(x, y float32) bool {
+func (w *Window) overHost(x, y float32) bool { return w.hostAt(x, y) >= 0 }
+
+// hostAt is the index in vis of the host on screen at x, y, or -1.
+func (w *Window) hostAt(x, y float32) int {
 	for i := 0; i < w.hosts.nVis; i++ {
 		if inRect(w.hosts.vis[i], x, y) {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 // hostMove is pointerEvent's routing of a mouse move: true if the move is
@@ -447,20 +457,47 @@ func (w *Window) hostMove(x, y float32, t int64) bool {
 // to a host: the events of a trackpad gesture that began over a host, wherever
 // the pointer is now (AppKit keeps delivering them to the native view, which
 // may use them all); any other scroll whose point is over a host.
-func (w *Window) scrollToHost(ev objc.ID) bool {
+//
+// Over a host that passes vertical scrolling (PassScroll), a wheel and a
+// gesture whose first event is more vertical than sideways go to ui instead,
+// and pass reports that AppKit must not see the event (it would scroll the
+// host's view too).
+func (w *Window) scrollToHost(ev objc.ID) (host, pass bool) {
 	h := &w.hosts
 	if h.bubbling {
-		return false
+		return false, false
 	}
 	phase, mom := objc.Send(ev, selPhase), objc.Send(ev, selMomentumPhase)
 	if phase&(1|32) != 0 { // NSEventPhaseBegan, NSEventPhaseMayBegin: a gesture starts
-		h.gestureHost = h.nVis > 0 && w.overHost(w.locate(ev))
-		return h.gestureHost
+		h.gestureHost, h.gesturePass = w.hostTakes(ev)
+		return h.gestureHost, h.gesturePass
 	}
-	if h.gestureHost && (phase != 0 || mom != 0) {
-		return true
+	if phase != 0 || mom != 0 {
+		if h.gestureHost {
+			return true, false
+		}
+		if h.gesturePass {
+			return false, true
+		}
 	}
-	return h.nVis > 0 && w.overHost(w.locate(ev))
+	return w.hostTakes(ev)
+}
+
+// hostTakes reports whether the host under scroll event ev takes it, or
+// whether one there passes it to ui (PassScroll).
+func (w *Window) hostTakes(ev objc.ID) (host, pass bool) {
+	h := &w.hosts
+	if h.nVis == 0 {
+		return false, false
+	}
+	i := w.hostAt(w.locate(ev))
+	if i < 0 {
+		return false, false
+	}
+	if h.visPass[i] && math.Abs(objc.SendF64(ev, selScrollDY)) >= math.Abs(objc.SendF64(ev, selScrollDX)) {
+		return false, true
+	}
+	return true, false
 }
 
 // pinchToHost reports whether the pinch, rotation or smart zoom ev (NSEvent
