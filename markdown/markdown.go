@@ -27,7 +27,9 @@
 // pointer-free blocks: paragraphs, headings, code blocks, list items, table
 // cells and thematic breaks, each with its list depth and block-quote
 // nesting. Raw HTML, inline or as a block, is shown as text; an image is
-// shown as its alt text, a link to its source.
+// shown as its alt text (its source when it has none), a link to its source
+// marked Link.Image: an app that shows pictures finds the paragraphs of
+// images alone with Doc.Images.
 //
 // # Spans
 //
@@ -160,6 +162,8 @@ type Block struct {
 type Link struct {
 	// Dest is the URL; Title the optional title.
 	Dest, Title [2]uint32
+	// Image: the link is an image's (![alt](src)); its text is the alt text.
+	Image bool
 }
 
 // Doc is a parsed document. Its slices are the Parser's and change with
@@ -205,6 +209,43 @@ func (d *Doc) LinkDest(tag uint32) []byte {
 	}
 	l := d.Links[tag-1]
 	return d.Text[l.Dest[0]:l.Dest[1]]
+}
+
+// Images appends to dst the tags of the image links (Link.Image) of block b
+// when the block is a paragraph of images alone (with spaces between them),
+// and returns dst unchanged otherwise: the paragraphs an app shows as
+// pictures rather than text.
+func (d *Doc) Images(b *Block, dst []uint32) []uint32 {
+	if b.Kind != Paragraph {
+		return dst
+	}
+	body := d.Body(b)
+	n := len(dst)
+	at := uint32(0)
+	space := func(t []byte) bool {
+		for _, c := range t {
+			if c != ' ' && c != '\t' && c != '\n' {
+				return false
+			}
+		}
+		return true
+	}
+	for _, sp := range d.SpansOf(b) {
+		if !space(body[at:sp.Off]) {
+			return dst[:n]
+		}
+		if sp.Tag == 0 || int(sp.Tag) > len(d.Links) || !d.Links[sp.Tag-1].Image {
+			return dst[:n]
+		}
+		if k := len(dst); k == n || dst[k-1] != sp.Tag {
+			dst = append(dst, sp.Tag)
+		}
+		at = sp.Off + sp.Len
+	}
+	if !space(body[at:]) {
+		return dst[:n]
+	}
+	return dst
 }
 
 // CopyTo makes dst a copy of d, reusing dst's storage: a frame can draw the
@@ -583,7 +624,14 @@ func (c *conv) inlines(n ast.Node, st uint16, tag uint32) {
 			c.inlines(ch, st|LinkStyle, c.link(ch.Destination, ch.Title))
 			continue
 		case *ast.Image:
-			c.inlines(ch, st|LinkStyle, c.link(ch.Destination, ch.Title))
+			tag := c.link(ch.Destination, ch.Title)
+			c.d.Links[tag-1].Image = true
+			if ch.FirstChild() == nil { // ![](src): no alt text, so the source is the link's text
+				d.Text = append(d.Text, ch.Destination...)
+				c.span(start, st|LinkStyle, tag)
+				continue
+			}
+			c.inlines(ch, st|LinkStyle, tag)
 			continue
 		case *ast.AutoLink:
 			label := ch.Label(c.src)

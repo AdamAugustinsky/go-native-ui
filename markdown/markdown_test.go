@@ -330,3 +330,26 @@ func BenchmarkParse(b *testing.B) {
 		p.Parse(msg)
 	}
 }
+
+// An image is a link marked Image; a paragraph of images alone is found by Images, one with
+// text around its image is not; an image without alt text shows its source.
+func TestImages(t *testing.T) {
+	var p markdown.Parser
+	d := p.Parse([]byte("![a](/tmp/a.png) ![](b.png)\n\nVeja ![c](c.png) aqui.\n\n[link](x.md)"))
+	if len(d.Blocks) != 3 {
+		t.Fatalf("%d blocks", len(d.Blocks))
+	}
+	tags := d.Images(&d.Blocks[0], nil)
+	if len(tags) != 2 || string(d.LinkDest(tags[0])) != "/tmp/a.png" || string(d.LinkDest(tags[1])) != "b.png" {
+		t.Fatalf("images %v", tags)
+	}
+	if body := string(d.Body(&d.Blocks[0])); body != "a b.png" {
+		t.Errorf("body %q", body)
+	}
+	if got := d.Images(&d.Blocks[1], nil); len(got) != 0 {
+		t.Errorf("a paragraph with text is images %v", got)
+	}
+	if got := d.Images(&d.Blocks[2], nil); len(got) != 0 || d.Links[len(d.Links)-1].Image {
+		t.Errorf("a link is an image")
+	}
+}

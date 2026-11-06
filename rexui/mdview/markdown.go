@@ -187,6 +187,12 @@ type MarkdownOpts struct {
 	View *MarkdownView
 	// Look is the recipe, nil for MarkdownLook.
 	Look *MarkdownRecipe
+	// Embed, when set, is asked before each paragraph is built: it may build
+	// the block itself in the document's column (indent is the block's list
+	// indent in pixels) and return true, or return false to leave it to
+	// Markdown. A chat shows a paragraph of images alone (Doc.Images) as the
+	// pictures. The paragraph keeps its selection part.
+	Embed func(block int, indent float32) bool
 }
 
 // MarkdownSignal is what a document reports.
@@ -271,6 +277,10 @@ func Markdown(k *base.Kit, key ui.Key, d *markdown.Doc, o MarkdownOpts) Markdown
 		var rs ui.RichSignal
 		switch b.Kind {
 		case markdown.Paragraph, markdown.Heading:
+			if b.Kind == markdown.Paragraph && o.Embed != nil && o.Embed(i, indent) {
+				part++
+				break
+			}
 			st := &v.body
 			top, lh := float32(0), v.lh
 			if b.Kind == markdown.Heading {

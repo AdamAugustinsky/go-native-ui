@@ -55,6 +55,7 @@ type mdRig struct {
 	time  int64
 	w, h  int
 	links []uint32
+	embed func(block int, indent float32) bool
 }
 
 func newMDRig(t *testing.T, n int) *mdRig {
@@ -106,7 +107,7 @@ func (g *mdRig) frame() {
 		c.NextPadding(24, 12, 24, 12)
 		c.NextSize(ui.Pct(1), ui.Children(1))
 		c.Push(c.BoxKeyed(0, ui.KeyN(c.ParentKey(), 1), nil))
-		sig := mdview.Markdown(k, ui.KeyN(c.ParentKey(), 0), &g.docs[id], mdview.MarkdownOpts{Item: id, View: &g.view})
+		sig := mdview.Markdown(k, ui.KeyN(c.ParentKey(), 0), &g.docs[id], mdview.MarkdownOpts{Item: id, View: &g.view, Embed: g.embed})
 		c.Pop()
 		g.sigs[id] = sig
 		if sig.Link != 0 {
@@ -467,5 +468,41 @@ func TestMarkdownLeadingAndDiscs(t *testing.T) {
 	}
 	if discs != 1 {
 		t.Fatalf("%d discs of 9 px, want 1 (14 pt / 3 at 2×)", discs)
+	}
+}
+
+// Embed builds a paragraph of images alone in the app's place (a chat's
+// pictures): the other blocks stay Markdown's.
+func TestMarkdownEmbed(t *testing.T) {
+	g := newMDRig(t, 1)
+	var p markdown.Parser
+	p.Parse([]byte("Before.\n\n![a picture](/tmp/a.png)\n\nAfter.")).CopyTo(&g.docs[0])
+	asked := 0
+	g.embed = func(block int, indent float32) bool {
+		asked++
+		d := &g.docs[0]
+		if len(d.Images(&d.Blocks[block], nil)) == 0 {
+			return false
+		}
+		g.c.NextSize(ui.Px(100), ui.Px(60))
+		g.c.NextRole(ui.RoleImage)
+		g.c.NextSemName("the picture")
+		g.c.Box(0, "picture")
+		return true
+	}
+	g.frames(3)
+	if asked == 0 {
+		t.Fatal("Embed was not asked")
+	}
+	if _, ok := g.node(ui.RoleImage, "the picture"); !ok {
+		t.Error("the embedded block is missing")
+	}
+	if _, ok := g.node(ui.RoleLabel, "a picture"); ok {
+		t.Error("the image's paragraph was built as text too")
+	}
+	for _, s := range []string{"Before.", "After."} {
+		if _, ok := g.node(ui.RoleLabel, s); !ok {
+			t.Errorf("no %q", s)
+		}
 	}
 }
