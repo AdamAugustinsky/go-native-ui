@@ -46,11 +46,11 @@ type TextInput struct {
 	H float32
 	// Mono: NextMono asked for the monospace font.
 	Mono bool
-	// Hover is the hover policy BeginTextInput was given; with HoverOff the
-	// editing box does not animate hover.
+	// Hover is the hover policy BeginTextInput was given; when it does not
+	// hover (Kit.Hovers) the editing box does not animate hover.
 	Hover Hover
 	// Visual is the editing box's state: Focus follows the keyboard focus,
-	// Hot the pointer (with HoverOn).
+	// Hot the pointer (when it hovers).
 	Visual
 
 	ident string
@@ -91,7 +91,7 @@ func (k *Kit) TextInput(ti *TextInput, buf *ui.TextBuffer, role ui.Role, escapeC
 	}
 	c.NextRole(role)
 	c.NextSemName(ti.Name)
-	if ti.Hover == HoverOff {
+	if !k.Hovers(ti.Hover) {
 		c.NextFieldNoHover()
 	}
 	if escapeClears {

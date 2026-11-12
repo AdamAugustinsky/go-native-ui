@@ -333,7 +333,7 @@ func (ch *chrome) Titlebar(c *ui.Context, r *theme.Resolved, t theme.Titlebar) t
 			c.NextFont(r.Font.UISemi)
 			c.NextTextColor(col)
 			c.NextAlign(ui.AlignCenter)
-			c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|fl, ui.KeyN(keyBar, 98), strBytes(t.Title))
+			c.BoxKeyed(ui.DrawText|fl, ui.KeyN(keyBar, 98), strBytes(t.Title))
 		}
 	}
 	return res

@@ -98,7 +98,7 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 	rc := &ButtonRecipes[ButtonDefault]
 	s := &r.Sizes[o.Size%theme.NumSizes]
 	pill := SelectLook.FitWidth && v == SelectBorderless
-	hover := base.HoverOff
+	hover := base.HoverAuto // ButtonDefault's hover fill (D107)
 	if pill {
 		hover = base.HoverOn // a web pill fills under the pointer
 	}
@@ -119,8 +119,10 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 		padX = k.Pt(x)
 	}
 	if v == SelectBorderless {
+		// no fill; under the pointer, pressed and open the row's hover (a
+		// web pill's, and a borderless pop-up's unless strict AppKit)
 		fill = 0
-		if pill {
+		if pill || !strict(k) {
 			fill = theme.WithAlpha(r.Colors[theme.RowHover], max(p.Visual.Hot, p.Visual.Down))
 			if open {
 				fill = r.Colors[theme.RowHover]
@@ -176,7 +178,7 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 		c.NextMaxSize(k.Pt(SelectLook.Width), 0)
 		c.NextFont(s.Font.Font)
 		c.NextTextColor(fg)
-		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(p.Key, 1), base.StrBytes(shown))
+		c.BoxKeyed(ui.DrawText, ui.KeyN(p.Key, 1), base.StrBytes(shown))
 		cf := fg
 		if SelectLook.Chevron != (Tint{}) && !p.Visual.Disabled {
 			cf = SelectLook.Chevron.RGBA(r)
@@ -196,7 +198,7 @@ func Select(k *base.Kit, label string, sel *int, options []string, o SelectOpts)
 	c.NextSize(ui.Px(max(w-padX-cx-cw/2, 0)), ui.Px(h))
 	c.NextFont(s.Font.Font)
 	c.NextTextColor(fg)
-	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(p.Key, 1), base.StrBytes(shown))
+	c.BoxKeyed(ui.DrawText, ui.KeyN(p.Key, 1), base.StrBytes(shown))
 	if f, disp := k.Icons().Prepare(c, chev, fg); f != 0 {
 		_, ch := k.IconSize(chev)
 		theme.At(c, theme.Snap(w-cx-cw/2), theme.Snap((h-ch)/2), cw, ch)

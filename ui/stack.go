@@ -203,6 +203,13 @@ func (c *Context) NextRadius(r float32) { c.sRadii.set([4]float32{r, r, r, r}) }
 // to the box's own background.
 func (c *Context) NextFadeEnd(w float32) { c.nextFade = max(w, 0) }
 
+// NextScrollFade makes the next box, a sideways scroller (ScrollX), fade its
+// children out over its last w pixels while its content goes on past its end,
+// and not once it is scrolled to the end: a strip of chips that shows there is
+// more. A scroller's other edges, and a vertical one's, need a fade the
+// renderer does not have yet (gpu.Quad fades along x, towards the right).
+func (c *Context) NextScrollFade(w float32) { c.nextSFade = max(w, 0) }
+
 // SetFadeEnd is NextFadeEnd for box id, built this frame (a scroll view's
 // viewport, which the widget built).
 func (c *Context) SetFadeEnd(id ID, w float32) {
@@ -268,6 +275,35 @@ func (c *Context) PushAlign(a Align) { c.sAlign.push(a) }
 
 // PopAlign pops the alignment pushed by PushAlign.
 func (c *Context) PopAlign() { c.sAlign.pop() }
+
+// What becomes of a line of display text wider than its box (see TextCut;
+// CutTail, an ending "…", by default).
+
+// NextTextCut sets how the next box's one line of text is cut when the box is
+// narrower than the text:
+//
+//	c.NextTextCut(ui.CutMiddle) // a file name keeps its extension
+//	c.NextTextCut(ui.CutNone)   // a label meant to run past its box
+func (c *Context) NextTextCut(k TextCut) { c.sCut.set(k) }
+
+// PushTextCut sets how text is cut for the boxes built until PopTextCut (a
+// terminal's cells: CutNone).
+func (c *Context) PushTextCut(k TextCut) { c.sCut.push(k) }
+
+// PopTextCut pops the cut pushed by PushTextCut.
+func (c *Context) PopTextCut() { c.sCut.pop() }
+
+// Truncated reports whether box id's text did not fit in the last layout: a
+// line wider than its box (whatever its TextCut, CutNone included), or a
+// RichText that its MaxLines cut short. During a build that is the previous
+// frame's layout, as Rect; after End, this frame's. A tooltip that shows the
+// whole text only when it was cut asks it:
+//
+//	id := c.Label(name)
+//	if c.Truncated(id) { kit.Tooltip(id, name) }
+func (c *Context) Truncated(id ID) bool {
+	return id != 0 && int(id) < len(c.boxes) && c.boxes[id].wasCut
+}
 
 // Extra flags for the next box built: they are added to the flags its builder
 // gives it (Disabled on a TextField, for one).

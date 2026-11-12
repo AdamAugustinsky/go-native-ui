@@ -15,19 +15,64 @@ import "math"
 //
 // Scroll events that carry where they happened (ScrollEvent.Pos) find their
 // box there instead (scrollAt).
+//
+// A pointer that stands still keeps its hover while scrolling carries content
+// under it (holdHover).
 func (c *Context) hitTest() {
+	prev := c.hotKey
 	c.hotID, c.hotKey, c.scrollKey, c.sp.hit = 0, 0, 0, 0
 	c.tooltipID, c.tooltipKey = 0, 0
-	if c.root == 0 || !c.in.Inside {
+	if c.root != 0 && c.in.Inside {
+		c.hitAll(c.in.MouseX, c.in.MouseY)
+		if c.tooltipID != 0 {
+			c.tooltipKey = c.boxes[c.tooltipID].key
+		}
+		if c.hotID != 0 {
+			c.hotKey = c.boxes[c.hotID].key
+		}
+		if prev != 0 && c.hotKey != prev {
+			c.holdHover(prev)
+		}
+	}
+	h := &c.hover
+	h.mouse, h.inside = [2]float32{c.in.MouseX, c.in.MouseY}, c.in.Inside
+}
+
+// hoverHold is what keeps the hover still while content moves under a still
+// pointer: the pointer at the last hit test, and whether scrolling moved
+// content in the last frame.
+type hoverHold struct {
+	mouse  [2]float32
+	inside bool
+	moved  bool // an offset or a stretch changed in the last frame
+}
+
+// holdHover keeps the hover on prev, the box hot in the last frame, when the
+// hit test found another box only because the content moved: the pointer has
+// not moved, no button is down or changed, and scrolling moved content in
+// this frame's events or in the last frame (a glide, a stretch springing
+// back). Rows that a scroll carries past a still pointer do not light in
+// turn; the hover goes to the box under the pointer once the scrolling stops
+// or the pointer moves (the frame it holds asks for one more frame to see
+// that). The box must still have been built in the last frame.
+func (c *Context) holdHover(prev Key) {
+	in, h := &c.in, &c.hover
+	if !h.inside || in.MouseX != h.mouse[0] || in.MouseY != h.mouse[1] {
 		return
 	}
-	c.hitAll(c.in.MouseX, c.in.MouseY)
-	if c.tooltipID != 0 {
-		c.tooltipKey = c.boxes[c.tooltipID].key
+	for b := 0; b < numButtons; b++ {
+		if in.Down[b] || in.Pressed[b] || in.Released[b] {
+			return
+		}
 	}
-	if c.hotID != 0 {
-		c.hotKey = c.boxes[c.hotID].key
+	if !h.moved && in.NScrolls == 0 && in.ScrollX == 0 && in.ScrollY == 0 {
+		return
 	}
+	v, ok := c.table.Get(uint64(prev))
+	if !ok || c.boxes[v].lastFrame != c.frame-1 || c.boxes[v].flags&Disabled != 0 {
+		return
+	}
+	c.hotID, c.hotKey, c.animating = ID(v), prev, true
 }
 
 // hitAll walks the main tree (unless a modal covers it) and the overlays at
@@ -116,7 +161,35 @@ func (c *Context) mouse() {
 	}
 
 	c.scrollInput()
+	c.cancelPressOnScroll()
 	c.gestureInput()
+}
+
+// cancelPressOnScroll ends the left button's press, without a release, when
+// this frame's scrolling moved a box around the box it is held on and the
+// press has not become a drag (the pointer within the drag threshold of where
+// it went down): what is under the pointer is no longer what was pressed, so
+// letting go clicks nothing, as in a scroll view of the system's. A drag (a
+// selection, a dragged row) keeps its press through a scroll.
+func (c *Context) cancelPressOnScroll() {
+	k := c.active[0]
+	if k == 0 || c.sp.nApplied == 0 || !c.in.Down[0] {
+		return
+	}
+	dx, dy := c.in.MouseX-c.pressPos[0][0], c.in.MouseY-c.pressPos[0][1]
+	if t := c.DragThreshold(); dx*dx+dy*dy > t*t {
+		return
+	}
+	v, ok := c.table.Get(uint64(k))
+	if !ok {
+		return
+	}
+	for id := c.boxes[v].parent; id != 0; id = c.boxes[id].parent {
+		if d := c.appliedTo(c.boxes[id].key); d != [2]float32{} {
+			c.active[0] = 0
+			return
+		}
+	}
 }
 
 // focusOnPress moves focus to the nearest focusable box at or above the box
@@ -140,6 +213,7 @@ func (c *Context) focusOnPress() {
 // the rubber bands.
 func (c *Context) stepScroll() {
 	c.stepRubber()
+	moved := c.sp.nApplied > 0 || c.sp.n > 0
 	for _, id := range c.scrollBoxes {
 		b := &c.boxes[id]
 		if b.flags&scrollMask == 0 {
@@ -150,6 +224,7 @@ func (c *Context) stepScroll() {
 			if d == 0 {
 				continue
 			}
+			moved = true
 			if math.Abs(d) < scrollEps {
 				b.scroll[a] = b.scrollTgt[a]
 				continue
@@ -162,6 +237,7 @@ func (c *Context) stepScroll() {
 			}
 		}
 	}
+	c.hover.moved = moved
 }
 
 const scrollEps = 0.05 // pixels

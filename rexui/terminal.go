@@ -133,7 +133,9 @@ func Terminal(k *base.Kit, label string, s *TerminalState, o TerminalOpts) Termi
 	s.input(c, id, key, focused, pad, o, &sig)
 	if q := o.Scheduler; q != nil {
 		q.Add(s)
-		s.feedCap, s.wantFocus = o.FeedBudget, focused || o.Focus >= 0.5
+		// a pane that is focused or still lit by its focus (TerminalOpts.Focus
+		// above 0) is fed first: the state, not the middle of its fade
+		s.feedCap, s.wantFocus = o.FeedBudget, focused || o.Focus > 0
 		q.Run(c)
 		s.seen, s.seenOK = c.Frame(), true
 	} else {
@@ -615,6 +617,7 @@ func (s *TerminalState) draw(k *base.Kit, c *ui.Context, key ui.Key, pal *termPa
 		c.NextPadding(px-ix, 0, 0, 0)
 		c.NextSize(ui.Px(cells*cw+px-ix+1), ui.Px(s.met.H))
 		c.NextAnchor(ui.AnchorLeft, ix, 0)
+		c.NextTextCut(ui.CutNone) // a run keeps the grid's advance; a glyph may overhang its cells
 		c.BoxKeyed(ui.DrawText|ui.NoFontSmoothing, next(), b)
 	}
 	selCol := pal.sel

@@ -135,9 +135,25 @@ func TestDialogClosedBuildsNothing(t *testing.T) {
 // The sheet has AppKit's: the radius of an alert panel's glass frame, its
 // content 20 pt from the sides and the top, large capsule buttons 8 apart
 // with the default last, 16 pt from the bottom.
+//
+// It runs under strict AppKit (theme.Theme.StrictAppKit), whose recipes are
+// AppKit's, and on the default theme beside it: the lift scale (D108) changes
+// the sheet's edge and shadows, not its geometry.
 func TestDialogMatchesAppKitSheets(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		name := "default"
+		if strict {
+			name = "strict"
+		}
+		t.Run(name, func(t *testing.T) { dialogMatchesAppKitSheets(t, strict) })
+	}
+}
+
+func dialogMatchesAppKitSheets(t *testing.T, strict bool) {
 	ref := loadAppKitRef(t)
 	g, _ := newDialogRig(t, theme.Light)
+	setStrict(g, strict)
+	g.settle()
 	rad, _ := ref.Sheets["alertPanelCornerRadius"].(float64)
 	if rad == 0 {
 		t.Fatal("no sheet radius in the reference")

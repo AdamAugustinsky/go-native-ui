@@ -1041,6 +1041,7 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 	c.NextSize(ui.Pct(1), ui.Children(1))
 	c.NextRole(ui.RoleList)
 	c.NextSemName(str.Attachments)
+	c.NextScrollFade(r.Space.S24)                      // its end fades while more chips follow (D105)
 	row := c.BoxKeyed(ui.ScrollX|ui.Clip, rowKey, nil) // a row longer than the field scrolls sideways
 	c.Push(row)
 	for i := range list {
@@ -1072,7 +1073,10 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 		c.NextSize(ui.Px(nameW), ui.Px(chipH))
 		c.NextFont(font)
 		c.NextTextColor(rc.ChipText.RGBA(r))
-		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(ck, 1), base.StrBytes(a.Name))
+		c.NextTextCut(ui.CutMiddle) // a file's name keeps its extension (D105)
+		if nid := c.BoxKeyed(ui.DrawText, ui.KeyN(ck, 1), base.StrBytes(a.Name)); c.Truncated(nid) {
+			Tooltip(k, chip, a.Name) // the whole name, only when it was cut
+		}
 		// the remove button
 		rk := ui.KeyN(ck, 2)
 		v := k.VisualOf(rk, base.HoverOn)
@@ -1115,7 +1119,7 @@ func composerSend(k *base.Kit, o ComposerOpts, rc *ComposerRecipe, canSend bool)
 		canSend = false
 	}
 	k.BeginDisabled(!canSend && !o.Sending)
-	p := k.PressState(name, base.HoverOff)
+	p := k.PressState(name, base.HoverAuto) // the primary button's hover (D107)
 	fill, fg, _ := prc.Colors(r, p.Visual)
 	side := pt(sc, rc.SendSize)
 	c.NextBG(fill)

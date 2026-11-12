@@ -225,7 +225,7 @@ AppKit's rounded rectangles and blocks of the accent instead.
 
 ```sh
 go run ./tools/rexui list                         # every component and the files it needs
-go run ./tools/rexui add button ./internal/ui     # button.go, tint.go and strings.go, as package ui
+go run ./tools/rexui add button ./internal/ui     # button.go with tint.go, strings.go and motion.go, as package ui
 ```
 
 `add` copies a component's file and the files it needs, rewrites the package

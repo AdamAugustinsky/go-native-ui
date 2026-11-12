@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"math"
 
 	"gonativeui/core"
@@ -457,8 +458,12 @@ func (c *Context) emit(l *gpu.DrawList, id ID, clip [4]float32) {
 		}
 	}
 	fade := c.emitFade
-	if b.fadeEnd > 0 {
-		c.emitFade = fadeOf(fade, [2]float32{r[2] - b.fadeEnd, r[2]})
+	fe := b.fadeEnd
+	if b.edgeFade > 0 && b.flags&ScrollX != 0 && b.content[0]-b.scroll[0] > float64(b.size[0])+0.5 {
+		fe = max(fe, b.edgeFade) // more follows past the end
+	}
+	if fe > 0 {
+		c.emitFade = fadeOf(fade, [2]float32{r[2] - fe, r[2]})
 	}
 	c.emitMesh(l, id, cclip)
 	for ch := b.first; ch != 0; ch = c.boxes[ch].next {
@@ -617,16 +622,22 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 	}
 	baseline := snap(y0 + ((y1-y0)-(fi.ascent+fi.descent))/2 + fi.ascent)
 
-	if over && b.flags&EllipsisOverflowX != 0 && c.emitTruncated(l, b, x0, x1, baseline, clip, col) {
-		return
-	}
 	tclip := clip
 	var fade [2]float32
-	if over && b.flags&(FadeOverflowX|EllipsisOverflowX) != 0 {
-		tclip[0], tclip[2] = max(clip[0], x0), min(clip[2], x1)
-		fade = [2]float32{x1 - 1.5*(fi.ascent+fi.descent), x1}
-		if fade[0] < x0 {
-			fade[0] = x0
+	if over {
+		switch cut := c.cutOf(b); cut {
+		case CutNone:
+		case CutClip:
+			tclip[0], tclip[2] = max(clip[0], x0), min(clip[2], x1)
+		default:
+			if cut != CutFade && c.emitTruncated(l, b, cut, x0, x1, baseline, clip, col) {
+				return
+			}
+			tclip[0], tclip[2] = max(clip[0], x0), min(clip[2], x1)
+			fade = [2]float32{x1 - 1.5*(fi.ascent+fi.descent), x1}
+			if fade[0] < x0 {
+				fade[0] = x0
+			}
 		}
 	}
 	if empty(tclip) {
@@ -636,77 +647,179 @@ func (c *Context) emitText(l *gpu.DrawList, b *box, clip [4]float32) {
 	c.emitGlyphs(l, b, v, x, baseline, tclip, fade, col)
 }
 
-// ellipsisText is what EllipsisOverflowX ends a cut line with.
+// cutOf is how b's one line of text is cut when it is wider than the box: its
+// TextCut, unless a flag of the old API says otherwise. A text of one
+// grapheme (a symbol drawn as text in a square, a terminal's cell) is drawn
+// whole: there is nothing to cut it to but "…".
+func (c *Context) cutOf(b *box) TextCut {
+	switch {
+	case b.flags&FadeOverflowX != 0:
+		return CutFade
+	case b.flags&EllipsisOverflowX != 0:
+		return CutTail
+	case b.textCut == CutNone:
+		return CutNone
+	}
+	if txt := c.fr.Cur().Bytes(b.txt); text.NextGrapheme(txt, 0) >= len(txt) {
+		return CutNone
+	}
+	return b.textCut
+}
+
+// ellipsisText is what a cut line of text shows for what is left out.
 var ellipsisText = []byte("…")
 
-// emitTruncated draws b's one line of text, too wide for x0..x1, cut at the
-// tail and ended with an ellipsis (EllipsisOverflowX). It reports false,
-// drawing nothing, for text it cannot cut so (right-to-left, no clusters).
-func (c *Context) emitTruncated(l *gpu.DrawList, b *box, x0, x1, baseline float32, clip [4]float32, col uint32) bool {
+// extMax is how far from the end a file name's "." may be for CutMiddle to
+// keep the extension after it whole.
+const extMax = 16
+
+// emitTruncated draws b's one line of text, too wide for x0..x1, cut by mode
+// (CutTail, CutMiddle or CutHead) with an ellipsis in b's font. The cut is
+// made on the text in logical order at grapheme boundaries, measured with the
+// advances of the run's glyphs, and what is kept is shaped again with its
+// "…" (so a mixed-direction line keeps the shaper's order); both are cached
+// per box by run, width and mode. It reports false, drawing nothing, for a
+// run without cluster information (the caller fades the line instead).
+func (c *Context) emitTruncated(l *gpu.DrawList, b *box, mode TextCut, x0, x1, baseline float32, clip [4]float32, col uint32) bool {
 	cut := c.truncationCache(b)
-	var v, ev text.RunView
-	if cut.ready && cut.run == b.run && cut.gen == b.runGen && cut.gen == c.sh.RunGeneration() && cut.w == x1-x0 {
-		if !cut.ok {
-			return false
-		}
-		v, ev = c.sh.Run(b.run), c.sh.Run(cut.ellipsis)
-	} else {
-		er := c.sh.Shape(b.font, ellipsisText)
-		if c.sh.RunGeneration() != b.runGen { // shaping the ellipsis evicted b's run
-			b.run = c.sh.Shape(b.font, c.fr.Cur().Bytes(b.txt))
-			b.runGen = c.sh.RunGeneration()
-			er = c.sh.Shape(b.font, ellipsisText)
-		}
-		ev = c.sh.Run(er)
-		eAdv := ev.Advance
-		v = c.sh.Run(b.run)
-		*cut = truncCache{run: b.run, ellipsis: er, gen: c.sh.RunGeneration(), w: x1 - x0, ready: true}
-		if len(v.Clusters) != len(v.Glyphs) || len(ev.Glyphs) == 0 {
-			return false
-		}
-		for _, cl := range v.Clusters {
-			if cl&text.ClusterRTL != 0 {
-				return false
-			}
-		}
-		// the glyphs [0, n) that leave room for the ellipsis, without a cluster
-		// cut in two (a glyph of the same cluster as the next stays with it)
-		n := 0
-		for n < len(v.Glyphs) && glyphEnd(v, n)+eAdv <= x1-x0+0.01 {
-			n++
-		}
-		for n > 0 && n < len(v.Glyphs) && v.Clusters[n] == v.Clusters[n-1] {
-			n--
-		}
-		for n > 0 {
-			off := int(v.Clusters[n-1])
-			if off >= len(v.Text) || (v.Text[off] != ' ' && v.Text[off] != '\t') {
-				break
-			}
-			n--
-		}
-		cut.n, cut.ok = int32(n), true
+	avail := x1 - x0
+	if !(cut.ready && cut.run == b.run && cut.gen == b.runGen && cut.gen == c.sh.RunGeneration() && cut.w == avail && cut.mode == mode) {
+		c.cutText(b, cut, mode, avail)
 	}
-	n := int(cut.n)
+	if !cut.ok {
+		return false
+	}
+	kv := c.sh.Run(cut.kept)
+	x := x0
+	switch b.align {
+	case AlignCenter:
+		x = x0 + (avail-kv.Advance)/2
+	case AlignRight:
+		x = x1 - kv.Advance
+	}
 	tclip := intersect(clip, [4]float32{x0, clip[1], x1, clip[3]})
-	if empty(tclip) {
-		return true
-	}
-	var smooth uint8
-	if b.flags&NoFontSmoothing == 0 && !c.Theme.NoFontSmoothing {
-		smooth = text.SmoothLevel(col)
-	}
-	for i := 0; i < n; i++ {
-		c.emitGlyphFade(l, v.Faces[i], v.Glyphs[i], x0+v.X[i], baseline, tclip, [2]float32{}, col, smooth)
-	}
-	end := x0
-	if n > 0 {
-		end = x0 + glyphEnd(v, n-1)
-	}
-	for i, gid := range ev.Glyphs {
-		c.emitGlyphFade(l, ev.Faces[i], gid, end+ev.X[i], baseline, tclip, [2]float32{}, col, smooth)
+	if !empty(tclip) {
+		c.emitGlyphs(l, b, kv, x, baseline, tclip, [2]float32{}, col)
 	}
 	return true
+}
+
+// cutText fills cut with b's text cut by mode to fit avail pixels.
+func (c *Context) cutText(b *box, cut *truncCache, mode TextCut, avail float32) {
+	*cut = truncCache{ready: true, w: avail, mode: mode}
+	txt := c.fr.Cur().Bytes(b.txt)
+	er := c.sh.Shape(b.font, ellipsisText)
+	if c.sh.RunGeneration() != b.runGen { // shaping the ellipsis evicted b's run
+		b.run = c.sh.Shape(b.font, txt)
+		b.runGen = c.sh.RunGeneration()
+		er = c.sh.Shape(b.font, ellipsisText)
+	}
+	v := c.sh.Run(b.run)
+	e := c.sh.Run(er).Advance
+	cut.run, cut.gen = b.run, b.runGen
+	if len(v.Clusters) != len(v.Glyphs) || len(v.Glyphs) == 0 || e <= 0 {
+		cut.gen = c.sh.RunGeneration()
+		return
+	}
+	budget := avail - e
+	for try := 0; try < 4; try++ {
+		head, tail := cutBounds(v, txt, mode, budget)
+		c.cutBuf = append(c.cutBuf[:0], txt[:head]...)
+		c.cutBuf = append(c.cutBuf, ellipsisText...)
+		c.cutBuf = append(c.cutBuf, txt[tail:]...)
+		kept := c.sh.Shape(b.font, c.cutBuf)
+		if c.sh.RunGeneration() != b.runGen { // it evicted b's run: shape both again
+			b.run = c.sh.Shape(b.font, txt)
+			b.runGen = c.sh.RunGeneration()
+			kept = c.sh.Shape(b.font, c.cutBuf)
+			v = c.sh.Run(b.run)
+			cut.run = b.run
+		}
+		cut.kept, cut.gen, cut.ok = kept, c.sh.RunGeneration(), true
+		// shaped together, the kept text can be wider than its glyphs were
+		// in the whole line (kerning, contextual forms): cut more
+		over := c.sh.Run(kept).Advance - avail
+		if over <= 0.01 || head == 0 && tail == len(txt) {
+			return
+		}
+		budget -= over
+	}
+}
+
+// cutBounds is the cut of txt, shaped as v, that leaves the kept glyphs at
+// most budget wide: the text [0, head) and [tail, len) is kept and an ellipsis
+// goes between. Both are grapheme boundaries; the spaces next to the cut are
+// dropped.
+func cutBounds(v text.RunView, txt []byte, mode TextCut, budget float32) (head, tail int) {
+	n := len(txt)
+	switch mode {
+	case CutHead:
+		tail = suffixFrom(v, txt, budget)
+		head = 0
+	case CutMiddle:
+		half := budget / 2
+		if d := bytes.LastIndexByte(txt, '.'); d > 0 && n-d <= extMax {
+			if w := keptWidth(v, d, false); w <= budget {
+				half = max(half, w) // the extension stays whole
+			}
+		}
+		tail = suffixFrom(v, txt, half)
+		head = prefixTo(v, txt, budget-keptWidth(v, tail, false), tail)
+	default: // CutTail
+		head, tail = prefixTo(v, txt, budget, n), n
+	}
+	for head > 0 && (txt[head-1] == ' ' || txt[head-1] == '\t') {
+		head--
+	}
+	for tail < n && (txt[tail] == ' ' || txt[tail] == '\t') {
+		tail++
+	}
+	return head, max(tail, head)
+}
+
+// keptWidth is the advance of the glyphs of v whose cluster starts before
+// byte k (prefix) or at or after it (!prefix).
+func keptWidth(v text.RunView, k int, prefix bool) float32 {
+	var w float32
+	for i := range v.Glyphs {
+		if (int(v.Clusters[i]&^text.ClusterRTL) < k) == prefix {
+			w += glyphEnd(v, i) - v.X[i]
+		}
+	}
+	return w
+}
+
+// prefixTo is the longest prefix of txt, no further than limit and ending on a
+// grapheme boundary, whose glyphs are at most budget wide.
+func prefixTo(v text.RunView, txt []byte, budget float32, limit int) int {
+	lo, hi := 0, limit // keptWidth(lo) fits; find the largest that does
+	for lo < hi {
+		m := (lo + hi + 1) / 2
+		if keptWidth(v, m, true) <= budget+0.01 {
+			lo = m
+		} else {
+			hi = m - 1
+		}
+	}
+	return text.GraphemeStart(txt, lo)
+}
+
+// suffixFrom is where the longest suffix of txt that starts on a grapheme
+// boundary and whose glyphs are at most budget wide begins.
+func suffixFrom(v text.RunView, txt []byte, budget float32) int {
+	lo, hi := 0, len(txt) // keptWidth(hi, suffix) fits; find the smallest that does
+	for lo < hi {
+		m := (lo + hi) / 2
+		if keptWidth(v, m, false) <= budget+0.01 {
+			hi = m
+		} else {
+			lo = m + 1
+		}
+	}
+	if !text.IsGraphemeBoundary(txt, lo) {
+		lo = text.NextGrapheme(txt, text.GraphemeStart(txt, lo))
+	}
+	return lo
 }
 
 // glyphEnd is where glyph i of v ends: the next glyph's pen, or the run's

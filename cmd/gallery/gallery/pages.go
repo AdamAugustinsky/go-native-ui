@@ -98,6 +98,7 @@ var keyGallery = ui.HashString(0, "gallery")
 var (
 	selectOptions = []string{"Choice", "Other"}
 	radioOptions  = []string{"Radio"}
+	segOptions    = []string{"A", "B"}
 	formats       = []string{"Plain text", "Markdown", "HTML"}
 	modes         = []string{"One", "Two", "Three"}
 	tabNames      = []string{"Overview", "Details", "History"}
@@ -109,19 +110,23 @@ var (
 const (
 	rowButton = iota
 	rowPrimary
+	rowDestructive
 	rowPlain
+	rowToggle
 	rowIcon
 	rowCheck
 	rowMixed
 	rowSwitch
 	rowRadio
+	rowSegmented
 	rowSlider
+	rowStepper
 	rowField
 	rowSelect
 )
 
 var (
-	rowNames   = [...]string{"Button", "Primary", "Plain", "Icon", "Checkbox", "Mixed", "Switch", "Radio", "Slider", "Field", "Select"}
+	rowNames   = [...]string{"Button", "Primary", "Destructive", "Plain", "Toggle", "Icon", "Checkbox", "Mixed", "Switch", "Radio", "Segmented", "Slider", "Stepper", "Field", "Select"}
 	stateNames = [5]string{"Normal", "Hover", "Pressed", "Focused", "Disabled"}
 	stateCells = [5]string{"c0", "c1", "c2", "c3", "c4"}
 	stateLooks = [5]widget.Look{0, widget.LookHover, widget.LookPressed, widget.LookFocused, 0}
@@ -328,8 +333,13 @@ func (g *Gallery) stateWidget(kind, i int) {
 		rexui.Button(k, "Button", rexui.ButtonOpts{})
 	case rowPrimary:
 		rexui.Button(k, "Primary", rexui.ButtonOpts{Variant: rexui.ButtonPrimary})
+	case rowDestructive:
+		rexui.Button(k, "Delete", rexui.ButtonOpts{Variant: rexui.ButtonDestructive})
 	case rowPlain:
 		rexui.Button(k, "Plain", rexui.ButtonOpts{Variant: rexui.ButtonPlain})
+	case rowToggle:
+		m.toggle[i] = true
+		rexui.ToggleButton(k, "Bold", &m.toggle[i], rexui.ToggleOpts{})
 	case rowIcon:
 		g.wk.IconButton(icon.Plus, "Add", widget.ButtonDefault)
 	case rowCheck:
@@ -340,6 +350,11 @@ func (g *Gallery) stateWidget(kind, i int) {
 		rexui.Switch(k, "On", &m.sw[i], rexui.SwitchOpts{})
 	case rowRadio:
 		rexui.RadioGroup(k, "Radio", &m.radio[i], radioOptions, rexui.RadioOpts{})
+	case rowSegmented:
+		m.seg[i] = 1 // the forced look lands on the first segment, which is not chosen
+		rexui.SegmentedControl(k, "Seg", &m.seg[i], segOptions, rexui.SegmentedOpts{})
+	case rowStepper:
+		rexui.Stepper(k, "Step", &m.step[i], 0, 9, 1, rexui.StepperOpts{})
 	case rowSlider:
 		rexui.Slider(k, "Slider", &m.slide[i], 0, 100, 1, rexui.SliderOpts{})
 	case rowField:

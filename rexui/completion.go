@@ -359,20 +359,24 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 	if ex := o.Exclude; ex[2] > ex[0] && ex[3] > ex[1] { // outside the editor: against its edge, at the caret's x
 		anchor = [4]float32{caret[0], ex[1], max(caret[2], caret[0]), ex[3]}
 	}
-	c.NextOverlay(ui.OverlayOpts{NoFocus: true, Dismiss: dismiss, AvoidHosts: true})
-	c.NextSize(ui.Px(w), ui.Children(1))
+	// in the usable area: a list that fits on neither side is bounded to the
+	// room ui finds (OverlayOpts.Fit: the window's margin and insets, the
+	// window's buttons) and its rows are cut at the panel's edge
+	c.NextOverlay(ui.OverlayOpts{NoFocus: true, Dismiss: dismiss, AvoidHosts: true, Fit: true})
+	c.NextSize(ui.Px(w), ui.Children(0))
 	ov := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
 	sig.Dismissed = ov.Dismissed
 
-	// the panel
+	// the panel, fading in over the theme's Micro as a menu does
+	c.PushOpacity(menuEnter(k, okey))
 	c.NextBG(theme.Over(r.Colors[theme.Raised], r.Colors[theme.Window]|0xFF))
 	surf := NextOverlaySurface(k, pt(sc, rc.Radius)) // the floating surface
 	c.NextPad(pad)
 	c.NextAxis(ui.AxisY)
-	c.NextSize(ui.Px(w), ui.Children(1))
+	c.NextSize(ui.Px(w), ui.Children(0))
 	c.NextRole(ui.RoleList)
 	c.NextSemName(display)
-	panel := c.BoxKeyed(ui.DrawBackground|surf, ui.KeyN(okey, 1), nil)
+	panel := c.BoxKeyed(ui.DrawBackground|ui.Clip|surf, ui.KeyN(okey, 1), nil)
 	sig.ID = panel
 	c.Push(panel)
 
@@ -436,6 +440,7 @@ func completion(k *base.Kit, label string, st *CompletionState, items []Completi
 		}
 	}
 	c.Pop()
+	c.PopOpacity()
 	c.EndOverlay()
 	return sig
 }

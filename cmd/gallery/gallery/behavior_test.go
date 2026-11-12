@@ -138,7 +138,8 @@ func TestControlsExportTheirValuesAndStates(t *testing.T) {
 		t.Error("the History tab's text is not shown")
 	}
 	// disabled widgets say so: the Disabled column of the state matrix, one
-	// widget per row
+	// widget per row, and the segmented row's second segment (each segment
+	// is a node of its own)
 	r.goTo(scStates)
 	disabled := 0
 	for _, nd := range r.Tree().Nodes {
@@ -146,8 +147,8 @@ func TestControlsExportTheirValuesAndStates(t *testing.T) {
 			disabled++
 		}
 	}
-	if disabled != 11 {
-		t.Errorf("%d disabled nodes, want the 11 of the matrix's Disabled column", disabled)
+	if want := len(rowNames) + 1; disabled != want {
+		t.Errorf("%d disabled nodes, want the %d of the matrix's Disabled column", disabled, want)
 	}
 }
 

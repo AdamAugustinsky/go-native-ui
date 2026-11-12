@@ -17,8 +17,10 @@ type TooltipRecipe struct {
 	// (theme.StyleTooltip: 11/13).
 	Fill, Text Tint
 	Style      theme.TextStyle
-	// Elevation is the tooltip's elevation (theme.ElevRaised: an edge and a
-	// shadow).
+	// Lift is the tooltip's step of the lift scale (theme.LiftMenu: its
+	// edge and shadows, D108). Under strict AppKit it draws Elevation's
+	// (theme.ElevRaised: a hairline and one shadow), as before.
+	Lift      theme.Lift
 	Elevation theme.Elevation
 }
 
@@ -27,6 +29,7 @@ var TooltipLook = TooltipRecipe{
 	PadX: 6, PadY: 3, Radius: 6, Gap: 4,
 	Fill: Of(theme.Raised), Text: Of(theme.Label),
 	Style:     theme.StyleTooltip,
+	Lift:      theme.LiftMenu,
 	Elevation: theme.ElevRaised,
 }
 
@@ -44,8 +47,11 @@ var tooltipKeyBase = ui.HashString(base.KeyRoot, "rexui/tooltip")
 // region of the frame and AppKit owns the delay, the look and the placement,
 // including past the window's edge. Elsewhere the tooltip is drawn here as an
 // overlay: it appears once the pointer has rested on the component for
-// Kit.TooltipDelayNs, fades in, takes no input and never the focus, and goes
-// when the pointer leaves or a button is pressed. Disabled components show
+// Kit.TooltipDelayNs, fades in over the theme's Micro duration (at once under
+// Reduce Motion and strict AppKit), Gap below the component where layout
+// puts it in this frame (above it, Gap away too, where there is no room
+// below), takes no input and never the focus, and goes when the pointer
+// leaves or a button is pressed. Disabled components show
 // tooltips too, without becoming hot or taking input.
 func Tooltip(k *base.Kit, id ui.ID, text string) {
 	c, r := k.Context(), k.Theme()
@@ -64,20 +70,23 @@ func Tooltip(k *base.Kit, id ui.ID, text string) {
 	}
 	rc := &TooltipLook
 	st := &r.Styles[rc.Style%theme.NumTextStyles]
-	rr := c.Rect(id)
-	anchor := [4]float32{rr[0], rr[1], rr[2], rr[3] + k.Pt(rc.Gap)}
 	okey := ui.KeyN(tooltipKeyBase, uint64(key))
-	c.PushOpacity(c.AnimateValueFrom(ui.KeyN(okey, 1), 0, 1, r.Motion.Fade))
-	e := &r.Elevations[rc.Elevation%theme.NumElevations]
-	flags := ui.DrawBackground
-	if l := e.Shadows[0]; l.Blur > 0 {
-		c.NextShadow(ui.Shadow{OffY: l.Y, Sigma: l.Blur, Color: l.Color(r.Colors[theme.Shadow], r.T)})
-		flags |= ui.DrawShadow
+	c.PushOpacity(menuEnter(k, okey))
+	var sa, sb ui.Shadow
+	var edge uint32
+	var ew float32
+	if r.StrictAppKit { // what Rex drew before the lift scale
+		e := &r.Elevations[rc.Elevation%theme.NumElevations]
+		if l := e.Shadows[0]; l.Blur > 0 {
+			sa = ui.Shadow{OffY: l.Y, Sigma: l.Blur, Color: l.Color(r.Colors[theme.Shadow], r.T)}
+		}
+		edge, ew = r.Colors[e.EdgeRole], e.Edge
+	} else {
+		ls := &theme.Lifts[rc.Lift%theme.NumLifts]
+		sa, sb = ls.Shadows(r)
+		edge, ew = ls.EdgeColor(r), ls.EdgeWidth(r)
 	}
-	if e.Edge > 0 {
-		c.NextBorder(r.Colors[e.EdgeRole], e.Edge)
-		flags |= ui.DrawBorder
-	}
+	flags := ui.DrawBackground | nextLifted(c, sa, sb, edge, ew)
 	c.NextBG(rc.Fill.RGBA(r))
 	c.NextRadius(k.Pt(rc.Radius))
 	c.NextPadding(k.Pt(rc.PadX), k.Pt(rc.PadY), k.Pt(rc.PadX), k.Pt(rc.PadY))
@@ -85,7 +94,8 @@ func Tooltip(k *base.Kit, id ui.ID, text string) {
 	c.NextRole(ui.RoleTooltip)
 	c.NextSemName(text)
 	c.NextSize(ui.Children(1), ui.Children(1))
-	c.BeginOverlay(okey, ui.OverlayTooltip, anchor, ui.PlaceBelow)
+	c.NextOverlay(ui.OverlayOpts{Gap: k.Pt(rc.Gap)})
+	c.BeginOverlayOn(okey, ui.OverlayTooltip, id, ui.PlaceBelow) // (due: id is not 0)
 	c.NextFont(st.Font)
 	c.NextTextColor(rc.Text.RGBA(r))
 	c.NextSize(ui.TextSize(0), ui.Px(st.Line))

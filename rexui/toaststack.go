@@ -120,26 +120,27 @@ type StackToastSignal struct {
 var ToastStackLook = struct{ Gap, TextGap float32 }{Gap: theme.Space2, TextGap: theme.Space1}
 
 // Toast adds a toast to the stack, identified by id (the app's own: a
-// download's number), on the raised surface with its shadow.
+// download's number), on the raised surface at a toast's lift
+// (theme.LiftToast). It fades in over the theme's Short duration when it is
+// first built (at once under Reduce Motion and strict AppKit) and goes at
+// once when the app stops building it.
 func (s *ToastStack) Toast(id uint64, o StackToastOpts) StackToastSignal {
 	k := s.k
 	c, r := k.Context(), k.Theme()
 	sig := StackToastSignal{Action: -1}
-	el := &r.Elevations[theme.ElevRaised]
-	sh := el.Shadows[0]
 	key := ui.KeyN(c.ParentKey(), id)
 	c.NextSize(ui.Pct(1), ui.Children(1))
 	c.NextBG(r.Colors[theme.Raised] | 0xFF)
-	c.NextBorder(r.Colors[theme.Separator], r.Lines.Hairline)
+	lift := nextToastLift(k)
 	c.NextRadius(k.Pt(BannerLook.Radius))
-	c.NextShadow(ui.Shadow{OffY: sh.Y, Sigma: sh.Blur, Color: sh.Color(r.Colors[theme.Shadow], r.T)})
+	c.NextOpacity(toastEnter(k, key))
 	c.NextPad(k.Pt(BannerLook.Pad))
 	c.NextGap(k.Pt(ToastStackLook.Gap))
 	c.NextAxis(ui.AxisX)
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(bannerName(c, o.Level%NumBannerLevels, o.Title)) // "Error: …", as a banner's
 	c.NextSemValueBytes(base.StrBytes(o.Message))                  // and its message as its value
-	sig.ID = c.BoxKeyed(ui.DrawBackground|ui.DrawBorder|ui.DrawShadow|ui.Hoverable, key, nil)
+	sig.ID = c.BoxKeyed(ui.DrawBackground|lift|ui.Hoverable, key, nil)
 	c.Push(sig.ID)
 	lv := o.Level % NumBannerLevels
 	ic, col, msg := o.Icon, r.Colors[theme.Label2], Of(theme.Label2)
@@ -258,8 +259,6 @@ func CopiedPill(k *base.Kit, o CopiedOpts) bool {
 	if ic == 0 {
 		ic = icon.Check
 	}
-	el := &r.Elevations[theme.ElevRaised]
-	sh := el.Shadows[0]
 	w := k.TextWidth(r.Styles[theme.StyleSubheadline].Font, text) + k.Pt(theme.Space3+theme.Space4+theme.Space2+theme.SmallIconPt)
 	h := k.Pt(theme.Space8)
 	W, H := c.Size()
@@ -272,12 +271,14 @@ func CopiedPill(k *base.Kit, o CopiedOpts) bool {
 	c.NextJustify(ui.JustifyCenter)
 	c.NextGap(k.Pt(theme.Space2))
 	c.NextBG(r.Colors[theme.Raised] | 0xFF)
-	c.NextBorder(r.Colors[theme.Separator], r.Lines.Hairline)
+	lift := nextToastLift(k)
+	if r.StrictAppKit {
+		lift &^= ui.DrawShadow // (the pill's shadow was never drawn before the lift scale)
+	}
 	c.NextRadius(h / 2)
-	c.NextShadow(ui.Shadow{OffY: sh.Y, Sigma: sh.Blur, Color: sh.Color(r.Colors[theme.Shadow], r.T)})
 	c.NextRole(ui.RoleGroup)
 	c.NextSemName(text)
-	c.Push(c.Box(base.Floating|ui.DrawBackground|ui.DrawBorder, "copied"))
+	c.Push(c.Box(base.Floating|ui.DrawBackground|lift, "copied"))
 	k.Icon(ic, r.Colors[theme.Accent])
 	Label(k, c.Fmt().Str(text).Str("###copied").String(), LabelOpts{Style: TextSubheadline})
 	c.Pop()

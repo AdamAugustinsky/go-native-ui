@@ -230,13 +230,41 @@ func TestAnimationConvergence(t *testing.T) {
 	if h.c.Animating() {
 		t.Fatal("animating with nothing hot")
 	}
+	// Hover arrives at once by default (D103): hot in the frame it lands,
+	// with nothing left to animate.
 	h.move(50, 50)
-	h.frame(build) // hot now; hot_t starts moving
-	if !h.c.Animating() {
-		t.Fatal("not animating after hover")
+	h.frame(build)
+	if h.c.HotT(box) != 1 || h.c.Animating() {
+		t.Fatalf("hover in: hot_t = %v animating=%v, want 1 at once", h.c.HotT(box), h.c.Animating())
 	}
-	prev := float32(0)
-	frames := 1
+	// Leaving the box animates back down to 0, monotonically.
+	h.move(300, 250)
+	prev := float32(1)
+	frames := 0
+	for i := 0; i < 100 && (i == 0 || h.c.Animating()); i++ {
+		h.frame(build)
+		frames++
+		if v := h.c.HotT(box); v > prev {
+			t.Fatalf("hot_t went back up: %v -> %v", prev, v)
+		} else {
+			prev = v
+		}
+	}
+	if h.c.HotT(box) != 0 || h.c.Animating() {
+		t.Fatalf("hot_t = %v animating=%v", h.c.HotT(box), h.c.Animating())
+	}
+	// rate 1-2^(-50/60) ≈ 0.44/frame: within 0.005 in ~10 frames.
+	if frames > 14 || frames < 5 {
+		t.Errorf("hover out converged in %d frames", frames)
+	}
+	// A hover-in rate eases in the same way.
+	h.c.Rates.HotIn = 50
+	h.move(50, 50)
+	h.frame(build)
+	if !h.c.Animating() {
+		t.Fatal("not animating after hover with a hover-in rate")
+	}
+	prev, frames = 0, 1
 	for h.c.Animating() {
 		if v := h.c.HotT(box); v < prev {
 			t.Fatalf("hot_t went backwards: %v -> %v", prev, v)
@@ -252,17 +280,8 @@ func TestAnimationConvergence(t *testing.T) {
 	if h.c.HotT(box) != 1 {
 		t.Fatalf("hot_t = %v after convergence", h.c.HotT(box))
 	}
-	// rate 1-2^(-50/60) ≈ 0.44/frame: 0.995 within ~10 frames.
 	if frames > 14 || frames < 5 {
-		t.Errorf("converged in %d frames", frames)
-	}
-	// Leaving the box animates back down to 0.
-	h.move(300, 250)
-	for i := 0; i < 100 && (i == 0 || h.c.Animating()); i++ {
-		h.frame(build)
-	}
-	if h.c.HotT(box) != 0 || h.c.Animating() {
-		t.Fatalf("hot_t = %v animating=%v", h.c.HotT(box), h.c.Animating())
+		t.Errorf("hover in converged in %d frames", frames)
 	}
 }
 

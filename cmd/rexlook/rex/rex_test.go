@@ -289,9 +289,6 @@ func TestHoverTab(t *testing.T) {
 	h.move(cx, cy)
 	h.frame()
 	h.frame()
-	if !h.c.Animating() {
-		t.Error("hover does not animate")
-	}
 	if !hasFill() {
 		t.Error("a hovered inactive tab shows no hover fill")
 	}
@@ -310,7 +307,15 @@ func TestHoverTab(t *testing.T) {
 			t.Error("the active tab got a hover fill")
 		}
 	}
+	// Hover arrives at once and fades out (D103): leaving animates.
+	h.move(cx, cy)
+	h.settle()
 	h.move(5, 700)
+	h.frame()
+	h.frame()
+	if !h.c.Animating() {
+		t.Error("hover does not fade out")
+	}
 	h.settle()
 	if hasFill() || h.cursor() != ui.CursorArrow {
 		t.Error("hover state stays after the pointer left")

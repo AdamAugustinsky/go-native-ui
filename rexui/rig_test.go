@@ -6,6 +6,7 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/internal/fakeui"
+	"gonativeui/rexui"
 	"gonativeui/rexui/catalog"
 	"gonativeui/theme"
 	"gonativeui/theme/rex"
@@ -33,6 +34,15 @@ type rig struct {
 // style, as AppKit's views do, for the tests of legacy bars: Rex's own views
 // draw overlay bars (theme.Theme.OverlayScrollers).
 var systemScrollers bool
+
+// strictRigs makes the rigs strict AppKit (theme.Theme.StrictAppKit).
+var strictRigs bool
+
+// strictAppKit makes the rigs opened in t strict AppKit.
+func strictAppKit(t *testing.T) {
+	strictRigs = true
+	t.Cleanup(func() { strictRigs = false })
+}
 
 // followSystemScrollers makes the rigs opened in t follow the system's
 // scroller style.
@@ -65,6 +75,10 @@ func openRig(t *testing.T, m theme.Mode, sys *theme.SystemValues, build func(g *
 	g := &rig{t: t, c: c, w: 1000, h: 400, scale: 2, build: build}
 	th := rex.Theme()
 	th.OverlayScrollers = !systemScrollers
+	// A rig whose controls are AppKit's (appKitControls, UseAppKitControls:
+	// the AppKit comparisons) is strict AppKit too: what is compared with
+	// AppKit's measurements is what strict draws (D107).
+	th.StrictAppKit = strictRigs || !rexui.ButtonRecipes[rexui.ButtonDefault].Capsule
 	g.k = base.NewKit(c, ts, th)
 	g.k.SetMode(m)
 	g.k.PinSystem(sys)

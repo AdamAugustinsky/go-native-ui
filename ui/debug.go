@@ -217,28 +217,10 @@ func (c *Context) DebugAnimating(out []Key) int {
 		if b.flags&(HotAnimation|ActiveAnimation|FocusAnimation) == 0 {
 			continue
 		}
-		moving := false
-		if b.flags&HotAnimation != 0 {
-			var t float32
-			if b.key == c.hotKey && (c.active[0] == 0 || c.active[0] == b.key) {
-				t = 1
-			}
-			moving = moving || b.hotT != t
-		}
-		if b.flags&ActiveAnimation != 0 {
-			var t float32
-			if b.key == c.active[0] {
-				t = 1
-			}
-			moving = moving || b.activeT != t
-		}
-		if b.flags&FocusAnimation != 0 {
-			var t float32
-			if b.key == c.focusKey {
-				t = 1
-			}
-			moving = moving || b.focusT != t
-		}
+		hot, active, focus := c.boxTargets(b)
+		moving := b.flags&HotAnimation != 0 && b.hotT != hot ||
+			b.flags&ActiveAnimation != 0 && b.activeT != active ||
+			b.flags&FocusAnimation != 0 && b.focusT != focus
 		if moving {
 			if n < len(out) {
 				out[n] = b.key
@@ -253,12 +235,6 @@ func (c *Context) DebugAnimating(out []Key) int {
 			}
 			n++
 		}
-	}
-	if n == 0 && c.settledKey != 0 { // the frame owed for an animation's final value
-		if len(out) > 0 {
-			out[0] = c.settledKey
-		}
-		n = 1
 	}
 	return n
 }

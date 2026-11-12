@@ -285,7 +285,7 @@ func (s *Splitter) Divider(i int) Divider {
 	if k.Disabled() {
 		d.Disabled = true
 	} else {
-		d.Hot, d.Down, d.Focus = c.HotTOf(dk), c.ActiveTOf(dk), c.FocusTOf(dk)
+		d.Hot, d.Down, d.Focus = c.HotTOf(dk), k.HeldDown(dk), c.FocusTOf(dk)
 		if c.FocusVisible() {
 			d.Ring = d.Focus
 		}

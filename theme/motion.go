@@ -16,8 +16,14 @@ import (
 // 0: the crossfade between light and dark stays, as on macOS.
 type Motion struct {
 	// Hot, Active and Focus drive the hover, press and focus animations of
-	// boxes; Scroll the smoothing of scroll offsets.
+	// boxes; Scroll the smoothing of scroll offsets. Hot and Active are how a
+	// hover fades out and a press lets go (D103); see HotIn and ActiveIn for
+	// how they arrive.
 	Hot, Active, Focus, Scroll float32
+	// HotIn and ActiveIn are the rates at which a hover and a press arrive;
+	// 0, the default, is at once: a control answers the hand in the frame
+	// the pointer or the press lands (D103).
+	HotIn, ActiveIn float32
 	// Dim is the rate at which a surface dims or lights up as focus leaves or
 	// enters it.
 	Dim float32
@@ -46,8 +52,8 @@ type Motion struct {
 // thing travels, and how much quicker leaving is than arriving
 // (Theme.SetDurations):
 //
-//  1. Instant (no duration): a press, a selection.
-//  2. Micro: hover, a value's tint.
+//  1. Instant (no duration): a press, a hover arriving, a selection.
+//  2. Micro: a hover leaving, a release, a value's tint.
 //  3. Short: fades, swaps of an icon or a line, a badge.
 //  4. Standard: panes, layout that moves, a menu or a popover.
 //  5. Long: a sheet, a big reveal. Nothing longer: a wait the user watches
@@ -68,7 +74,7 @@ var DefaultDurations = Durations{Micro: 0.1, Short: 0.18, Standard: 0.25, Long: 
 
 // SetDurations makes d the theme's durations and puts them into the rates
 // the components follow, so that an app's motion and the framework's keep
-// one timing: hover (Hot) over Micro, fades and the panes' focus dimming
+// one timing: a hover's fade out (Hot) over Micro, fades and the panes' focus dimming
 // (Fade, Dim) over Short, a state change over Standard, a dismissal over
 // Standard×ExitScale and a sheet over Long.
 func (t *Theme) SetDurations(d Durations) {
@@ -79,6 +85,38 @@ func (t *Theme) SetDurations(d Durations) {
 	m.Micro, m.Short, m.Long, m.ExitScale = d.Micro, d.Short, d.Long, d.ExitScale
 	m.Hot, m.Fade, m.Dim = RateFor(d.Micro), RateFor(d.Short), RateFor(d.Short)
 	m.Standard, m.Dismiss, m.Sheet = d.Standard, d.Standard*d.ExitScale, d.Long
+}
+
+// Duration names one of a theme's durations, so that a recipe keeps a
+// token rather than seconds (Motion.Of).
+type Duration uint8
+
+const (
+	// DurInstant is no time at all.
+	DurInstant Duration = iota
+	// DurMicro is Motion.Micro: a hover leaving, a mark appearing.
+	DurMicro
+	// DurShort is Motion.Short: a fade, a knob's short travel.
+	DurShort
+	// DurStandard is Motion.Standard: a state change, a panel.
+	DurStandard
+	// DurLong is Motion.Long: a sheet, a big reveal.
+	DurLong
+)
+
+// Of is the length of d in m, in seconds.
+func (m *Motion) Of(d Duration) float32 {
+	switch d {
+	case DurMicro:
+		return m.Micro
+	case DurShort:
+		return m.Short
+	case DurStandard:
+		return m.Standard
+	case DurLong:
+		return m.Long
+	}
+	return 0
 }
 
 // settled is the share of the way an exponential approach covers in a
@@ -181,15 +219,23 @@ func Glide(c *ui.Context, r *Resolved, key ui.Key, on bool, d float32) float32 {
 // rates it stills.
 const Instant = 1e6
 
+// static is m with hover and press changing at once both ways, as AppKit's
+// controls do (Theme.StrictAppKit).
+func (m Motion) static() Motion {
+	m.Hot, m.Active, m.HotIn, m.ActiveIn = Instant, Instant, 0, 0
+	return m
+}
+
 // Rates returns the box animation rates for ui.Context.Rates.
 func (m Motion) Rates() ui.Rates {
-	return ui.Rates{Hot: m.Hot, Active: m.Active, Focus: m.Focus, Scroll: m.Scroll}
+	return ui.Rates{Hot: m.Hot, HotIn: m.HotIn, Active: m.Active, ActiveIn: m.ActiveIn, Focus: m.Focus, Scroll: m.Scroll}
 }
 
 // Reduced is m under Reduce Motion: rates Instant and durations 0, except
 // the crossfade (Mode) and scroll smoothing.
 func (m Motion) Reduced() Motion {
 	m.Hot, m.Active, m.Focus, m.Dim, m.Fade = Instant, Instant, Instant, Instant, Instant
+	m.HotIn, m.ActiveIn = 0, 0
 	m.Standard, m.Dismiss, m.Sheet = 0, 0, 0
 	return m
 }

@@ -117,6 +117,9 @@ func (s *RichStyles) Set(i int, st RichStyle) {
 	s.N = max(s.N, i+1)
 }
 
+// ellipsis is whether a cut last line ends with "…".
+func (o *RichOpts) ellipsis() bool { return o.MaxLines > 0 && (o.Ellipsis || !o.NoEllipsis) }
+
 // RichOpts are the options of a RichText box.
 type RichOpts struct {
 	// Dir is the base direction (DirAuto: per paragraph, from its text).
@@ -125,10 +128,12 @@ type RichOpts struct {
 	// as wide as its widest line, at most MaxW pixels (padding included): a
 	// chat bubble. With MaxW 0 an auto width fills the parent (Pct(1)).
 	MaxW float32
-	// MaxLines limits the lines (0: no limit); Ellipsis ends the last one with
-	// "…" when text was left out.
-	MaxLines int
-	Ellipsis bool
+	// MaxLines limits the lines (0: no limit). The last line kept ends with
+	// "…" when text was left out (D105), unless NoEllipsis; Truncated reports
+	// it. Ellipsis is that default, kept for the callers that set it.
+	MaxLines   int
+	Ellipsis   bool
+	NoEllipsis bool
 	// LineHeight, when positive, gives every line that height in pixels
 	// with the text centred in it, as CSS's line-height does (a reading
 	// column's 1.625 × the size); 0 lets each line be as high as its fonts
@@ -268,7 +273,7 @@ func (c *Context) RichText(key Key, body []byte, spans []Span, st *RichStyles, o
 	b.paraW = -1
 
 	rec := richRec{
-		id: id, dir: o.Dir, maxLines: int32(max(o.MaxLines, 0)), ellipsis: o.Ellipsis,
+		id: id, dir: o.Dir, maxLines: int32(max(o.MaxLines, 0)), ellipsis: o.ellipsis(),
 		links: links, maxW: o.MaxW, lineH: max(o.LineHeight, 0), hover: -1,
 		styleOff: int32(len(c.richStyles)), spanOff: int32(len(c.richSpans)), spanN: int32(len(spans)),
 	}
@@ -494,7 +499,7 @@ func (c *Context) LayoutText(body []byte, spans []Span, st *RichStyles, width fl
 	}
 	c.para = text.Para{
 		Text: body, Spans: spans, Fonts: c.layFonts[:n], Width: width,
-		Dir: o.Dir, MaxLines: max(o.MaxLines, 0), Ellipsis: o.Ellipsis, LineHeight: max(o.LineHeight, 0),
+		Dir: o.Dir, MaxLines: max(o.MaxLines, 0), Ellipsis: o.ellipsis(), LineHeight: max(o.LineHeight, 0),
 	}
 	pv := c.lay.Paragraph(c.lay.Layout(&c.para))
 	c.para.Text, c.para.Spans = nil, nil

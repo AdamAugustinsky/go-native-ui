@@ -181,6 +181,11 @@ type stagedCopy struct {
 	x, y, w, h, bpp int
 }
 
+// stagedCopiesFloor is the room a slot's list of staged copies starts with:
+// more than a frame's atlas and image uploads, so that it does not grow in a
+// steady frame.
+const stagedCopiesFloor = 32
+
 // retiredTex is a freed texture waiting for the frames that may sample it.
 type retiredTex struct {
 	tex    objc.ID
@@ -616,6 +621,12 @@ func (r *Renderer) stage(t TextureID, plane uint8, x, y, w, h int, pixels []byte
 		copy(dst[y*row:(y+1)*row], pixels[y*stride:])
 	}
 	s.stageLen = off + row*h
+	if cap(s.copies) == 0 {
+		// room for a frame's uploads from the slot's first one: grown two
+		// at a time, a slot that had only seen two uploads in a frame
+		// allocated at its third, in a steady frame (the pilot bench's gate)
+		s.copies = make([]stagedCopy, 0, stagedCopiesFloor)
+	}
 	s.copies = append(s.copies, stagedCopy{t, plane, off, row, x, y, w, h, bpp})
 }
 

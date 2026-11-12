@@ -73,12 +73,20 @@ func Link(k *base.Kit, label string, o LinkOpts) base.Signal {
 	}
 	c.NextSemActions(ui.ActPress | ui.ActFocus)
 	k.BeginPress(&p, ui.RoleLink, ui.TextSize(0), ui.Px(st.Line), ui.DrawText, base.StrBytes(p.Name))
-	if !o.HoverUnderline || p.Hot > 0.5 || p.Ring > 0.5 {
+	// the underline: always, or with HoverUnderline as much as the link is
+	// hovered or ringed, fading with the hover rather than switching at half
+	ul := float32(1)
+	if o.HoverUnderline {
+		ul = max(p.Hot, p.Ring)
+	}
+	if ul > 0 {
+		// as wide as the link itself, which is its text's width unless a
+		// crowded row has cut it (D105): never past its end
 		sc := k.Scale()
-		w := k.TextWidth(st.Font, p.Name)
 		h := theme.Snap(rc.UnderlineH * sc)
-		theme.At(c, 0, theme.Snap(st.Baseline+rc.UnderlineY*sc), w, h)
-		c.NextBG(col)
+		c.NextPos(0, theme.Snap(st.Baseline+rc.UnderlineY*sc))
+		c.NextSize(ui.Pct(1), ui.Px(h))
+		c.NextBG(theme.WithAlpha(col, ul))
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(p.Key, 1), nil)
 	}
 	k.FocusRing(p.ID, p.Visual, k.Pt(rc.RingRadius))

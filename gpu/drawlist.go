@@ -217,7 +217,7 @@ type Quad struct {
 	Color       [4]uint32  // RGBA8 (0xRRGGBBAA), straight alpha, per corner TL, TR, BL, BR (bilinear across the quad, interpolated premultiplied)
 	Radii       [4]float32 // corner radii TL, TR, BR, BL in pixels
 	Border      float32    // border width in pixels; 0 = filled shape
-	BorderColor uint32     // RGBA8; with Border>0 and fill alpha 0 you get an outline
+	BorderColor uint32     // RGBA8, drawn over the fill (D104); with Border>0 and fill alpha 0 you get an outline
 	Soft        float32    // 0 = crisp 1-px AA edge; >0 = shadow blur sigma in pixels (ModeShape)
 	FadeX       [2]float32 // horizontal alpha fade: ×1 at x≤FadeX[0] ramping linearly to ×0 at x≥FadeX[1]; both 0 = off. Used for truncated text
 	Mode        Mode

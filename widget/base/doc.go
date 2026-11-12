@@ -41,9 +41,12 @@
 // focus came from the keyboard, ui.Context.FocusVisible), whether it is
 // disabled (a BeginDisabled region), and whether its window is inactive (not
 // the key window: recipes draw the unemphasised look). Hover is a per-component
-// policy: with HoverOff, Hot stays 0 and the box asks for no hover animation,
-// as AppKit's push buttons, checkboxes and table rows behave; toolbar and
-// borderless buttons and menu items pass HoverOn.
+// policy: by default (HoverAuto) a component shows its hover look, arriving at
+// once and fading out (D103); under a strict AppKit theme
+// (theme.Theme.StrictAppKit) it does not, as AppKit's push buttons,
+// checkboxes and table rows behave. With HoverOff, Hot stays 0 and the box
+// asks for no hover animation; toolbar and borderless buttons and menu items
+// pass HoverOn, which hovers under either.
 //
 // # Allocation
 //

@@ -367,9 +367,27 @@ func visible(q *gpu.Quad, x, y float64) (uint32, bool) {
 			}
 			return q.Color[0], true
 		}
-		return q.BorderColor, q.BorderColor&0xFF != 0
+		// the ring: the border composited over the fill, as the shaders
+		// draw it since D104 (col = mix(bc + col*(1-bc.a), col, inner))
+		ring := overStraight(q.BorderColor, q.Color[0])
+		return ring, ring&0xFF != 0
 	}
 	return q.Color[0], true
+}
+
+// overStraight composites the straight-alpha top over the straight-alpha
+// bottom (either may be translucent) and returns the straight-alpha result.
+func overStraight(top, bottom uint32) uint32 {
+	ta, ba := float64(top&0xFF)/255, float64(bottom&0xFF)/255
+	oa := ta + ba*(1-ta)
+	if oa <= 0 {
+		return 0
+	}
+	ch := func(s uint) uint32 {
+		t, b := float64(top>>s&0xFF), float64(bottom>>s&0xFF)
+		return uint32(math.Round((t*ta+b*ba*(1-ta))/oa)) << s
+	}
+	return ch(24) | ch(16) | ch(8) | uint32(math.Round(oa*255))
 }
 
 // inRounded reports whether (x, y) lies inside the rectangle with corner radii

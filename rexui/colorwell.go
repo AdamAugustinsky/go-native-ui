@@ -47,6 +47,11 @@ type ColorWellRecipe struct {
 	// BezelOff a disabled well's (#F2F2F2 and #292929 measured: the tertiary
 	// fill).
 	Bezel, Pressed, BezelOff Tint
+	// BezelHover is the bezel under the pointer (FillHover, D107), and
+	// SwatchHover the ring a picker's swatch takes under the pointer,
+	// SwatchRing points wide, as the chosen one's is in Label.
+	BezelHover, SwatchHover Tint
+	SwatchRing              float32
 	// Rim outlines the swatch: black at 17 % in light, white at 13 % in dark
 	// over the colour (measured on a teal swatch).
 	Rim Tint
@@ -66,6 +71,7 @@ type ColorWellRecipe struct {
 var ColorWellLook = ColorWellRecipe{
 	W: 48, H: 24, Inset: 3, RimW: 1,
 	Bezel: Of(theme.Fill1), Pressed: Of(theme.FillPressed), BezelOff: Of(theme.Fill3), Rim: OfAlpha(theme.Label, 0.17, 0.13),
+	BezelHover: Of(theme.FillHover), SwatchHover: Of(theme.Label3), SwatchRing: 2,
 	SwatchRadius: 8.5, Off: 0.55,
 	Width: 216, SwatchD: 24, Gap: 8, PerRow: 6,
 }
@@ -95,7 +101,7 @@ func ColorWell(k *base.Kit, label string, st *ColorWellState, rgba *uint32, o Co
 	c, r := k.Context(), k.Theme()
 	rc := &ColorWellLook
 	sc := k.Scale()
-	p := k.PressState(label, base.HoverOff)
+	p := k.PressState(label, base.HoverAuto)
 	w, h := pt(sc, rc.W), pt(sc, rc.H)
 	radius := h / 2
 	inset := pt(sc, rc.Inset)
@@ -103,8 +109,10 @@ func ColorWell(k *base.Kit, label string, st *ColorWellState, rgba *uint32, o Co
 	bezel := rc.Bezel.RGBA(r)
 	if p.Disabled {
 		bezel = rc.BezelOff.RGBA(r)
-	} else if p.Down > 0 || st.Open {
-		bezel = mix(bezel, rc.Pressed.RGBA(r), max(p.Down, 0.5*b2f(st.Open)))
+	} else {
+		v := p.Visual
+		v.Down = max(p.Down, 0.5*b2f(st.Open))
+		bezel = stateFill(bezel, rc.BezelHover.RGBA(r), rc.Pressed.RGBA(r), v)
 	}
 	swatch := theme.Over(*rgba, r.Colors[theme.Window]|0xFF)
 	rim := rc.Rim.RGBA(r)
@@ -207,16 +215,18 @@ func colorPicker(k *base.Kit, st *ColorWellState, rgba *uint32) (changed bool) {
 		k.Row(c.Fmt().Str("row").Int(row).String())
 		for i := row * rc.PerRow; i < min((row+1)*rc.PerRow, len(pickerColors)); i++ {
 			col := r.Colors[pickerColors[i]] | 0xFF
-			p := k.PressState(str.Colors[i], base.HoverOff)
+			p := k.PressState(str.Colors[i], base.HoverAuto)
 			selected := *rgba>>8 == col>>8
 			c.NextBG(col)
 			c.NextRadius(d / 2)
-			if selected {
-				c.NextBorder(r.Colors[theme.Label], pt(sc, 2))
-				c.NextSemState(ui.SemSelected)
-			}
 			fl := ui.DrawBackground
-			if selected {
+			switch {
+			case selected:
+				c.NextBorder(r.Colors[theme.Label], pt(sc, rc.SwatchRing))
+				c.NextSemState(ui.SemSelected)
+				fl |= ui.DrawBorder
+			case p.Hot > 0:
+				c.NextBorder(theme.WithAlpha(rc.SwatchHover.RGBA(r), p.Hot), pt(sc, rc.SwatchRing))
 				fl |= ui.DrawBorder
 			}
 			k.BeginPress(&p, ui.RoleRadio, ui.Px(d), ui.Px(d), fl, nil)

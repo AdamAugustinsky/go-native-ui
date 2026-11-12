@@ -59,13 +59,17 @@ type ButtonRecipe struct {
 	// replace them in a window that is not key.
 	Fill, Label, FillInactive, LabelInactive Tint
 	// FillHover and FillPressed are the hovered and pressed fills;
-	// LabelPressed the pressed label.
+	// LabelPressed the pressed label. A hover is one step: one up the fill
+	// scale for a neutral button, about half way to the pressed colour for
+	// an accent or a red one (D107); a theme that is strict AppKit shows
+	// none (Hover).
 	FillHover, FillPressed, LabelPressed Tint
-	// FillPressedInactive and LabelPressedInactive replace FillPressed and
-	// LabelPressed in an inactive window (the zero Tint: the same): a
+	// FillHoverInactive, FillPressedInactive and LabelPressedInactive
+	// replace FillHover, FillPressed and LabelPressed in an inactive window
+	// (the zero Tint: the same): a
 	// default button that is not emphasised presses as a push button does,
 	// not toward the accent, even when the window loses key mid-press.
-	FillPressedInactive, LabelPressedInactive Tint
+	FillHoverInactive, FillPressedInactive, LabelPressedInactive Tint
 	// FillDisabled and LabelDisabled are the disabled look: colours, not an
 	// opacity.
 	FillDisabled, LabelDisabled Tint
@@ -90,7 +94,9 @@ type ButtonRecipe struct {
 	// a live window's Liquid Glass button floats on one in light mode.
 	Shadow              Tint
 	ShadowY, ShadowBlur float32
-	// Hover is the hover policy: AppKit's push buttons ignore the pointer.
+	// Hover is the hover policy: the default (base.HoverAuto) shows
+	// FillHover unless the theme is strict AppKit, whose push buttons ignore
+	// the pointer.
 	Hover base.Hover
 }
 
@@ -105,15 +111,15 @@ type ButtonRecipe struct {
 var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 	ButtonDefault: {
 		Fill: Of(theme.Fill2), Label: Of(theme.Label), FillInactive: Of(theme.Fill2), LabelInactive: Of(theme.Label),
-		FillHover: None, FillPressed: Of(theme.FillPressed), LabelPressed: Of(theme.Label),
+		FillHover: Of(theme.Fill1), FillPressed: Of(theme.FillPressed), LabelPressed: Of(theme.Label),
 		FillDisabled: Of(theme.FillDisabled), LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
 		Capsule: true,
 	},
 	ButtonPrimary: {
 		Fill: Of(theme.Accent), Label: Of(theme.OnAccent), FillInactive: Of(theme.Fill2), LabelInactive: Of(theme.Label),
-		FillHover: None, FillPressed: Of(theme.AccentPressed), LabelPressed: Of(theme.OnAccent),
-		FillPressedInactive: Of(theme.FillPressed), LabelPressedInactive: Of(theme.Label),
+		FillHover: Of(theme.AccentHover), FillPressed: Of(theme.AccentPressed), LabelPressed: Of(theme.OnAccent),
+		FillHoverInactive: Of(theme.Fill1), FillPressedInactive: Of(theme.FillPressed), LabelPressedInactive: Of(theme.Label),
 		FillDisabled: Of(theme.FillDisabled), LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
 		Capsule: true,
@@ -123,14 +129,14 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 	// AppKit's systemRed label is 2.5:1 there in light).
 	ButtonDestructive: {
 		Fill: OfAlpha(theme.Red, 0.25, 0.25), Label: DangerText, FillInactive: OfAlpha(theme.Red, 0.25, 0.25), LabelInactive: DangerText,
-		FillHover: None, FillPressed: OfAlpha(theme.Red, 0.4, 0.4), LabelPressed: DangerText,
+		FillHover: OfAlpha(theme.Red, 0.32, 0.32), FillPressed: OfAlpha(theme.Red, 0.4, 0.4), LabelPressed: DangerText,
 		FillDisabled: Of(theme.FillDisabled), LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
 		Capsule: true,
 	},
 	ButtonPlain: {
 		Fill: None, Label: Of(theme.Label), FillInactive: None, LabelInactive: Of(theme.Label),
-		FillHover: None, FillPressed: None, LabelPressed: Of(theme.Label2),
+		FillHover: Of(theme.Fill3), FillPressed: None, LabelPressed: Of(theme.Label2),
 		FillDisabled: None, LabelDisabled: Of(theme.TextDisabled),
 		Rim: None, RimInactive: None, Highlight: None,
 		Capsule: true,
@@ -148,7 +154,7 @@ var ButtonRecipes = [NumButtonVariants]ButtonRecipe{
 		// lighter than a toolbar capsule's in light (black at 15 %); lit at
 		// the top and the bottom; a broad faint shadow in light
 		Fill: Of(theme.CapsuleFill), Label: Of(theme.Text), FillInactive: Of(theme.CapsuleFillInactive), LabelInactive: Of(theme.Text),
-		FillHover: None, FillPressed: Of(theme.Fill2), LabelPressed: Of(theme.Text),
+		FillHover: Of(theme.Fill4), FillPressed: Of(theme.Fill2), LabelPressed: Of(theme.Text),
 		FillDisabled: Of(theme.CapsuleFillInactive), LabelDisabled: Of(theme.TextDisabled),
 		Rim: OfAlpha(theme.CapsuleRim, 0.15, 1), RimInactive: Of(theme.CapsuleRimInactive), Highlight: Of(theme.CapsuleHighlight),
 		HighlightTop: true, Overlay: true, Glass: true,
@@ -269,8 +275,11 @@ func (rc *ButtonRecipe) Colors(r *theme.Resolved, v base.Visual) (fill, label, r
 			fill = r.Colors[m.Fill]
 		}
 	}
-	fp, lp := rc.FillPressed, rc.LabelPressed
+	fh, fp, lp := rc.FillHover, rc.FillPressed, rc.LabelPressed
 	if v.Inactive {
+		if rc.FillHoverInactive != (Tint{}) {
+			fh = rc.FillHoverInactive
+		}
 		if rc.FillPressedInactive != (Tint{}) {
 			fp = rc.FillPressedInactive
 		}
@@ -279,13 +288,13 @@ func (rc *ButtonRecipe) Colors(r *theme.Resolved, v base.Visual) (fill, label, r
 		}
 	}
 	if rc.Overlay {
-		fill = over(fill, rc.FillHover.RGBA(r), v.Hot)
+		fill = over(fill, fh.RGBA(r), v.Hot)
 		fill = over(fill, fp.RGBA(r), v.Down)
 	} else {
-		if h := rc.FillHover.RGBA(r); h != 0 {
-			fill = mix(fill, h, v.Hot)
-		}
-		fill = mix(fill, fp.RGBA(r), v.Down)
+		// the press goes from the hovered fill: under the pointer a press
+		// is never lighter than the hover it follows
+		fill = tintToward(fill, fh.RGBA(r), v.Hot)
+		fill = tintToward(fill, fp.RGBA(r), v.Down)
 	}
 	label = mix(label, lp.RGBA(r), v.Down)
 	return fill, label, rim

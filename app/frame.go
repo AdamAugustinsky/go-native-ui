@@ -103,21 +103,51 @@ func (a *App) arm(inHandler, animating, dirty bool, start int64) owedMask {
 	return why
 }
 
-// frameDT is the time step of the frame starting at now. The first frame,
-// and a frame after a long pause (idle), use a nominal 60 Hz step so that an
-// animation starting from rest does not jump.
+// frameDT is the time step of the frame starting at now. A frame that
+// follows one that left nothing animating (the first, one after idle, one
+// after input that moved nothing) steps by one display interval: the time
+// before it, while nothing moved, belongs to no animation, and an animation
+// that starts in it takes no leap (D103). So does a frame after a stall of
+// more than 100 ms. Otherwise it is the time since the last frame's start.
+//
+// The display interval is the shortest of the last 16 steps between frames
+// of a running animation (60 Hz until there are any), so a stall does not
+// lengthen it and a move to a slower display does within 16 frames. It is
+// given to the ui context
+// (ui.Context.FrameInterval), which steps a value that starts to move during
+// a late frame by no more than it.
 func (a *App) frameDT(now int64) float32 {
 	prev := a.lastStart
 	a.lastStart = now
-	if prev == 0 {
-		return 1.0 / 60
+	if a.interval == 0 {
+		a.interval = 1.0 / 60
 	}
 	d := float32(now-prev) / 1e9
-	if d > 0.1 {
-		return 1.0 / 60
+	running := prev != 0 && a.owedWhy&owedAnimating != 0
+	if running && d >= minInterval && d <= maxInterval {
+		a.steps[a.nSteps%len(a.steps)] = d
+		a.nSteps++
+		a.interval = d
+		for _, s := range a.steps[:min(a.nSteps, len(a.steps))] {
+			a.interval = min(a.interval, s)
+		}
+	}
+	if a.UI != nil {
+		a.UI.FrameInterval = a.interval
+	}
+	if !running || d > 0.1 {
+		return a.interval
 	}
 	return max(d, 0.0005)
 }
+
+// minInterval and maxInterval bound the display intervals frameDT learns
+// from: 240 Hz to 24 Hz. A step outside them is a hitch or a burst, not the
+// display's rate.
+const (
+	minInterval = 1.0 / 240
+	maxInterval = 1.0 / 24
+)
 
 // drawFrame draws one frame into the surface's next frame: BeginFrame, the
 // ui build (passes times, the last one is drawn), the draw list encode and

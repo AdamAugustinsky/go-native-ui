@@ -42,28 +42,29 @@ var components = map[string][]string{
 	"separator":   {"separator.go"},
 	"form":        {"form.go", "card.go", "text.go"},
 	"dialog":      {"dialog.go", "button.go", "text.go", "scrolledge.go", "glyph.go", "overlay.go"},
-	"tooltip":     {"tooltip.go"},
+	"tooltip":     {"tooltip.go", "overlay.go"},
 	"text":        {"text.go"},
 	"card":        {"card.go"},
 	"list":        {"list.go", "scrolledge.go", "glyph.go"},
 	"table":       {"table.go", "list.go", "scrolledge.go", "glyph.go"},
 	"outline":     {"outline.go", "list.go", "scrolledge.go", "glyph.go"},
-	"stepper":     {"stepper.go", "motion.go", "textfield.go", "searchfield.go"},
-	"progress":    {"progress.go", "motion.go"},
-	"spinner":     {"spinner.go", "motion.go"},
-	"disclosure":  {"disclosure.go", "motion.go", "button.go"},
+	"stepper":     {"stepper.go", "textfield.go", "searchfield.go"},
+	"progress":    {"progress.go"},
+	"spinner":     {"spinner.go"},
+	"disclosure":  {"disclosure.go", "button.go"},
 	"helpbutton":  {"helpbutton.go", "button.go"},
 	"link":        {"link.go", "text.go"},
 	"toggle":      {"toggle.go", "button.go"},
-	"tabs":        {"tabs.go", "glyph.go", "motion.go"},
-	"toolbar":     {"toolbar.go", "caption.go", "scrolledge.go", "glass.go", "tabs.go", "glyph.go", "motion.go", "button.go", "searchfield.go", "textfield.go", "popover.go", "overlay.go"},
-	"sidebar":     {"sidebar.go", "contextmenu.go", "glass.go", "glyph.go", "motion.go", "disclosure.go", "button.go", "searchfield.go", "textfield.go", "overlay.go"},
+	"tabs":        {"tabs.go", "glyph.go"},
+	"toolbar":     {"toolbar.go", "caption.go", "scrolledge.go", "glass.go", "tabs.go", "glyph.go", "button.go", "searchfield.go", "textfield.go", "popover.go", "overlay.go"},
+	"sidebar":     {"sidebar.go", "contextmenu.go", "glass.go", "glyph.go", "disclosure.go", "button.go", "searchfield.go", "textfield.go", "overlay.go", "tooltip.go"},
 	"pathbar":     {"pathbar.go", "glyph.go"},
 }
 
-// shared are the files every component needs: the Tint helpers and the
-// Strings.
-var shared = []string{"strings.go", "tint.go"}
+// shared are the files every component needs: the Tint helpers, the
+// Strings, and the state helpers (the hover and pressed fills and the eased
+// state changes of D107, with the motion they follow).
+var shared = []string{"strings.go", "tint.go", "motion.go"}
 
 func main() {
 	if len(os.Args) < 2 {

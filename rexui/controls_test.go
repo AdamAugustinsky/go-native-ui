@@ -9,6 +9,7 @@ import (
 	"gonativeui/rexui/mdview"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
 // pressAt moves the pointer to (x, y) and presses the left button, a frame
@@ -367,6 +368,19 @@ func TestHelpButtonAndToggleButton(t *testing.T) {
 	n := g.node(ui.RoleCheckbox, "Bold")
 	g.click(centre(n))
 	g.settle()
+	// under the pointer the toggle shows its hover (D107), between its tint
+	// and its pressed tint; its look at rest is checked with the pointer away
+	if hv := rexui.ToggleOnLook.FillHover.RGBA(g.k.Theme()); on && !accented() {
+		found := false
+		for _, q := range g.list.Quads {
+			found = found || q.Mode == gpu.ModeShape && q.Color[0] == hv
+		}
+		if !found {
+			t.Error("a toggle that is on shows no hover under the pointer")
+		}
+	}
+	g.in.MouseX, g.in.MouseY = -100, -100
+	g.settle()
 	if !on || !accented() || g.node(ui.RoleCheckbox, "Bold").State&ui.SemChecked == 0 {
 		t.Fatalf("after a click: on %v, in the accent %v, checked %v", on, accented(), g.node(ui.RoleCheckbox, "Bold").State&ui.SemChecked != 0)
 	}
@@ -375,6 +389,20 @@ func TestHelpButtonAndToggleButton(t *testing.T) {
 	if on || accented() {
 		t.Fatalf("Space with the focus: on %v, in the accent %v", on, accented())
 	}
+}
+
+// A link in a row too narrow for it is cut like any text (D105), and its
+// underline ends with it: on Linux the simulated user found it 7 px past.
+func TestACutLinksUnderlineEndsWithIt(t *testing.T) {
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		g.c.NextSize(ui.Px(40), ui.Children(1))
+		g.c.NextAxis(ui.AxisX)
+		g.c.Push(g.c.Box(0, "narrow"))
+		rexui.Link(g.k, "Learn more about this", rexui.LinkOpts{})
+		g.c.Pop()
+	}))
+	g.settle()
+	widgettest.AuditLayout(t, "a link in a narrow row", g.c)
 }
 
 func TestLinkReportsAndNeverOpens(t *testing.T) {

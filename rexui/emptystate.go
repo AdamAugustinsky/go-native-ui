@@ -81,7 +81,7 @@ func EmptyState(k *base.Kit, title string, o EmptyStateOpts) EmptyStateSignal {
 	c.NextFont(st.Font)
 	c.NextTextColor(rc.Title.RGBA(r))
 	c.NextAlign(ui.AlignCenter)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(key, 1), base.StrBytes(display))
+	c.BoxKeyed(ui.DrawText, ui.KeyN(key, 1), base.StrBytes(display))
 	if o.Message != "" {
 		ms := &r.Styles[theme.StyleBody]
 		c.NextSize(ui.Px(pt(sc, rc.MessageW)), ui.TextSize(0))

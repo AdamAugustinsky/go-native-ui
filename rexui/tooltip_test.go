@@ -84,7 +84,10 @@ func TestTooltipParentRecoveryRequestedFrames(t *testing.T) {
 						if !c.Animating() && delay == 0 {
 							return n
 						}
-						if n == 10 {
+						// 30: the tooltip's fade (rate 18, about 0.3 s) takes
+						// its frames from the first one after the delay (D103:
+						// it no longer absorbs the 0.5 s wait in one step).
+						if n == 30 {
 							t.Fatal("tooltip did not settle to zero requested frames")
 						}
 						if c.Animating() {

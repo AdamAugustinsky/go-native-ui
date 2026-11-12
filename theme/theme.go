@@ -84,6 +84,29 @@ type Theme struct {
 	// thickening AppKit gives labels (D101). For an app whose look is a web
 	// app's; AppKit-faithful themes leave it off.
 	Antialiased bool
+	// StrictAppKit restores AppKit's static controls (D103): components
+	// whose hover policy is the default (base.HoverAuto) show no hover,
+	// hover and press change at once both ways, and a recipe that departs
+	// from what AppKit draws for the sake of response or contrast draws
+	// AppKit's instead. Components that hover in AppKit too (toolbar and
+	// borderless buttons, menu items, scroll bars) still do.
+	StrictAppKit bool
+	// ExactColors says the theme means its colour values as they are: the
+	// contrast guard (D107) leaves them alone. Without it, resolving the
+	// theme moves a secondary label or placeholder that reads under 4.5:1,
+	// and a tertiary label or the off rim (ControlRim) under 3:1, on the
+	// surfaces they are used on (the window, panes, lists, fields, the
+	// raised surface, the sidebar, group boxes) toward Label until it
+	// passes. Roles the system supplies (SystemColors, not Own) are never
+	// moved; StrictAppKit turns the guard off too.
+	ExactColors bool
+	// RoleBasis are the roles the theme's own values were chosen with (nil:
+	// Measured). A role that follows a label (PaneButton, the rows' and
+	// controls' hover, ControlRim; D107) and still has its basis value
+	// while the theme's label does not is derived from the theme's label at
+	// resolve time, so an app that puts its palette into a theme's labels
+	// gets its icons and states in the same colours.
+	RoleBasis *[2]Colors
 	// Corners is the shape of rounded corners; zero is the platform's.
 	Corners CornerCurve
 
@@ -172,6 +195,8 @@ type Resolved struct {
 	OverlayScrollers bool
 	// Antialiased is Theme.Antialiased.
 	Antialiased bool
+	// StrictAppKit is Theme.StrictAppKit.
+	StrictAppKit bool
 	// Styles holds the text styles' fonts, indexed by TextStyle.
 	Styles [NumTextStyles]StyleFont
 	// Sizes holds the control sizes in pixels, indexed by Size.
@@ -291,7 +316,7 @@ func readableOn(c uint32, dark bool, bgs [3]uint32) uint32 {
 // only place a theme creates fonts and allocates.
 func (t *Theme) Resolve(ts TextSystem, scale float32, mode Mode) Resolved {
 	r := Resolved{
-		Name: t.Name, Scale: scale, Px: t.Metrics.scaled(scale), Motion: t.Motion,
+		Name: t.Name, Scale: scale, Px: t.Metrics.scaled(scale), Motion: t.Motion, StrictAppKit: t.StrictAppKit,
 		base: [2]Palette{t.Light, t.Dark}, pal: [2]Palette{t.Light, t.Dark}, followAccent: t.SystemAccent,
 	}
 	if t.NewChrome != nil {
@@ -319,6 +344,16 @@ func (t *Theme) resolveTokens(r *Resolved, ts TextSystem, scale float32) {
 	r.Continuous = t.Corners == CornersContinuous || t.Corners == CornersDefault && runtime.GOOS == "darwin"
 	if r.rolesBase[0] == (Colors{}) && r.rolesBase[1] == (Colors{}) {
 		r.rolesBase = Measured
+	}
+	basis := t.RoleBasis
+	if basis == nil {
+		basis = &Measured
+	}
+	for m := range r.rolesBase {
+		followLabels(&r.rolesBase[m], &basis[m])
+		if !t.ExactColors && !t.StrictAppKit {
+			guardContrast(&r.rolesBase[m], &Measured[m], t.SystemColors, &t.Own)
+		}
 	}
 	text := orDefault(t.Text, MacText)
 	for i := range r.Styles {
@@ -461,8 +496,11 @@ func (r *Resolved) applySystem() {
 		r.Settings = r.sys.Settings
 	}
 	r.Motion = r.motion
+	if r.StrictAppKit {
+		r.Motion = r.Motion.static()
+	}
 	if r.Settings.ReduceMotion {
-		r.Motion = r.motion.Reduced()
+		r.Motion = r.Motion.Reduced()
 	}
 	r.applyRoles()
 }

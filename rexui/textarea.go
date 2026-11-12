@@ -280,7 +280,7 @@ func textAreaPlaceholder(k *base.Kit, hint string, col Tint, disabled bool) {
 	c.NextSize(ui.TextSize(0), ui.Px(s.Line))
 	c.NextFont(s.Font)
 	c.NextTextColor(pc)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(c.ParentKey(), 2), base.StrBytes(hint))
+	c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(c.ParentKey(), 2), base.StrBytes(hint))
 }
 
 // settleDisabled drops what the hosted editor queued while the area is

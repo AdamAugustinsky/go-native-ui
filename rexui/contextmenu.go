@@ -84,7 +84,7 @@ func ContextMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item 
 	}
 	k.KeepPopup()
 	cm := contextMenu{k: k, chosen: -1, keyed: keyed}
-	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, ui.PlaceBelow, ui.HashString(owner, "contextmenu"))
+	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, 0, ui.PlaceBelow, ui.HashString(owner, "contextmenu"))
 	if cm.chosen >= 0 {
 		return cm.item, true
 	}
@@ -142,7 +142,7 @@ func MenuAt(k *base.Kit, id ui.ID, open bool, x, y float32, build func(items *[]
 	}
 	k.KeepPopup()
 	cm := contextMenu{k: k, chosen: -1}
-	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, ui.PlaceBelow, ui.HashString(owner, "menuat"))
+	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, 0, ui.PlaceBelow, ui.HashString(owner, "menuat"))
 	if cm.chosen >= 0 {
 		return cm.item, true, true
 	}
@@ -193,7 +193,7 @@ func DropdownMenu(k *base.Kit, id ui.ID, build func(items *[]ui.MenuItem)) (item
 	}
 	k.KeepPopup()
 	cm := contextMenu{k: k, chosen: -1, keyed: keyed}
-	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, ui.PlaceBelow, ui.HashString(owner, "dropdown"))
+	cm.panel(0, menuRows{items: k.MenuItems()}, pop.At, id, ui.PlaceBelow, ui.HashString(owner, "dropdown"))
 	if cm.chosen >= 0 {
 		return cm.item, true
 	}
@@ -283,9 +283,10 @@ func shortcutLabel(buf []byte, it *ui.MenuItem) []byte {
 	return menu.Shortcut{Key: key, Mods: it.Mods}.AppendLabel(buf[:0])
 }
 
-// panel builds the menu of items at nesting level, placed against anchor,
-// and the submenu open from it.
-func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place ui.Placement, okey ui.Key) {
+// panel builds the menu of items at nesting level, placed against anchor, or
+// against box on of this frame when it is not 0 (a button, a submenu's
+// item), and the submenu open from it.
+func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, on ui.ID, place ui.Placement, okey ui.Key) {
 	k := m.k
 	c, r := k.Context(), k.Theme()
 	pop := k.Popup()
@@ -361,21 +362,26 @@ func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place 
 	show := k.ShowMnemonics()
 
 	// the panel: the floating surface the popovers and dialogs share,
-	// fading in from its anchor's side
+	// fading in over the theme's Micro; in a window too short for it, its
+	// length is the room the usable area leaves and its items scroll
 	c.NextBG(theme.Over(r.Colors[theme.Raised], r.Colors[theme.Window]|0xFF))
 	surf := NextOverlaySurface(k, pt(sc, rc.Radius))
 	c.NextPadding(pad, pad, pad, pad)
 	c.NextAxis(ui.AxisY)
-	c.NextSize(ui.Px(w), ui.Children(1))
+	c.NextSize(ui.Px(w), ui.Children(0))
 	c.NextRole(ui.RoleMenu)
-	c.NextFlags(ui.DrawBackground | surf)
+	c.NextFlags(ui.DrawBackground | ui.ScrollY | ui.Clip | surf)
 	if items.model != nil {
 		c.NextSemName(items.model.Menus()[items.index].Title)
 	}
-	t, dx, dy := OverlayEnter(k, okey, place)
-	c.PushOpacity(t)
-	c.NextOffset(dx, dy)
-	os := c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
+	c.PushOpacity(menuEnter(k, okey))
+	c.NextOverlay(ui.OverlayOpts{Fit: true})
+	var os ui.OverlaySignal
+	if on != 0 {
+		os = c.BeginOverlayOn(okey, ui.OverlayPopup, on, place)
+	} else {
+		os = c.BeginOverlay(okey, ui.OverlayPopup, anchor, place)
+	}
 	if os.Dismissed {
 		if level == 0 {
 			m.close()
@@ -566,7 +572,7 @@ func (m *contextMenu) panel(level int, items menuRows, anchor [4]float32, place 
 		}
 		if subOpen {
 			c.Push(row)
-			m.panel(level+1, items.sub(i), c.Rect(row), ui.PlaceRight, subKey(okey, i))
+			m.panel(level+1, items.sub(i), c.Rect(row), row, ui.PlaceRight, subKey(okey, i))
 			c.Pop()
 		}
 	}
@@ -658,7 +664,7 @@ func DrawMenu(k *base.Kit, index int, anchor [4]float32, place ui.Placement) {
 		return
 	}
 	cm := contextMenu{k: k, chosen: -1}
-	cm.panel(0, menuRows{model: model, index: index}, anchor, place, ui.KeyN(base.PopupKeyBase, uint64(index+1)))
+	cm.panel(0, menuRows{model: model, index: index}, anchor, 0, place, ui.KeyN(base.PopupKeyBase, uint64(index+1)))
 }
 
 // menuRows adapts the two public menu models without copying their items.

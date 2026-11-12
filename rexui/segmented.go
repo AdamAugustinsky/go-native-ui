@@ -38,9 +38,11 @@ type SegmentedRecipe struct {
 	// window: labelColor at 12.8 % over the track (#CDCDCD, #4A4A4A
 	// measured), with the label in Label, as the others.
 	SelectedInactive Tint
-	// Label, LabelDisabled colour the other segments' labels; Pressed fills
-	// a pressed segment.
-	Label, LabelDisabled, Pressed Tint
+	// Label, LabelDisabled colour the other segments' labels; Hover fills a
+	// segment that is not chosen under the pointer (D107), Pressed a pressed
+	// one. The chosen segment does not hover: choosing it again does
+	// nothing.
+	Label, LabelDisabled, Hover, Pressed Tint
 	// Divider colours the dividers (tertiaryLabelColor over the track
 	// matches the measured #B4B4B4 / #606060), DividerW is their width and
 	// DividerH their height per size, in points.
@@ -59,7 +61,7 @@ var SegmentedLook = SegmentedRecipe{
 	Track: Of(theme.Fill2), TrackDisabled: Of(theme.FillDisabled),
 	Selected: OfAlpha(theme.Accent, 0.14, 0.24), SelectedDisabled: Of(theme.Fill2), SelectedLabel: Of(theme.Label),
 	SelectedInactive: OfAlpha(theme.Label, 0.128, 0.126),
-	Label:            Of(theme.Label), LabelDisabled: Of(theme.TextDisabled), Pressed: Of(theme.FillPressed),
+	Label:            Of(theme.Label), LabelDisabled: Of(theme.TextDisabled), Hover: Of(theme.Fill3), Pressed: Of(theme.FillPressed),
 	Divider: Of(theme.Label3), DividerW: 1,
 	DividerH: [theme.NumSizes]float32{theme.SizeRegular: 12, theme.SizeMini: 8, theme.SizeSmall: 10, theme.SizeLarge: 14, theme.SizeXLarge: 16},
 	Capsule:  true,
@@ -105,7 +107,7 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 	focused := false
 	dw, dh := pt(k.Scale(), rc.DividerW), pt(k.Scale(), rc.DividerH[size])
 	for i, opt := range options {
-		it := k.ChoiceItem(&ch, i, opt, base.HoverOff)
+		it := k.ChoiceItem(&ch, i, opt, base.HoverAuto)
 		if it.Ring > ring.Ring {
 			ring = it.Visual
 		}
@@ -120,8 +122,8 @@ func SegmentedControl(k *base.Kit, label string, sel *int, options []string, o S
 			fill, lc = rc.Selected.RGBA(r), rc.SelectedLabel.RGBA(r)
 		case disabled:
 			lc = rc.LabelDisabled.RGBA(r)
-		case it.Down > 0:
-			fill = theme.WithAlpha(rc.Pressed.RGBA(r), it.Down)
+		default:
+			fill = stateFill(0, rc.Hover.RGBA(r), rc.Pressed.RGBA(r), it.Visual)
 		}
 		flags := ui.DrawText
 		if fill&0xFF != 0 {

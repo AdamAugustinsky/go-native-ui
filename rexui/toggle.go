@@ -22,7 +22,8 @@ type ToggleOpts struct {
 var ToggleOnLook = ButtonRecipe{
 	Fill: OfAlpha(theme.Accent, quietTint, quietTintDark), Label: Of(theme.Label),
 	FillInactive: OfAlpha(theme.Label, 0.125, 0.124), LabelInactive: Of(theme.Label),
-	FillHover: None, FillPressed: OfAlpha(theme.Accent, quietTint*1.6, quietTintDark*1.4), LabelPressed: Of(theme.Label),
+	FillHover: OfAlpha(theme.Accent, quietTint*1.3, quietTintDark*1.2), FillPressed: OfAlpha(theme.Accent, quietTint*1.6, quietTintDark*1.4), LabelPressed: Of(theme.Label),
+	FillHoverInactive:   OfAlpha(theme.Label, 0.15, 0.15),
 	FillPressedInactive: Of(theme.FillPressed), LabelPressedInactive: Of(theme.Label),
 	FillDisabled: OfAlpha(theme.Accent, quietTint/2, quietTintDark/2), LabelDisabled: Of(theme.TextDisabled),
 	Rim: None, RimInactive: None, Highlight: None,
@@ -43,7 +44,7 @@ const quietTint, quietTintDark = 0.14, 0.24
 func ToggleButton(k *base.Kit, label string, on *bool, o ToggleOpts) base.Signal {
 	c, r := k.Context(), k.Theme()
 	s := &r.Sizes[o.Size%theme.NumSizes]
-	tg := k.ToggleBool(label, on, base.HoverOff)
+	tg := k.ToggleBool(label, on, base.HoverAuto)
 	rc := &ButtonRecipes[ButtonDefault]
 	if *on {
 		rc = &ToggleOnLook

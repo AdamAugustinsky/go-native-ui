@@ -171,11 +171,7 @@ func BeginPalette(k *base.Kit, label string, st *PaletteState, o PaletteOpts) (P
 	display, ident := ui.SplitLabel(label)
 	key := ui.HashString(ui.HashString(c.ParentKey(), "palette"), ident)
 	p.key = key
-	rate := r.Motion.Fade
-	if reduced(k) {
-		rate = theme.Instant
-	}
-	t := c.AnimateValueFrom(ui.KeyN(key, 9), 0, 1, rate)
+	t := overlayFade(k, ui.KeyN(key, 9), dialogEnter(k)) // a dialog's fade (D108)
 	w, h := c.Size()
 	W, H := float32(w), float32(h)
 	c.NextSize(ui.Pct(1), ui.Pct(1))
@@ -209,7 +205,7 @@ func BeginPalette(k *base.Kit, label string, st *PaletteState, o PaletteOpts) (P
 	c.NextPadding(pad, pad, pad, pad)
 	c.NextGap(k.Pt(rc.Gap))
 	c.NextBG(rc.Panel.RGBA(r) | 0xFF)
-	surf := NextOverlaySurface(k, k.Pt(rc.Radius)) // the floating surface, with the palette's radius
+	surf := NextSurface(k, k.Pt(rc.Radius), theme.LiftDialog) // the floating surface, a dialog's lift, with the palette's radius
 	c.NextRole(ui.RoleDialog)
 	c.NextSemName(display)
 	p.panel = c.BoxKeyed(base.Floating|ui.DrawBackground|surf|ui.Clickable, ui.KeyN(key, 2), nil)

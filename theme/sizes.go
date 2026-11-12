@@ -172,6 +172,10 @@ type Lines struct {
 	// pixel up to 3×, and 1 pt is a web app's border of 1 CSS pixel, 2 device
 	// pixels at 2×.
 	Hairline float32
+	// Rim is the rim of a control that is off (1; D107: an unchecked box,
+	// an empty track, theme.ControlRim). It resolves to whole pixels, at
+	// least 1.
+	Rim float32
 	// FocusOutset is how far the focus ring's outer edge lies outside the
 	// control (3), and FocusWidth the ring's visible width (3.5).
 	FocusOutset, FocusWidth float32
@@ -199,7 +203,7 @@ type Lines struct {
 
 // MacLines are AppKit's on macOS 27.2.
 var MacLines = Lines{
-	Hairline: 0.5, FocusOutset: 3, FocusWidth: 3.5,
+	Hairline: 0.5, Rim: 1, FocusOutset: 3, FocusWidth: 3.5,
 	RowH: 24, HeaderH: 28, Indent: 13,
 	MenuItemH: 24, MenuPadY: 5, MenuSeparatorH: 11,
 	Scroller: 17, ScrollerSmall: 15, ScrollerSmallLegacy: 13, ScrollerKnobInset: 3,
@@ -211,5 +215,6 @@ func (l Lines) scaled(k float32) Lines {
 		*p *= k
 	}
 	l.Hairline = max(1, float32(int(l.Hairline*k))) // whole pixels: 0.5 pt is 1 up to 3×
+	l.Rim = max(1, float32(int(l.Rim*k)))
 	return l
 }

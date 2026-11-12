@@ -71,11 +71,15 @@ type LabelOpts struct {
 	// points on the style's line: what is machine text (a path, a code to
 	// type in). MetaPt wins when both are set.
 	MonoPt float32
-	// Truncate lets a one-line label shrink in a row too narrow for it and
-	// end in "…", after the boxes that give way first (a BadgeTag beside
-	// it): a row's title. Without it the label keeps its width and its end
-	// fades out where the box cuts it.
+	// Truncate is what a one-line label does by default since D105 and
+	// D107: it shrinks in a row too narrow for it and ends in "…", after
+	// the boxes that give way first (a BadgeTag beside it). It is kept for
+	// the callers that set it.
 	Truncate bool
+	// Fade fades a one-line label's end where its box cuts it instead of
+	// ending it in "…": for text whose look is designed to run out (a long
+	// path in a breadcrumb), not for names and titles.
+	Fade bool
 }
 
 // MetaFont is Rex's metadata face at sizePt points: the UI face with
@@ -93,8 +97,9 @@ func (o *LabelOpts) labelColor(r *theme.Resolved) uint32 {
 }
 
 // Label builds text in a text style and colour. The label follows ui's rules
-// for box labels ("Name###id" shows Name); text too wide for its box fades
-// out at the end. Disabled regions draw it in disabledControlTextColor.
+// for box labels ("Name###id" shows Name); one line too wide for its box ends
+// in "…" (LabelOpts.Fade fades it instead). Disabled regions draw it in
+// disabledControlTextColor.
 //
 //	rexui.Label(k, "General", rexui.LabelOpts{Style: rexui.TextTitle3})
 //	rexui.Label(k, "Last opened today", rexui.LabelOpts{Color: rexui.Of(theme.Label2)})
@@ -106,10 +111,10 @@ func Label(k *base.Kit, s string, o LabelOpts) ui.ID {
 	if o.Wrap {
 		return c.Box(ui.DrawText|ui.WrapText, s)
 	}
-	if o.Truncate {
-		return c.Box(ui.DrawText|ui.EllipsisOverflowX, s)
+	if o.Fade {
+		return c.Box(ui.DrawText|ui.FadeOverflowX, s)
 	}
-	return c.Box(ui.DrawText|ui.FadeOverflowX, s)
+	return c.Box(ui.DrawText, s) // cut with "…" (D105)
 }
 
 // LabelBytes is Label for text built at run time (ui.Context.Fmt); the bytes
@@ -119,9 +124,9 @@ func LabelBytes(k *base.Kit, b []byte, o LabelOpts) ui.ID {
 	c := k.Context()
 	labelStyle(k, &o)
 	c.NextSemNameBytes(b)
-	flags := ui.DrawText | ui.FadeOverflowX
-	if o.Truncate && !o.Wrap {
-		flags = ui.DrawText | ui.EllipsisOverflowX
+	flags := ui.DrawText // cut with "…" (D105)
+	if o.Fade {
+		flags |= ui.FadeOverflowX
 	}
 	if o.Wrap {
 		flags = ui.DrawText | ui.WrapText

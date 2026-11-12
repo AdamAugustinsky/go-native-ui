@@ -33,7 +33,9 @@ var RadioLook = RadioRecipe{
 }
 
 // RadioGroup builds a group of radio buttons, one per option, that edits
-// *sel (the chosen option, -1 for none). The chosen button (or the first) is
+// *sel (the chosen option, -1 for none). The chosen button's dot fades in
+// over the theme's Micro duration (at once under strict AppKit and Reduce
+// Motion); a button not chosen has CheckboxLook's rim. The chosen button (or the first) is
 // the group's tab stop; the arrow keys move the choice and the focus
 // together. Changed is set in the frame the choice changed.
 //
@@ -61,7 +63,7 @@ func RadioGroup(k *base.Kit, label string, sel *int, options []string, o RadioOp
 	c.Push(gid)
 	focused := false
 	for i, opt := range options {
-		it := k.ChoiceItem(&ch, i, opt, base.HoverOff)
+		it := k.ChoiceItem(&ch, i, opt, base.HoverAuto)
 		fill, mark, lc := cb.Off.RGBA(r), cb.Mark.RGBA(r), cb.Label.RGBA(r)
 		switch {
 		case it.Disabled && it.On:
@@ -71,10 +73,13 @@ func RadioGroup(k *base.Kit, label string, sel *int, options []string, o RadioOp
 		case it.On && it.Inactive:
 			fill, mark = cb.OnInactive.RGBA(r), cb.MarkInactive.RGBA(r)
 		case it.On:
-			fill = mix(cb.On.RGBA(r), cb.OnPressed.RGBA(r), it.Down)
+			fill = stateFill(cb.On.RGBA(r), cb.OnHover.RGBA(r), cb.OnPressed.RGBA(r), it.Visual)
 		default:
-			fill = mix(fill, cb.OffPressed.RGBA(r), it.Down)
+			fill = stateFill(fill, cb.OffHover.RGBA(r), cb.OffPressed.RGBA(r), it.Visual)
 		}
+		ckey := ui.KeyN(it.Key, 1)
+		mark = theme.WithAlpha(mark, stateEase(k, ckey, it.On, r.Motion.Micro))
+		rim := cb.rim(k, it.On, it.Disabled)
 		c.NextAxis(ui.AxisX)
 		c.NextCross(ui.CrossCenter)
 		c.NextGap(s.CheckGap)
@@ -82,7 +87,12 @@ func RadioGroup(k *base.Kit, label string, sel *int, options []string, o RadioOp
 		c.NextSize(ui.Px(box), ui.Px(box))
 		c.NextBG(fill)
 		c.NextRadius(box / 2)
-		cid := c.BoxKeyed(ui.DrawBackground, ui.KeyN(it.Key, 1), nil)
+		cflags := ui.DrawBackground
+		if rim&0xFF != 0 {
+			c.NextBorder(rim, r.Lines.Rim)
+			cflags |= ui.DrawBorder
+		}
+		cid := c.BoxKeyed(cflags, ckey, nil)
 		if it.On {
 			c.Push(cid)
 			theme.At(c, theme.Snap((box-dot)/2), theme.Snap((box-dot)/2), dot, dot)

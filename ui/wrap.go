@@ -83,16 +83,20 @@ func (c *Context) fitWrap(b *box, w float32) {
 }
 
 // fitText runs as the X violation pass reaches a box's final width.
+// It also notes whether the text did not fit (Truncated).
 func (c *Context) fitText(b *box) {
+	b.wasCut = false
 	if b.txt.Len == 0 {
 		return
 	}
 	avail := b.size[0] - b.padSum(0)
 	if r := c.recOf(b); r != nil {
 		c.fitRich(b, r, avail)
+		b.wasCut = r.maxLines > 0 && c.richView(b, r).Truncated
 		return
 	}
 	if b.flags&WrapText == 0 {
+		b.wasCut = b.flags&DrawText != 0 && b.textW > avail+0.01
 		return
 	}
 	c.fitWrap(b, avail)

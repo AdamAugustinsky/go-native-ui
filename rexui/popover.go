@@ -156,56 +156,66 @@ func (rc *PopoverRecipe) half(d float32) float32 {
 	return float32(w)
 }
 
-// popoverSide is the side of the anchor a the popover is on: the preferred
-// one, or the other when the window has no room for need pixels there and
-// has them on the other side (the rule of ui's placement of an overlay, so
-// that the arrow is on the side the overlay chose).
-func popoverSide(want PopoverEdge, a [4]float32, need, W, H float32) PopoverEdge {
-	switch want {
-	case PopoverBelow:
-		if a[3]+need > H && a[1]-need >= 0 {
-			return PopoverAbove
-		}
-	case PopoverAbove:
-		if a[1]-need < 0 && a[3]+need <= H {
-			return PopoverBelow
-		}
-	case PopoverRight:
-		if a[2]+need > W && a[0]-need >= 0 {
-			return PopoverLeft
-		}
-	case PopoverLeft:
-		if a[0]-need < 0 && a[2]+need <= W {
-			return PopoverRight
-		}
-	}
-	return want
-}
-
 // BeginPopover opens a popover on the side o.Edge of anchor (a rectangle in
 // window pixels, such as ui.Context.Rect of the component that opens it), with
 // an arrow pointing at the anchor's centre, and makes its body the parent
 // of what is built next, until EndPopover. It is an overlay: it draws above
-// the window, is placed against the anchor and kept inside the window (the
-// arrow still points at the anchor), moves the keyboard focus into it when it
-// opens and gives it back when the app stops building it.
+// the window, is centred on the anchor, kept in the window's usable area by
+// ui's positioner (flipped to the other side when its own has no room,
+// shifted along the anchor, its length bounded to the room with its content
+// scrolling: ui.OverlayOpts.Fit) while the arrow still points at the anchor,
+// moves the keyboard focus into it when it opens and gives it back when the
+// app stops building it. Against a box built in this frame, BeginPopoverOn
+// places it where that box is now, not where it was in the last frame.
 //
 // The app owns whether it is open: it builds the popover while it is, and
 // stops when the signal says Dismissed (see PopoverBehavior for what closes
 // each kind and what becomes of the press).
 //
-//	if rexui.Button(k, "Info", rexui.ButtonOpts{}).Clicked { v.open = !v.open }
+//	b := rexui.Button(k, "Info", rexui.ButtonOpts{})
+//	if b.Clicked { v.open = !v.open }
 //	if v.open {
-//		p := rexui.BeginPopover(k, "info", c.RectOf(infoKey), rexui.PopoverOpts{})
+//		p := rexui.BeginPopoverOn(k, "info", b.ID, rexui.PopoverOpts{})
 //		rexui.Label(k, "Details", rexui.LabelOpts{Style: rexui.TextHeadline})
 //		rexui.EndPopover(k, &p)
 //		v.open = !p.Dismissed
 //	}
 //
-// The popover fades in from its anchor's side over OverlayLook.Enter (OverlayEnter;
-// a fade without travel under Reduce Motion), then draws no frames while
-// idle; it goes at once when the app stops building it.
+// The popover fades in from its anchor's side over the theme's Short
+// duration (OverlayEnter; at once under Reduce Motion and strict AppKit),
+// then draws no frames while idle; it goes at once when the app stops
+// building it.
 func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) Popover {
+	return beginPopover(k, label, anchor, 0, o)
+}
+
+// BeginPopoverOn is BeginPopover against the box anchor, built before it in
+// this frame (the button that opens it): the popover is placed where layout
+// puts that box in this frame (ui.Context.BeginOverlayOn), so it never lags a
+// frame behind an anchor that moves, as one in a list being scrolled.
+func BeginPopoverOn(k *base.Kit, label string, anchor ui.ID, o PopoverOpts) Popover {
+	return beginPopover(k, label, k.Context().Rect(anchor), anchor, o)
+}
+
+// popoverPlace is the placement of a popover on edge e.
+func popoverPlace(e PopoverEdge) ui.Placement {
+	switch e {
+	case PopoverAbove:
+		return ui.PlaceAbove
+	case PopoverRight:
+		return ui.PlaceRight
+	case PopoverLeft:
+		return ui.PlaceLeft
+	}
+	return ui.PlaceBelow
+}
+
+// popoverFlip is the edge across the anchor from e.
+func popoverFlip(e PopoverEdge) PopoverEdge { return e ^ 1 }
+
+// beginPopover is BeginPopover against rect, or against box on of this frame
+// when it is not 0 (rect is then its last frame's rectangle).
+func beginPopover(k *base.Kit, label string, rect [4]float32, on ui.ID, o PopoverOpts) Popover {
 	c, r := k.Context(), k.Theme()
 	rc := &PopoverLook
 	sc := k.Scale()
@@ -226,79 +236,9 @@ func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) P
 		arrowRoom, radius = pt(sc, rc.Offset), pt(sc, OverlayLook.Radius)
 	}
 	hair := r.Lines.Hairline
-	W, H := c.Size()
 
-	// the previous frame's body says which side it is on and how tall it is
-	bodyKey := ui.KeyN(okey, 1)
-	var prev [4]float32
-	if c.OverlayOpen(okey) {
-		prev = c.RectOf(bodyKey)
-	}
-	bodyH := max(prev[3]-prev[1], 0)
-	need := bodyH + arrowRoom
-	if o.Edge == PopoverRight || o.Edge == PopoverLeft {
-		need = surfW + arrowRoom
-	}
-	edge := popoverSide(o.Edge, anchor, need, float32(W), float32(H))
-	vertical := edge == PopoverBelow || edge == PopoverAbove // the arrow is on a horizontal edge of the body
-	wrapW, wrapH := surfW, bodyH
-	if !vertical {
-		wrapW = surfW + arrowRoom
-	} else {
-		wrapH = bodyH + arrowRoom
-	}
-	cx, cy := (anchor[0]+anchor[2])/2, (anchor[1]+anchor[3])/2
-
-	// the anchor the overlay is placed against: centred on the anchor's
-	// centre, so that the arrow can be in the middle of the body's edge
-	place := ui.PlaceBelow
-	a := anchor
-	switch edge {
-	case PopoverBelow, PopoverAbove:
-		a[0], a[2] = cx-wrapW/2, cx+wrapW/2
-		if edge == PopoverAbove {
-			place = ui.PlaceAbove
-		}
-	default:
-		a[1], a[3] = cy-wrapH/2, cy+wrapH/2
-		place = ui.PlaceRight
-		if edge == PopoverLeft {
-			place = ui.PlaceLeft
-		}
-	}
-
-	// where the body is: the overlay's origin once placed and kept inside the window
-	var along, bodyLen float32 // the arrow's offset along the body's edge
-	if vertical {
-		x0 := max(min(a[0], float32(W)-wrapW), 0)
-		along, bodyLen = cx-x0, surfW
-	} else {
-		y0 := max(min(a[1], float32(H)-wrapH), 0)
-		along, bodyLen = cy-y0, bodyH
-	}
-	inset := min(pt(sc, rc.ArrowInset), bodyLen/2)
-	along = max(min(along, bodyLen-inset), inset)
-
-	pad := pt(sc, rc.Pad)
-	if o.NoPad {
-		pad = 0
-	}
-	// the wrapper: transparent, with the arrow's room on the anchor's side
-	var pl, pt_, pr, pb float32
-	switch edge {
-	case PopoverBelow:
-		pt_ = arrowRoom
-	case PopoverAbove:
-		pb = arrowRoom
-	case PopoverRight:
-		pl = arrowRoom
-	case PopoverLeft:
-		pr = arrowRoom
-	}
-	c.NextPadding(pl, pt_, pr, pb)
-	c.NextSize(ui.Px(wrapW), ui.Children(1))
-	c.NextRole(ui.RoleDialog)
-	c.NextSemName(display)
+	// the overlay: centred on the anchor, the arrow's room from it, kept in
+	// the usable area by ui (flip, shift, a bounded length)
 	dismiss := ui.DismissTransient
 	switch o.Behavior {
 	case PopoverSemitransient:
@@ -306,10 +246,20 @@ func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) P
 	case PopoverApplicationDefined:
 		dismiss = ui.DismissApplication
 	}
-	c.NextOverlay(ui.OverlayOpts{Dismiss: dismiss})
-	t, dx, dy := OverlayEnter(k, okey, place)
-	c.PushOpacity(t)
-	os := c.BeginOverlay(okey, ui.OverlayPopup, a, place)
+	c.NextOverlay(ui.OverlayOpts{Dismiss: dismiss, Align: ui.OverlayCenter, Gap: arrowRoom, Fit: true})
+	c.NextSize(ui.Px(surfW), ui.Children(0))
+	c.NextRole(ui.RoleDialog)
+	c.NextSemName(display)
+	var os ui.OverlaySignal
+	if on != 0 {
+		os = c.BeginOverlayOn(okey, ui.OverlayPopup, on, popoverPlace(o.Edge))
+	} else {
+		os = c.BeginOverlay(okey, ui.OverlayPopup, rect, popoverPlace(o.Edge))
+	}
+	edge := o.Edge
+	if os.Flipped {
+		edge = popoverFlip(edge)
+	}
 	pop := Popover{PopoverSignal: PopoverSignal{Edge: edge}}
 	switch o.Behavior {
 	case PopoverTransient:
@@ -317,50 +267,103 @@ func BeginPopover(k *base.Kit, label string, anchor [4]float32, o PopoverOpts) P
 	case PopoverSemitransient:
 		pop.Dismissed = os.Dismissed
 	}
-	if prev == ([4]float32{}) { // a second frame puts it, and its arrow, where the window leaves room
-		c.RequestFrame()
-	}
 
+	t, dx, dy := OverlayEnter(k, okey, popoverPlace(edge))
+	c.PushOpacity(t)
 	fill := rc.fill(r)
-	flags := ui.DrawBackground | ui.DrawBorder
+	flags := ui.DrawBackground
 	if o.Arrow {
-		c.NextBorder(theme.Over(rc.Edge.RGBA(r), fill), hair) // opaque: the ring is a shade of the fill
-		c.NextRadius(radius)
-		if sa, sb := OverlayLook.shadows(k); sa.Sigma > 0 {
-			c.NextShadows(sa, sb)
-			flags |= ui.DrawShadow
-		}
+		flags |= nextArrowSurface(k, theme.Over(rc.Edge.RGBA(r), fill), hair, radius) // opaque: the ring is a shade of the fill
 	} else {
 		fill = rc.Fill.RGBA(r) | 0xFF
-		flags = ui.DrawBackground | NextOverlaySurface(k, radius)
+		flags |= NextOverlaySurface(k, radius)
 	}
 	c.NextBG(fill)
+	pad := pt(sc, rc.Pad)
+	if o.NoPad {
+		pad = 0
+	}
 	c.NextPad(pad)
-	c.NextSize(ui.Px(surfW), ui.Children(1))
+	c.NextSize(ui.Pct(1), ui.Children(0))
 	c.NextOffset(dx, dy)
 	c.NextAuditExempt(ui.AuditOverflow.Mask()) // the arrow lies outside the body
-	pop.ID = c.BoxKeyed(flags, bodyKey, nil)
+	pop.ID = c.BoxKeyed(flags, ui.KeyN(okey, 1), nil)
 	c.Push(pop.ID)
-	// the arrow is built first, floating in the body's parent's room: it is
-	// positioned in the wrapper's coordinates through the body's own, so it
-	// belongs to the body and is drawn over its edge
 	if o.Arrow {
-		popArrow(k, bodyKey, edge, along, arrowRoom, fill, hair)
+		popoverArrow(k, okey, rect, on, os.Rect, edge, arrowRoom, surfW, fill, hair)
 	}
 	return pop
+}
+
+// popoverArrow builds the arrow of the popover okey on edge, from the body's
+// rectangle in the last frame (prev, the overlay's: zero in the frame it
+// opens) and where its anchor was then: the anchor's centre stands as far
+// along the body's edge as it did, so the arrow is exact when the popover
+// moves with its anchor (BeginPopoverOn moves both in the same frame), and
+// one frame behind only when ui shifted or flipped it anew; a frame is asked
+// for then. In the frame it opens, the arrow is in the middle of the edge
+// (where the centred overlay puts the anchor unless the window's edge
+// shifts it), and one more frame aims it.
+func popoverArrow(k *base.Kit, okey ui.Key, rect [4]float32, on ui.ID, prev [4]float32, edge PopoverEdge, room, surfW float32, fill uint32, hair float32) {
+	c := k.Context()
+	rc := &PopoverLook
+	vertical := edge == PopoverBelow || edge == PopoverAbove // the arrow is on a horizontal edge of the body
+	ax := 0
+	if !vertical {
+		ax = 1
+	}
+	// the anchor's centre as the last frame placed the popover against it:
+	// a box's last rectangle, or the rectangle passed then (kept here)
+	cur := (rect[ax] + rect[ax+2]) / 2
+	last := c.KeepValue(ui.KeyN(okey, 2), cur, cur)
+	if on != 0 {
+		last = cur // rect is the box's last rectangle already
+	} else if last != cur {
+		c.RequestFrame() // the anchor moved: aim again from where this frame puts it
+	}
+	bw, bh := prev[2]-prev[0], prev[3]-prev[1]
+	var along float32
+	if bw <= 0 || bh <= 0 { // the frame it opens
+		c.RequestFrame()
+		if edge != PopoverBelow {
+			return // it hangs off an edge whose place is not known yet
+		}
+		bw, along = surfW, surfW/2
+	} else {
+		along = last - prev[ax]
+	}
+	bodyLen := bw
+	if !vertical {
+		bodyLen = bh
+	}
+	inset := min(pt(k.Scale(), rc.ArrowInset), bodyLen/2)
+	along = max(min(along, bodyLen-inset), inset)
+	popArrow(k, ui.KeyN(okey, 1), edge, along, room, fill, hair, bw, bh)
+}
+
+// nextArrowSurface edges and lifts the body of a popover with an arrow
+// (NSPopover's look): an opaque ring of edge, radius, and the menus' lift, or
+// under strict AppKit the shadows Rex drew before D108.
+func nextArrowSurface(k *base.Kit, edge uint32, hair, radius float32) ui.Flags {
+	c := k.Context()
+	c.NextBorder(edge, hair)
+	c.NextRadius(radius)
+	flags := ui.DrawBorder
+	sa, sb := surfaceShadows(k, OverlayLook.Lift)
+	if sa.Sigma > 0 || sb.Sigma > 0 {
+		c.NextShadows(sa, sb)
+		flags |= ui.DrawShadow
+	}
+	return flags
 }
 
 // popArrow builds the arrow of the popover whose body (the current parent)
 // has the key key: rows (columns, for a side edge) one pixel thick from the
 // tip, in fill, with the arrow's centre along from the body's start along
-// its edge. The rows run on into the body by a hairline, over its ring.
-func popArrow(k *base.Kit, key ui.Key, edge PopoverEdge, along, room float32, fill uint32, hair float32) {
+// its edge; bw and bh are the body's size. The rows run on into the body by
+// a hairline, over its ring.
+func popArrow(k *base.Kit, key ui.Key, edge PopoverEdge, along, room float32, fill uint32, hair, bw, bh float32) {
 	c := k.Context()
-	br := c.RectOf(key) // the body as the previous frame laid it out
-	bw, bh := br[2]-br[0], br[3]-br[1]
-	if (edge == PopoverAbove && bh <= 0) || (edge == PopoverLeft && bw <= 0) {
-		return // the arrow hangs off the body's far edge: from the next frame
-	}
 	rc := &PopoverLook
 	sc := k.Scale()
 	gap := pt(sc, rc.Gap)

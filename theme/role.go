@@ -280,6 +280,25 @@ const (
 	// pane (T3 Code's white row) sets it.
 	RowSelectedRing
 
+	// The states of controls (D107): what a control shows under the pointer,
+	// and the edge of a control that is off.
+
+	// FillHover is a neutral control's fill under the pointer where its rest
+	// fill is already Fill1 (an unchecked box, an empty switch track): the
+	// next step up the fill scale, short of FillPressed (the label's colour
+	// at 13 %). A push button's hover is Fill1 over its Fill2.
+	FillHover
+	// AccentHover is an accent control under the pointer: half of
+	// AccentPressed's step from Accent (derived from Accent, as
+	// AccentPressed is).
+	AccentHover
+	// ControlRim is the one-point rim of a control that is off: an unchecked
+	// checkbox, a radio button not chosen, an empty switch or slider track.
+	// It reads at 3:1 or better on the surfaces controls sit on (the
+	// label's colour at 43 % in light, 36 % in dark). Strict AppKit themes
+	// draw none (AppKit's off boxes have no border).
+	ControlRim
+
 	// NumRoles is the number of roles.
 	NumRoles
 )
@@ -402,6 +421,7 @@ var roleNames = [NumRoles]string{
 	"ControlText", "Knob", "FieldOutline", "ToolbarSymbolInactive", "SelectedRowTextInactive", "SidebarDetail", "SidebarSearchFill", "SidebarSearchFillInactive",
 	"PaneButton", "PaneButtonHover", "PaneButtonChip",
 	"RowHover", "RowPressed", "RowSelected", "RowSelectedInactive", "RowSelectedRing",
+	"FillHover", "AccentHover", "ControlRim",
 }
 
 // Colors holds a colour per role, 0xRRGGBBAA, indexed by Role.
@@ -454,6 +474,7 @@ var Measured = [2]Colors{
 		SidebarSearchFill: 0xEAEAEAFF, SidebarSearchFillInactive: 0xE5E5E5FF,
 		PaneButton: 0x0000007F, PaneButtonHover: 0x000000D8, PaneButtonChip: 0x000000FF,
 		RowHover: 0x0000000D, RowPressed: 0x00000017, RowSelected: 0x007AFF24, RowSelectedInactive: 0x0000000F,
+		FillHover: 0x00000021, AccentHover: 0x0074F2FF, ControlRim: 0x0000006D,
 	},
 	{
 		Window: 0x1E1E1EFF, UnderPage: 0x282828FF, ControlBackground: 0x1E1E1EFF, TextBackground: 0x1E1E1EFF,
@@ -482,6 +503,7 @@ var Measured = [2]Colors{
 		SidebarSearchFill: 0x4E4E4EFF, SidebarSearchFillInactive: 0x464646FF,
 		PaneButton: 0xFFFFFF8C, PaneButtonHover: 0xFFFFFFD8, PaneButtonChip: 0xFFFFFFFF,
 		RowHover: 0xFFFFFF0D, RowPressed: 0xFFFFFF17, RowSelected: 0x007AFF3D, RowSelectedInactive: 0xFFFFFF0F,
+		FillHover: 0xFFFFFF21, AccentHover: 0x0D81FFFF, ControlRim: 0xFFFFFF5C,
 	},
 }
 
@@ -495,15 +517,16 @@ const defaultAccent = 0x007AFFFF
 var rowSelectedAlpha = [2]float32{0.14, 0.24}
 
 // derive sets the roles that follow others in mode m (0 light, 1 dark):
-// AccentPressed and SidebarSel from Accent, SelectionDivider from Selection.
+// AccentPressed, AccentHover and SidebarSel from Accent, SelectionDivider
+// from Selection.
 // sidebarSel is the measured SidebarSel, kept while the accent is the blue it
 // was measured with.
 func derive(c *Colors, m int, sidebarSel uint32) {
 	acc := c[Accent] | 0xFF
 	if m == 0 {
-		c[AccentPressed] = Over(0x0000001A, acc)
+		c[AccentPressed], c[AccentHover] = Over(0x0000001A, acc), Over(0x0000000D, acc)
 	} else {
-		c[AccentPressed] = Over(0xFFFFFF1A, acc)
+		c[AccentPressed], c[AccentHover] = Over(0xFFFFFF1A, acc), Over(0xFFFFFF0D, acc)
 	}
 	c[SelectionDivider] = Over(0xFFFFFF1A, c[Selection]|0xFF)
 	if acc == defaultAccent {

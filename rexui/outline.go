@@ -12,8 +12,10 @@ type OutlineOpts struct {
 	Style ListStyle
 	// Striped alternates the rows' background.
 	Striped bool
-	// Hover fills the row under the pointer (ListOpts.Hover).
-	Hover bool
+	// Hover and NoHover are ListOpts': the row under the pointer has a
+	// quiet fill unless the theme is strict AppKit (Hover: even then;
+	// NoHover: never).
+	Hover, NoHover bool
 	// Glyphs are the disclosures (AddListGlyphs; zero: the standard
 	// chevrons).
 	Glyphs ListGlyphs
@@ -70,8 +72,9 @@ type Outline struct {
 // and a click on the disclosure.
 func BeginOutline(k *base.Kit, label string, st *base.OutlineState, t *base.Tree, o OutlineOpts) Outline {
 	s := o.Style % NumListStyles
-	return Outline{Outline: k.BeginOutline(label, st, t, listOpts(k, ListOpts{Style: o.Style, Striped: o.Striped, Hover: o.Hover}, false)),
-		rowLook: rowLook{style: s, striped: o.Striped}, glyphs: o.Glyphs.orStandard()}
+	bo := listOpts(k, ListOpts{Style: o.Style, Striped: o.Striped, Hover: o.Hover, NoHover: o.NoHover}, false)
+	return Outline{Outline: k.BeginOutline(label, st, t, bo),
+		rowLook: rowLook{style: s, striped: o.Striped, hover: bo.Hover}, glyphs: o.Glyphs.orStandard()}
 }
 
 // Row starts display row r: the row in the list look, its indentation, its
@@ -140,7 +143,7 @@ func (ol *Outline) TextBytes(b []byte) {
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.NextFont(k.Theme().Styles[theme.StyleBody].Font)
 	c.NextTextColor(ol.TextColor())
-	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(c.ParentKey(), 1), b)
+	c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 1), b)
 }
 
 // EndOutline ends the outline: the stripes below the rows, the rows, the

@@ -180,8 +180,9 @@ type List struct {
 
 // ListOpts are the options of a list.
 type ListOpts struct {
-	// Hover makes the row under the pointer report RowState.Hover (HoverOn).
-	// macOS tables and lists do not react to hover: the default is off.
+	// Hover makes the row under the pointer report RowState.Hover when it
+	// hovers (Kit.Hovers): by default (HoverAuto) unless the theme is strict
+	// AppKit, whose tables and lists do not react to hover (D103).
 	Hover Hover
 	// Pad is the room inside the list's box around its rows, in points: at
 	// the left and right (Pad[0]) and above the first row and below the last
@@ -232,7 +233,7 @@ func (k *Kit) beginList(label string, st *ListState, rows int, table bool, o Lis
 		rowH = theme.Snap(k.Pt(pt))
 	}
 	l := List{k: k, st: st, Rows: rows, rowH: rowH, hover: -1, key: okey, table: table, axes: ScrollVertical, off: k.Disabled(),
-		hoverOn: o.Hover == HoverOn}
+		hoverOn: k.Hovers(o.Hover)}
 
 	k.ApplySize(ui.Pct(1), ui.Pct(1))
 	skey := ui.KeyN(okey, 1)

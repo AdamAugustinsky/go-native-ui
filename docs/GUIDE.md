@@ -224,6 +224,24 @@ points (`r.Window.Toolbars`) and the app's own constants, times the scale, and
   goes wrong as soon as `w` is not the size the box really takes; the layout
   audit (`widgettest.AuditLayout`) reports an icon off its button's centre,
   layered or not, and anything outside its parent.
+- **Text that does not fit is cut, with "…".** A line of text in a box
+  narrower than it ends in "…" (the font's ellipsis, cut between graphemes),
+  and in a row or column too small for its children the text gives way
+  before boxes of a fixed size: a title beside an avatar and a badge needs no
+  flag to stay off them. The other cuts are one call before the box:
+  `c.NextTextCut(ui.CutMiddle)` for a file name (it keeps the extension),
+  `ui.CutHead` for a path, `ui.CutFade` for a strip that scrolls,
+  `ui.CutClip`, and `ui.CutNone` for text meant to run past its box. A
+  tooltip that shows the whole text only when it was cut asks
+  `c.Truncated(id)`.
+- **Menus, popovers and tooltips** open against their anchor and stay in the
+  window's usable area on their own: 8 pt from its edges, below the window's
+  buttons and any band the app gives (`c.SetOverlayInsets`), on the other
+  side of the anchor when theirs has no room. `c.BeginOverlayOn(key, kind,
+  buttonID, ui.PlaceBelow)` places one against the button as it is laid out
+  in this frame; `ui.OverlayOpts` sets the alignment along the anchor, the
+  gap, and `Fit` to bound its height to the room (its list then scrolls).
+  Do not compute a popup's place from the window's size.
 - **The menu bar.** Where the system draws none (Windows, Linux) the app's own
   is the window's first strip and the panes lie below it. `Kit.MenuBar` builds
   nothing on macOS.

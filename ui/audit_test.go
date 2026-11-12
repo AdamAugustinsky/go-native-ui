@@ -300,9 +300,9 @@ func TestAuditColumnsAfterPlainToRich(t *testing.T) {
 // A cell and its header narrower than their text, a right-aligned Size
 // column of 20 px for 32 and 40 px of text: what the renderer cuts at the
 // box (ellipsis, fade, or an ancestor's Clip) is not ink outside it; text
-// that draws past its box, into the next column, is.
+// that draws past its box (CutNone), into the next column, is.
 func TestAuditColumnsNarrow(t *testing.T) {
-	build := func(textFlags Flags, clipCells bool) func(c *Context) {
+	build := func(textFlags Flags, cut TextCut, clipCells bool) func(c *Context) {
 		return func(c *Context) {
 			var cf Flags
 			if clipCells {
@@ -314,6 +314,7 @@ func TestAuditColumnsNarrow(t *testing.T) {
 				c.Open(cf, "cell"+s)
 				c.NextSize(Pct(1), Pct(1))
 				c.NextAlign(AlignRight)
+				c.NextTextCut(cut)
 				c.Box(DrawText|textFlags, s)
 				c.Close()
 			}
@@ -339,17 +340,19 @@ func TestAuditColumnsNarrow(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		flags Flags
+		cut   TextCut
 		clip  bool
 		want  int
 	}{
-		{"ellipsis", EllipsisOverflowX, false, 0},
-		{"fade", FadeOverflowX, false, 0},
-		{"clipped cell", 0, true, 0},
-		{"clipped cell and ellipsis", EllipsisOverflowX, true, 0},
-		{"spills into the next column", 0, false, 1},
+		{"ellipsis", EllipsisOverflowX, CutTail, false, 0},
+		{"fade", FadeOverflowX, CutTail, false, 0},
+		{"the default cut", 0, CutTail, false, 0},
+		{"clipped cell", 0, CutNone, true, 0},
+		{"clipped cell and ellipsis", EllipsisOverflowX, CutTail, true, 0},
+		{"spills into the next column", 0, CutNone, false, 1},
 	} {
 		h := newHarness(t, 800, 600)
-		m, fs := h.audit(build(tc.flags, tc.clip))
+		m, fs := h.audit(build(tc.flags, tc.cut, tc.clip))
 		if len(m[AuditColumn]) != tc.want {
 			t.Errorf("%s: column findings %v, want %d", tc.name, fs, tc.want)
 		}
@@ -516,12 +519,16 @@ func TestAuditCoveredWrappedAndRich(t *testing.T) {
 	}
 }
 
-// Text that overflows its box with FadeOverflowX or EllipsisOverflowX is cut
-// at the box, as emitText cuts it: a pane beside the box hides nothing.
+// Text that overflows its box is cut at the box, as emitText cuts it (the
+// default ellipsis, FadeOverflowX, EllipsisOverflowX): a pane beside the box
+// hides nothing. Only CutNone draws it past the box.
 func TestAuditCoveredFadedText(t *testing.T) {
 	label := func(fade Flags) func(c *Context) {
 		return func(c *Context) {
 			c.NextSize(Px(40), Px(20)) // 27 characters: 216 px of text
+			if fade == 0 {
+				c.NextTextCut(CutNone)
+			}
 			c.Box(DrawText|fade, "a long label that overflows")
 		}
 	}
@@ -530,6 +537,12 @@ func TestAuditCoveredFadedText(t *testing.T) {
 	}
 	if fs := coveredBy(t, 60, 0, 40, 20, label(EllipsisOverflowX)); len(fs) != 0 {
 		t.Errorf("truncated text cut before the pane: %v", fs)
+	}
+	if fs := coveredBy(t, 60, 0, 40, 20, func(c *Context) {
+		c.NextSize(Px(40), Px(20))
+		c.Box(DrawText, "a long label that overflows")
+	}); len(fs) != 0 {
+		t.Errorf("text cut by default before the pane: %v", fs)
 	}
 	if fs := coveredBy(t, 60, 0, 40, 20, label(0)); len(fs) != 1 {
 		t.Errorf("text drawn past its box, under the pane: %v", fs)

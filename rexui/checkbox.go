@@ -27,11 +27,18 @@ type CheckboxOpts struct {
 // at regular, small and large, as macOS 27.2 draws them).
 type CheckboxRecipe struct {
 	// Off, OffPressed and OffDisabled fill an unchecked box: systemFill,
-	// #00000030 measured pressed (FillPressed), tertiarySystemFill disabled.
-	Off, OffPressed, OffDisabled Tint
+	// #00000030 measured pressed (FillPressed), tertiarySystemFill disabled;
+	// OffHover under the pointer (FillHover, D107).
+	Off, OffHover, OffPressed, OffDisabled Tint
 	// On, OnPressed and OnDisabled fill a checked or mixed box: the accent,
-	// darker pressed, and secondarySystemFill disabled.
-	On, OnPressed, OnDisabled Tint
+	// darker pressed, and secondarySystemFill disabled; OnHover under the
+	// pointer (AccentHover).
+	On, OnHover, OnPressed, OnDisabled Tint
+	// Rim is the one-point rim inside an unchecked box's edge, enabled or
+	// not (ControlRim: 3:1 on the surface, D107). A theme that is strict
+	// AppKit draws none: AppKit's box is borderless. RimDisabled is the rim
+	// of a disabled box (quaternaryLabelColor: the box stays findable).
+	Rim, RimDisabled Tint
 	// OnInactive and MarkInactive replace On and Mark in a window that is
 	// not the key window: AppKit greys the checked box (labelColor at 14 %,
 	// #DBDBDB over white and #3E3E3E over #1E1E1E measured) and draws the
@@ -48,12 +55,25 @@ type CheckboxRecipe struct {
 
 // CheckboxLook is the checkboxes' recipe.
 var CheckboxLook = CheckboxRecipe{
-	Off: Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
-	On: Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: Of(theme.Fill2),
+	Off: Of(theme.Fill1), OffHover: Of(theme.FillHover), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
+	On: Of(theme.Accent), OnHover: Of(theme.AccentHover), OnPressed: Of(theme.AccentPressed), OnDisabled: Of(theme.Fill2),
+	Rim: Of(theme.ControlRim), RimDisabled: Of(theme.Label4),
 	Mark: Of(theme.OnAccent), MarkDisabled: Of(theme.Label3),
 	OnInactive: OfAlpha(theme.Label, 0.141, 0.142), MarkInactive: Of(theme.Label),
 	Label: Of(theme.ControlText), LabelDisabled: Of(theme.TextDisabled),
 	DashW: 7, DashH: 1.75,
+}
+
+// rim is the rim of a box that is on or off and disabled or not: none on,
+// and none under strict AppKit.
+func (rc *CheckboxRecipe) rim(k *base.Kit, on, disabled bool) uint32 {
+	switch {
+	case on || strict(k):
+		return 0
+	case disabled:
+		return rc.RimDisabled.RGBA(k.Theme())
+	}
+	return rc.Rim.RGBA(k.Theme())
 }
 
 // Checkbox builds a checkbox that edits *v: a box and its label, which both
@@ -72,13 +92,14 @@ func Checkbox(k *base.Kit, label string, v *bool, o CheckboxOpts) base.Signal {
 }
 
 // CheckboxTri builds a tri-state checkbox that edits *st; clicking a mixed
-// box checks it.
+// box checks it. The mark fades in over the theme's Micro duration when the
+// user checks it (at once under strict AppKit and Reduce Motion).
 func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts) base.Signal {
 	c, r := k.Context(), k.Theme()
 	rc := &CheckboxLook
 	size := o.Size % theme.NumSizes
 	s := &r.Sizes[size]
-	t := k.ToggleState(label, st, base.HoverOff)
+	t := k.ToggleState(label, st, base.HoverAuto)
 	on := t.State != base.Unchecked
 	box := theme.Snap(s.Check)
 	radius := s.CheckRadius
@@ -92,10 +113,13 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 	case on && t.Inactive:
 		fill, mark = rc.OnInactive.RGBA(r), rc.MarkInactive.RGBA(r)
 	case on:
-		fill = mix(rc.On.RGBA(r), rc.OnPressed.RGBA(r), t.Down)
+		fill = stateFill(rc.On.RGBA(r), rc.OnHover.RGBA(r), rc.OnPressed.RGBA(r), t.Visual)
 	default:
-		fill = mix(fill, rc.OffPressed.RGBA(r), t.Down)
+		fill = stateFill(fill, rc.OffHover.RGBA(r), rc.OffPressed.RGBA(r), t.Visual)
 	}
+	bkey := ui.KeyN(t.Key, 1)
+	mark = theme.WithAlpha(mark, stateEase(k, bkey, on, r.Motion.Micro))
+	rim := rc.rim(k, on, t.Disabled)
 
 	c.NextAxis(ui.AxisX)
 	c.NextGap(s.CheckGap)
@@ -108,7 +132,12 @@ func CheckboxTri(k *base.Kit, label string, st *base.CheckState, o CheckboxOpts)
 	c.NextSize(ui.Px(box), ui.Px(box))
 	c.NextBG(fill)
 	c.NextRadius(radius)
-	bx := c.BoxKeyed(ui.DrawBackground, ui.KeyN(t.Key, 1), nil)
+	bflags := ui.DrawBackground
+	if rim&0xFF != 0 {
+		c.NextBorder(rim, r.Lines.Rim)
+		bflags |= ui.DrawBorder
+	}
+	bx := c.BoxKeyed(bflags, bkey, nil)
 	c.Push(bx)
 	switch t.State {
 	case base.Checked:

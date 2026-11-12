@@ -42,6 +42,9 @@ func (k *Kit) RangeState(label string, v *float32, lo, hi, step, inset float32, 
 		r.Frac = (r.Value - lo) / (hi - lo)
 	}
 	r.Visual = k.VisualOf(key, hover)
+	if !r.Disabled && k.c.ActiveKey() == key {
+		r.Down = 1 // a drag: pressed wherever the pointer goes (HeldDown)
+	}
 	return r
 }
 

@@ -292,6 +292,15 @@ func (s *selectApp) Build(c *ui.Context) {
 // ring has long finished animating in by then.
 const settleFrames = 40
 
+// onMenuOpen changes what the choice applies to and lets one frame be built
+// with the change while the menu is open, which is what makes the menu's
+// options stale. It asked for two until D103. The display link stops calling
+// back after the third frame presented in a row around a menu's opening, for
+// the second its stall watch takes to replace it: asked for six frames here,
+// main at db2739af builds two. With a press shown in the frame of its click
+// (D103) that frame is presented too, where it used to be unchanged and
+// skipped, so one of the three is spent before the menu opens. The stall
+// itself is older than D103 and is not fixed here.
 func (s *selectApp) onMenuOpen(m platform.DebugMenu) {
 	s.opened, s.tracking = s.frame, true
 	defer func() { s.tracking = false }()
@@ -299,13 +308,13 @@ func (s *selectApp) onMenuOpen(m platform.DebugMenu) {
 	case "reorder":
 		s.opts = []string{"B", "A"} // the next frame shows them so
 		s.link0 = s.a.Win.DebugState()
-		s.drew = m.Frame() && m.Frame()
+		s.drew = m.Frame() // one frame: see onMenuOpen
 		s.link1 = s.a.Win.DebugState()
 		m.Choose(1) // "B" as the menu showed it
 	case "modal":
 		s.dialog = true
 		s.link0 = s.a.Win.DebugState()
-		s.drew = m.Frame() && m.Frame()
+		s.drew = m.Frame()
 		s.link1 = s.a.Win.DebugState()
 		m.Choose(1)
 	case "repaint":

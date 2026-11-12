@@ -43,7 +43,7 @@ func (k *Kit) selectPopup(id ui.ID, key ui.Key, sel *int, options []string, minW
 	c.NextSize(ui.Px(rowW+2*pad), ui.Children(1))
 	c.NextRole(ui.RoleList)
 	c.NextSemName("Options")
-	os := c.BeginOverlay(okey, ui.OverlayPopup, c.Rect(id), ui.PlaceBelow)
+	os := c.BeginOverlayOn(okey, ui.OverlayPopup, id, ui.PlaceBelow) // where the button is in this frame
 	if os.Dismissed {
 		k.pop.Reset()
 	}

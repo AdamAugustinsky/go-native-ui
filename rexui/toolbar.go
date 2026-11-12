@@ -1257,7 +1257,7 @@ func (tb *Toolbar) Title() {
 	c.NextTextColor(col)
 	c.NextRole(ui.RoleLabel)
 	c.NextSemName(tb.o.Title)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(tb.key, 5), base.StrBytes(tb.o.Title))
+	c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(tb.key, 5), base.StrBytes(tb.o.Title))
 	if sub != nil {
 		sc := tb.rc.Subtitle.RGBA(r)
 		if k.Inactive() {
@@ -1268,7 +1268,7 @@ func (tb *Toolbar) Title() {
 		c.NextPadding(tx, 0, 0, 0)
 		c.NextFont(sub.Font)
 		c.NextTextColor(sc)
-		c.BoxKeyed(ui.DrawText|ui.FadeOverflowX|base.Floating, ui.KeyN(tb.key, 6), base.StrBytes(tb.o.Subtitle))
+		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(tb.key, 6), base.StrBytes(tb.o.Subtitle))
 	}
 	c.Pop()
 }

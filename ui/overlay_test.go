@@ -245,7 +245,7 @@ func TestOverlayPlacement(t *testing.T) {
 		{"above flips below", [4]float32{50, 20, 90, 40}, PlaceAbove, [4]float32{50, 40, 150, 100}},
 		{"right", [4]float32{50, 100, 90, 120}, PlaceRight, [4]float32{90, 100, 190, 160}},
 		{"right flips left", [4]float32{330, 100, 390, 120}, PlaceRight, [4]float32{230, 100, 330, 160}},
-		{"right clamps y", [4]float32{50, 280, 90, 300}, PlaceRight, [4]float32{90, 240, 190, 300}},
+		{"right at the bottom: bottoms aligned, 8 from the edge", [4]float32{50, 280, 90, 300}, PlaceRight, [4]float32{90, 232, 190, 292}},
 		{"left", [4]float32{250, 100, 290, 120}, PlaceLeft, [4]float32{150, 100, 250, 160}},
 		{"left flips right", [4]float32{20, 100, 60, 120}, PlaceLeft, [4]float32{60, 100, 160, 160}},
 		{"center", [4]float32{100, 100, 200, 200}, PlaceCenter, [4]float32{100, 120, 200, 180}},

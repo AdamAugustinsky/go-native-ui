@@ -325,7 +325,11 @@ On top, shared by every backend:
   keep-alive.
 - **Layout:** per-axis passes as in RAD Debugger: standalone sizes (px,
   text) → parent-percentage → children-sum → violation resolution by
-  strictness → positioning. Taffy/flexbox is out of scope.
+  strictness → positioning. Taffy/flexbox is out of scope. A line of text
+  that is cut when it does not fit (the default, D105) gives way last in a
+  row that is too small, and is cut to a column narrower than it. Overlay
+  roots are placed in the positioning walk against an anchor rectangle or a
+  box of the same frame, inside the window's usable area (D106).
 - **Input:** hit-testing runs against the *previous* frame's rects, so a
   widget learns it was clicked while it is being built (signals: hovering,
   pressed, released, clicked, double-clicked, dragging, scrolled,
@@ -395,7 +399,7 @@ Linux targets stay at the brief's values until we have machines.
 | Scroll 1M rows | < 4 ms CPU/frame, 0 allocs | same; also report GPU time | — | — |
 | Memory, empty demo | < 40 MB RSS | **`phys_footprint` ≤ 40 MB at 960×600 pt @2×**; non-GPU footprint ≤ 12 MB; Go heap ≤ 4 MB. RSS reported but not gated: on macOS it counts shared framework pages (88 MB for a 34 MB-footprint process) | 30.6 MB after a 60 s idle. Peaks are reclaimable graphics memory: 84 MB at startup, ~100 MB after unpaced animation into an occluded layer (re-measure with a live display) | Zed 118 MB, Finder 114 MB |
 | Bytes per file entry | minimize | ≤ 64 B incl. name (excl. icons) | 24 B + name bytes | — |
-| Binary (stripped) | < 10 MB | < 10 MB hard, ≤ 5 MB target | spike 2.52–2.76 MiB on all six targets (darwin/arm64 2.64 MiB) | Zed 260 MB, Gio hello 6.1 MB, File Pilot 2.46 MB |
+| Binary (stripped) | < 10 MB | no limit since D109 (it was < 10 MB hard); CI records the sizes; ≤ 5 MB stays the target for a small app | spike 2.52–2.76 MiB on all six targets (darwin/arm64 2.64 MiB) | Zed 260 MB, Gio hello 6.1 MB, File Pilot 2.46 MB |
 | Input-to-photon | measure | report event-timestamp → present time from OS present feedback (`MTLDrawable.presentedTime`, DXGI frame statistics, `wp_presentation`); camera measurement if hardware becomes available | — | — |
 
 ## 12. Testing and CI

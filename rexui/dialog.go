@@ -48,7 +48,8 @@ type DialogRecipe struct {
 	// alert.
 	ButtonSize theme.Size
 	// SlideY is how far above its place the sheet starts, in points, and
-	// fades in from, over the theme's Sheet duration.
+	// fades in from, over the theme's Short duration (at once under Reduce
+	// Motion and strict AppKit, D108).
 	SlideY float32
 	// Fill is the sheet's fill; Title colours the title.
 	Fill, Title Tint
@@ -61,8 +62,8 @@ type DialogRecipe struct {
 	// has no blur, the sheet is Fill, opaque.
 	Blur BackdropRecipe
 	// Elevation is the sheet's elevation (theme.ElevModal), which the
-	// floating surface's edge and shadows (OverlayLook) now draw; it is kept
-	// for apps that read it.
+	// floating surface's edge and shadows (NextSurface at theme.LiftDialog)
+	// now draw; it is kept for apps that read it.
 	Elevation theme.Elevation
 	// Scrim covers the window behind a dialog (DialogOpts.Dim 0): T3 Code's
 	// dialog-backdrop, the window's background at 60 % (64 % in dark) over a
@@ -113,7 +114,7 @@ type Dialog struct {
 
 // BeginDialog starts a modal dialog while *open is true: a sheet hanging
 // from the top of the window, centred, on the floating surface the popovers
-// and menus share (OverlayLook's edge and shadows). The window behind is
+// and menus share, at a dialog's lift (NextSurface, theme.LiftDialog). The window behind is
 // inert and covered by DialogLook.Scrim, unless DialogOpts.Dim says
 // otherwise. Build
 // its content, then its actions, then call EndDialog:
@@ -157,7 +158,7 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 	d.okey = okey
 	d.Visible = true
 	d.opening = !c.OverlayOpen(okey)
-	t := c.AnimateValueFrom(ui.KeyN(dialogBase, uint64(okey)+1), 0, 1, RateFor(r.Motion.Sheet))
+	t := overlayFade(k, ui.KeyN(dialogBase, uint64(okey)+1), dialogEnter(k))
 	c.PushOpacity(t)
 
 	w, h := c.Size()
@@ -193,7 +194,11 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 	if top <= 0 {
 		top = r.Window.Toolbars[theme.ToolbarPlain].Height / k.Scale()
 	}
-	c.NextSize(ui.Pct(1), ui.Px(theme.Snap(max(k.Pt(top)-(1-t)*k.Pt(rc.SlideY), 0))))
+	slide := (1 - t) * k.Pt(rc.SlideY)
+	if !overlayTravels(k) { // the system's Reduce Motion: the fade alone
+		slide = 0
+	}
+	c.NextSize(ui.Pct(1), ui.Px(theme.Snap(max(k.Pt(top)-slide, 0))))
 	c.Box(0, "above")
 	c.NextSize(ui.Pct(1), ui.Children(1))
 	c.NextAxis(ui.AxisX)
@@ -202,7 +207,7 @@ func BeginDialog(k *base.Kit, label string, open *bool, o DialogOpts) Dialog {
 	c.NextSize(ui.Pct(1), ui.Pct(1))
 	c.Box(0, "left")
 
-	flags := ui.DrawBackground | NextOverlaySurface(k, r.Radii.Sheet)
+	flags := ui.DrawBackground | NextSurface(k, r.Radii.Sheet, theme.LiftDialog)
 	if d.dimmed {
 		// the sheet takes the pointer where its content does not, so a
 		// press or the wheel on its empty parts never reaches the dim under

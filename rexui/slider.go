@@ -24,6 +24,18 @@ type SliderRecipe struct {
 	// FilledDisabled that part when disabled (black or white at 15 %,
 	// measured #00000025).
 	Rest, Filled, FilledDisabled Tint
+	// RestHover is the empty track under the pointer and FilledHover its
+	// filled part (D107); KnobPressed (black at 10 % and 18 %: the knob is
+	// white in both modes) is laid over the knob while it is
+	// held, wherever the pointer is (base.Kit.HeldDown). Strict AppKit
+	// themes show neither.
+	RestHover, FilledHover, KnobPressed Tint
+	// Rim edges the empty track and RimDisabled a disabled one's (none under
+	// strict AppKit). Both are None by default: on a track 4 pt high a 1 pt
+	// rim leaves a 2 pt fill between two lines, which reads as a hollow
+	// tube, and the knob and the filled part already say where the slider
+	// is. Set Rim to theme.ControlRim for a rimmed track.
+	Rim, RimDisabled Tint
 	// FilledInactive replaces Filled in a window that is not the key window:
 	// labelColor at 22.7 % (#C5C5C5 over white, #515151 over #1E1E1E measured).
 	FilledInactive Tint
@@ -42,7 +54,9 @@ var SliderLook = SliderRecipe{
 	KnobH:  [theme.NumSizes]float32{theme.SizeRegular: 16, theme.SizeMini: 12, theme.SizeSmall: 14, theme.SizeLarge: 16, theme.SizeXLarge: 16},
 	Rest:   Of(theme.Fill1), Filled: Of(theme.Accent), FilledDisabled: OfAlpha(theme.Label, 0.15, 0.15),
 	FilledInactive: OfAlpha(theme.Label, 0.227, 0.227),
-	Knob:           Of(theme.Knob), KnobShadow: OfAlpha(theme.Shadow, 0.25, 0),
+	RestHover:      Of(theme.FillHover), FilledHover: Of(theme.AccentHover), KnobPressed: OfAlpha(theme.Shadow, 0.1, 0.18),
+	Rim: None, RimDisabled: None,
+	Knob: Of(theme.Knob), KnobShadow: OfAlpha(theme.Shadow, 0.25, 0),
 	KnobShadowY: 0.5, KnobShadowBlur: 2,
 }
 
@@ -60,7 +74,7 @@ func Slider(k *base.Kit, label string, v *float32, lo, hi, step float32, o Slide
 	sc := k.Scale()
 	h, th := pt(sc, rc.Height[size]), pt(sc, rc.Track[size])
 	kw, kh := pt(sc, rc.KnobW[size]), pt(sc, rc.KnobH[size])
-	rg := k.RangeState(label, v, lo, hi, step, kw/2, base.HoverOff)
+	rg := k.RangeState(label, v, lo, hi, step, kw/2, base.HoverAuto)
 
 	id := k.BeginRange(&rg, ui.Pct(1), ui.Px(h), 0)
 	rr := c.Rect(id)
@@ -68,20 +82,38 @@ func Slider(k *base.Kit, label string, v *float32, lo, hi, step float32, o Slide
 	if w <= 0 {
 		w = 8 * kw
 	}
-	filled := rc.Filled.RGBA(r)
-	if rg.Disabled {
+	filled, rest, knob := rc.Filled.RGBA(r), rc.Rest.RGBA(r), rc.Knob.RGBA(r)
+	var rim uint32
+	switch {
+	case rg.Disabled:
 		filled = rc.FilledDisabled.RGBA(r)
-	} else if rg.Inactive {
+	case rg.Inactive:
 		filled = rc.FilledInactive.RGBA(r)
+	default:
+		filled = tintToward(filled, rc.FilledHover.RGBA(r), rg.Hot)
+		rest = tintToward(rest, rc.RestHover.RGBA(r), rg.Hot)
+	}
+	if !strict(k) {
+		rim = rc.Rim.RGBA(r)
+		if rg.Disabled {
+			rim = rc.RimDisabled.RGBA(r)
+		} else {
+			knob = theme.Over(theme.WithAlpha(rc.KnobPressed.RGBA(r), rg.Down), knob)
+		}
 	}
 	ty := theme.Snap((h - th) / 2)
 	kx := theme.Snap(rg.Frac * (w - kw))
 	// The empty track starts under the knob, so a translucent fill before
 	// it is not laid over it.
 	theme.At(c, kx, ty, w-kx, th)
-	c.NextBG(rc.Rest.RGBA(r))
+	c.NextBG(rest)
 	c.NextRadius(th / 2)
-	c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(rg.Key, 1), nil)
+	rf := ui.DrawBackground | base.Floating
+	if rim&0xFF != 0 {
+		c.NextBorder(rim, r.Lines.Rim)
+		rf |= ui.DrawBorder
+	}
+	c.BoxKeyed(rf, ui.KeyN(rg.Key, 1), nil)
 	if fw := kx + kw/2; fw > 0 {
 		theme.At(c, 0, ty, fw, th)
 		c.NextBG(filled)
@@ -89,7 +121,7 @@ func Slider(k *base.Kit, label string, v *float32, lo, hi, step float32, o Slide
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(rg.Key, 2), nil)
 	}
 	theme.At(c, kx, theme.Snap((h-kh)/2), kw, kh)
-	c.NextBG(rc.Knob.RGBA(r))
+	c.NextBG(knob)
 	c.NextRadius(kh / 2)
 	flags := ui.DrawBackground | base.Floating
 	if sh := rc.KnobShadow.RGBA(r); sh&0xFF != 0 {

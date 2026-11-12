@@ -113,7 +113,7 @@ func (k *Kit) Text(n uint64, s string, f text.FontKey, color uint32, align ui.Al
 	c.NextFont(f)
 	c.NextTextColor(color)
 	c.NextAlign(align)
-	return c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(c.ParentKey(), 9020+n), StrBytes(s))
+	return c.BoxKeyed(ui.DrawText, ui.KeyN(c.ParentKey(), 9020+n), StrBytes(s)) // a name: cut with "…" (D105)
 }
 
 // Icon builds the icon id of the kit's atlas in colour (RGBA; 0 takes the text

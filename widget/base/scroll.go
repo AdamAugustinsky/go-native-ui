@@ -368,7 +368,7 @@ func (k *Kit) ScrollBars(v *ScrollView) [2]ScrollBar {
 			b.Show = c.AnimateValue(show, target, k.r.Motion.Fade)
 		}
 		b.Visible = b.Show > 0
-		b.Hot = max(c.HotTOf(b.Key), c.ActiveTOf(b.Key))
+		b.Hot = max(c.HotTOf(b.Key), k.HeldDown(b.Key))
 	}
 	return bars
 }
