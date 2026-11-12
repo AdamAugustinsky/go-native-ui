@@ -371,6 +371,11 @@ type Screen = platform.ScreenInfo
 // thread. Empty on Linux so far (the displays are not read there yet).
 func Screens(dst []Screen) []Screen { return platform.ScreensInto(dst[:0]) }
 
+// Pointer is where the pointer is, in Screens' coordinates; ok is false
+// where the platform does not say (platform.PointerLocation). A panel
+// opened from the Dock's menu goes next to the app's icon by it.
+func Pointer() (x, y float64, ok bool) { return platform.PointerLocation() }
+
 // The resources the windows share (D30), made with the first window and
 // released with the last.
 

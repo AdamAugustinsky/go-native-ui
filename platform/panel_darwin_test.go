@@ -249,3 +249,36 @@ func TestPanelShowHideLeaksNothing(t *testing.T) {
 		t.Errorf("100 show/hide cycles allocated %d Go objects", mallocs)
 	}
 }
+
+// A NonActivating panel that is KeyWhileInactive takes the keyboard when
+// shown, and its showing never activates the app (showPanel calls no
+// activate for it). That the app stays inactive cannot be seen here: a test
+// binary is a freshly launched app, which macOS activates as its first
+// window shows whatever the window is (a plain NonActivating panel too), and
+// which does not deactivate on request (TestPanelHidesOnDeactivate skips for
+// it). A glance from Zap's Dock menu checks it by hand.
+func TestKeyWhileInactivePanelTakesTheKeyboard(t *testing.T) {
+	testlock.Hold(t, "activation")
+	var why string
+	var panelKey, panelVisible, canKey bool
+	onMain(func() {
+		pool := objc.F.Call0(objc.PoolPush)
+		defer objc.F.Call1(objc.PoolPop, pool)
+		p, err := Open(Options{Title: "glance", Width: 300, Height: 200, Hidden: true, Panel: &Panel{Floating: true, NonActivating: true, KeyWhileInactive: true}})
+		if err != nil {
+			why = err.Error()
+			return
+		}
+		defer p.Close()
+		canKey = objc.SendBool(p.win, selCanBecomeKey)
+		p.Show()
+		panelKey = pumpPanelUntil(p.KeyWindow)
+		panelVisible = p.Visible()
+	})
+	if why != "" {
+		t.Skipf("cannot open a window here: %s", why)
+	}
+	if !canKey || !panelVisible || !panelKey {
+		t.Fatalf("the panel: can become key %v, visible %v, key %v", canKey, panelVisible, panelKey)
+	}
+}

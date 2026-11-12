@@ -43,6 +43,14 @@ type Panel struct {
 	// window the user is typing in keeps the keyboard (a recording bar). A
 	// panel without it takes the keyboard when shown (a palette).
 	NonActivating bool
+	// KeyWhileInactive lets a NonActivating panel take the keyboard when
+	// shown all the same, without activating the app, as Spotlight's panel
+	// does: the app's other windows stay where they are behind other apps'
+	// (a glance from the Dock or a global shortcut). The panel loses the
+	// keyboard, and its window an EvFocus, when the user clicks elsewhere.
+	// macOS; on Windows the panel is one without NonActivating, the
+	// foreground window.
+	KeyWhileInactive bool
 	// HideOnDeactivate hides the panel when the app stops being the active
 	// one (a palette dismissed by clicking elsewhere). The panel keeps its
 	// state: Show brings it back as it was.
