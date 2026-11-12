@@ -40,9 +40,11 @@
 // focus ring outside its shape and only for keyboard focus (text fields:
 // whenever focused), never in an inactive window; is disabled by colour,
 // not by opacity (base.Kit.BeginDisabled); and in an inactive window draws
-// the unemphasised look (the primary button loses the accent). Nothing
-// reacts to hover where AppKit does not: hover is a recipe's policy
-// (base.HoverOn for toolbar and borderless buttons).
+// the unemphasised look (the primary button loses the accent). Every drawn
+// control answers the pointer: a quiet hover from a token, a press stronger
+// than it (D107); a theme that is strict AppKit (theme.Theme.StrictAppKit)
+// draws AppKit's static controls instead, and base.HoverOn hovers under both
+// (toolbar and borderless buttons).
 //
 // # Overriding and owning
 //

@@ -52,6 +52,12 @@ type FieldRecipe struct {
 	// measured).
 	Border  Tint
 	BorderW float32
+	// BorderHover is the outline under the pointer (D107): the label's
+	// colour at 25 % in light and 16 % in dark, a step stronger than Border,
+	// as a web or Fluent field's border strengthens; the fill does not
+	// change, and a focused field keeps Border under its ring. AppKit's
+	// fields do not react, so strict AppKit themes show Border.
+	BorderHover Tint
 	// Text, Placeholder and TextDisabled colour the text. An editable
 	// field's text is controlTextColor (theme.ControlText, which equals
 	// labelColor on 27.2: #212121 over white and #E1E1E1 over the dark field
@@ -64,9 +70,18 @@ type FieldRecipe struct {
 // FieldLook is the text fields' recipe.
 var FieldLook = FieldRecipe{
 	Fill:   Of(theme.InputFill),
-	Border: Of(theme.FieldOutline), BorderW: 1,
+	Border: Of(theme.FieldOutline), BorderW: 1, BorderHover: OfAlpha(theme.Label, 0.25, 0.16),
 	Text: Of(theme.ControlText), Placeholder: Of(theme.Placeholder), TextDisabled: Of(theme.TextDisabled),
 	InsetX: 6,
+}
+
+// border is the outline of the field ti, hovered or not this frame: Border,
+// toward BorderHover while the pointer is over an enabled field that does
+// not have the focus.
+func (rc *FieldRecipe) border(k *base.Kit, ti *base.TextInput, hovering bool) uint32 {
+	r := k.Theme()
+	h := hoverT(k, ti.WrapKey, hovering && !ti.Disabled && ti.Focus < 1, base.HoverAuto)
+	return tintToward(rc.Border.RGBA(r), rc.BorderHover.RGBA(r), h)
 }
 
 // TextField builds a single-line text field editing buf, with the placeholder
@@ -141,7 +156,7 @@ func field(k *base.Kit, label string, buf *ui.TextBuffer, placeholder string, o 
 		if w := k.FieldWidth(&ti); w > 0 {
 			bw := pt(k.Scale(), rc.BorderW)
 			theme.At(c, -bw, -bw, w+2*bw, h+2*bw)
-			c.NextBorder(rc.Border.RGBA(r), bw)
+			c.NextBorder(rc.border(k, &ti, res.Hovering), bw)
 			c.NextRadius(radius + bw)
 			c.BoxKeyed(ui.DrawBorder|base.Floating, ui.KeyN(ti.WrapKey, 5), nil)
 		}

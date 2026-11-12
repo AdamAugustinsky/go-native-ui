@@ -39,7 +39,7 @@ func HelpButton(k *base.Kit, label string, o HelpButtonOpts) base.Signal {
 	c, r := k.Context(), k.Theme()
 	rc := &HelpButtonLook
 	s := &r.Sizes[o.Size%theme.NumSizes]
-	p := k.PressState(label, base.HoverOff)
+	p := k.PressState(label, base.HoverAuto) // ButtonDefault's hover (D107)
 	fill, fg, _ := ButtonRecipes[ButtonDefault].Colors(r, p.Visual)
 	d := theme.Snap(s.Height)
 	f := k.TextSystem().Font(text.FontDesc{SizePt: rc.Glyph * s.Height / (24 * k.Scale()), Weight: rc.Weight, Scale: k.Scale()})

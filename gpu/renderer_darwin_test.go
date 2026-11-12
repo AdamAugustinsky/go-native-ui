@@ -145,6 +145,63 @@ func TestBorderHairline(t *testing.T) {
 	near(t, "card inside", m.at(15, 1), [4]int{0x20, 0x40, 0x80, 255}, 0)
 }
 
+// A translucent border is drawn over the box's fill (D104): the ring is the
+// border composited over the fill, whatever was drawn under the box. The box
+// straddles a black half and a white half; its ring reads the same over both.
+// Before D104 the ring replaced the fill and showed what was under the box.
+func TestTranslucentBorderOverFill(t *testing.T) {
+	r := newTestRenderer(t)
+	const fill, edge = 46, 255 // Rex's dark popover: fill 46, the label colour at 10%
+	// 0x1A/255 of white over the fill: 26 + 46*(1-0.102) = 67.3.
+	want := [4]int{67, 67, 67, 255}
+	inside := [4]int{fill, fill, fill, 255}
+	for _, c := range []struct {
+		name  string
+		radii float32
+		tex   TextureID
+	}{{"square", 0, 0}, {"round", 6, 0}, {"continuous", 6, ShapeContinuous}} {
+		for _, w := range []float32{1, 2} {
+			box := solid(4, 4, 36, 20, fill<<24|fill<<16|fill<<8|0xFF)
+			box.Radii = [4]float32{c.radii, c.radii, c.radii, c.radii}
+			box.Tex = c.tex
+			box.Border, box.BorderColor = w, edge<<24|edge<<16|edge<<8|0x1A
+			m := render(r, 40, 24, black, solid(20, 0, 40, 24, 0xFFFFFFFF), box)
+			name := c.name
+			if w == 2 {
+				name += " 2px"
+			}
+			near(t, name+": left ring over black", m.at(4, 12), want, 1)
+			near(t, name+": right ring over white", m.at(35, 12), want, 1)
+			near(t, name+": top ring over black", m.at(12, 4), want, 1)
+			near(t, name+": top ring over white", m.at(28, 4), want, 1)
+			near(t, name+": bottom ring over black", m.at(12, 19), want, 1)
+			near(t, name+": bottom ring over white", m.at(28, 19), want, 1)
+			near(t, name+": inside over black", m.at(12, 12), inside, 0)
+			near(t, name+": inside over white", m.at(28, 12), inside, 0)
+			if w == 2 {
+				near(t, name+": second ring pixel", m.at(5, 12), want, 1)
+			}
+			// On the arc the box lets through what is under it only where the
+			// shape does not cover the pixel: mirrored pixels over black and
+			// over white differ by (1-o)*255, o the coverage of the same
+			// shape filled white with no border.
+			if c.radii > 0 {
+				ref := solid(4, 4, 36, 20, 0xFFFFFFFF)
+				ref.Radii, ref.Tex = box.Radii, box.Tex
+				cov := render(r, 40, 24, black, ref)
+				for _, p := range [][2]int{{4, 9}, {5, 6}, {6, 5}, {9, 4}} {
+					lb, rw := m.at(p[0], p[1]), m.at(39-p[0], p[1])
+					o := cov.at(p[0], p[1])[0]
+					if d := rw[0] - lb[0] - (255 - o); d > 2 || d < -2 {
+						t.Errorf("%s: arc pixel %v over black %v, mirrored over white %v: the box lets %d through, want %d (coverage %d)",
+							name, p, lb, rw, rw[0]-lb[0], 255-o, o)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestGradientCorners(t *testing.T) {
 	r := newTestRenderer(t)
 	q := solid(0, 0, 32, 32, 0)

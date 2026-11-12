@@ -164,15 +164,50 @@ created in `Resolve` (it already allocates there, once per scale).
 
 | Token | Value | Notes |
 |---|---|---|
-| `Instant` | 0 | press highlight, hover on standard controls (none), appearing menus |
+| `Instant` | 0 | a press, a hover arriving, appearing menus |
+| `Micro` | 0.1 s | a hover leaving (`Motion.Hot`), a check mark or radio dot appearing |
+| `Short` | 0.18 s | fades; a switch's knob crossing (`SwitchLook.Travel`) |
 | `Quick` | rate 50 (about 20 ms half-life) | press release, focus ring (ref: AppKit draws it at once) |
-| `Standard` | 0.25 s (ref: `NSAnimationContext` default) | switch knob, disclosure rotation, row insertion |
+| `Standard` | 0.25 s (ref: `NSAnimationContext` default) | disclosure rotation, row insertion; the switch's knob under strict AppKit |
 | `Fade` | 0.2 s | menu, popover and tooltip dismissal (*designed*) |
 | `Dim` | rate 20 | Rex pane focus dimming |
 | `Mode` | rate 10 (about 0.3 s) | light/dark crossfade |
 | `Sheet` | 0.25–0.3 s | sheet slide (*designed*) |
 
-- **Hover:** `HoverOn` is a per-component token, off by default on macOS. Toolbar buttons, menu items, sidebar disclosure, scrollers and Rex pane buttons turn it on.
+- **Hover and press (D103, D107).** Every drawn control answers the pointer. A component's hover policy is `base.Hover`, whose zero value `HoverAuto` shows the hover look; it arrives in the frame the pointer lands and fades out over `Micro`. A press shows in the frame of the mouse-down, follows the pointer (dragging off lets it go), and is always stronger than the hover it follows; a drag control (slider, scroll bar, splitter) stays pressed while held anywhere (`base.Kit.HeldDown`). A selected row or chosen segment does not change under the pointer, so a hover never reads as deselecting.
+- **Hover looks are tokens.** A neutral control steps one up the fill scale (`Fill2` → `Fill1`; a control already at `Fill1` → `FillHover`); an accent control goes half way to its pressed colour (`AccentHover`, derived from the accent as `AccentPressed` is); rows take `RowHover` and `RowPressed`. Each is a role or a recipe field, never a colour at the call site (table below).
+- **Strict AppKit is a switch.** `theme.Theme.StrictAppKit` (mirrored as `Resolved.StrictAppKit`) restores AppKit's static controls: `HoverAuto` does not hover, hover and press change at once both ways, and every recipe that departs from AppKit for response or contrast draws AppKit's (no rim, no pressed slider knob, no hover on rows, the check mark and the radio dot at once, the switch's knob over `Standard`). `HoverOn` hovers under both (toolbar and borderless buttons, menu items, scroll bars and tabs hover in AppKit too); `HoverOff` never does. The AppKit comparisons (`TestRecipesMatchAppKit` and its siblings) run strict.
+- **Floors (D107).** An off control (unchecked box, radio not chosen, empty switch or slider track) has a 1 pt rim in `ControlRim` (`Lines.Rim`), 3:1 or better on the surfaces it sits on (3.11:1 on the light window, 3.32:1 on the dark; `Fill1` alone is 1.25:1 and 1.34:1). Resolving a theme moves an app's `Label2` and `Placeholder` that read under 4.5:1, and its `Label3` and `ControlRim` under 3:1, on the window, panes, lists, fields, the raised surface, the sidebar and group boxes, toward `Label` until they pass; the system's colours, AppKit's own values and a theme with `ExactColors` or `StrictAppKit` are left alone. The icon, hover and rim roles follow an app's labels (`PaneButton` ← `Label2`; `PaneButtonHover`, `PaneButtonChip` ← `Label`; `RowHover`, `RowPressed`, `RowSelectedInactive`, `FillHover`, `ControlRim` ← `Label`'s colour at their own strength) unless it sets them.
+
+**State matrix (D107).** Values are composited over the window (light `#FFFFFF` / dark `#1E1E1E`); "strict" is what `StrictAppKit` draws instead. Focused is the theme's focus ring round the control in every row; inactive is the recipe's `*Inactive` tint (a primary button and a checked box lose the accent).
+
+| Component | Rest | Hover | Pressed | Disabled | Selected / on | Strict |
+|---|---|---|---|---|---|---|
+| Button Default | `Fill2` #EBEBEB / #303030 | `Fill1` #E6E6E6 / #343434 | `FillPressed` #D4D4D4 / #444444 | `FillDisabled` | — | no hover |
+| Button Primary | `Accent` #007AFF | `AccentHover` #0074F2 / #0D81FF | `AccentPressed` #006EE5 / #1A88FF | `FillDisabled` | — | no hover |
+| Button Destructive | `Red` 25 % #FFCDCE / #562728 | `Red` 32 % #FFBFC0 / #662A2B | `Red` 40 % #FFAFB1 / #782C2E | `FillDisabled` | — | no hover |
+| Button Plain | none | `Fill3` chip #F3F3F3 / #292929 | label `Label2` | `TextDisabled` | — | no hover |
+| Button Glass, Toolbar | capsule glass | `Fill4` over it | `Fill2` over it | | — | hovers (`HoverOn`) |
+| Icon button bordered / borderless | as Default / `PaneButton` | as Default / `PaneButtonHover`, chip 8 % | as Default / chip 15 % | | — | borderless hovers |
+| Toggle | off: as Default | as Default; on: accent 18 % / 29 % #D1E7FF / #15385E | accent 22 % / 34 % #C6E1FF / #143D6A | | accent 14 % / 24 % #DBECFF / #173454 | no hover |
+| Checkbox, radio (off) | `Fill1` #E6E6E6 + `ControlRim` #929292 / #6F6F6F | `FillHover` #DEDEDE / #3B3B3B | `FillPressed` | `Fill3` + rim `Label4` | `Accent`, hover `AccentHover`, mark fades in over `Micro` | no rim, no hover, mark at once |
+| Switch | track `Fill1` + rim | `FillHover` / `AccentHover` | `FillPressed` / `AccentPressed` | `Fill3` / accent 70 % | `Accent`, knob over `Short` | no rim, knob over `Standard` |
+| Disclosure triangle | label 23.5 % / 41 % #C3C3C3 / #7B7B7B | 37 % / 48 % #A1A1A1 / #8A8A8A | `Label2` | label 10 % / 15 % | turned | no hover |
+| Segmented | track `Fill2` | segment `Fill3` | `FillPressed` | `FillDisabled` | accent 14 % / 24 %, no hover | no hover |
+| Slider | track `Fill1` + rim, fill `Accent` | track `FillHover`, fill `AccentHover` | knob black 10 % / 18 % over white, held anywhere | `Label` 15 % | — | no rim, no hover, no knob press |
+| Stepper | `Fill2` | half under the pointer `Fill4` | half `FillPressed` | `FillDisabled` | — | no hover |
+| Select | as Default; borderless none | as Default; borderless `RowHover` | as Default | | open: `RowHover` (borderless) | no hover |
+| Combobox button | `Fill2` | `Fill1` | `FillPressed` | | open `Fill1` | press `Fill1`, no hover |
+| Text field, search, combobox field | outline `FieldOutline` #D9D9D9 / #323232 | outline label 25 % / 16 % #BFBFBF / #424242 | — | | focused: ring, outline unchanged | outline unchanged |
+| Colour well | `Fill1` | `FillHover` | `FillPressed` | `Fill3` | open: half pressed | no hover |
+| Help button | as Default | as Default | as Default | | — | no hover |
+| Tabs | | `TabsLook` hover pill | `TabsLook.Press` | | chosen pill | hovers (Rex's tabs) |
+| Token | blue 33 % #ABD8FF / #144468 | blue 42 % #94CDFF / #114E7C | | `Fill2` | `Selection` | no hover |
+| List, table, outline row | none / stripe | `RowHover` #F2F2F2 / #292929, fades out | | | selection, unchanged under the pointer | no hover (`ListOpts.Hover` keeps it) |
+| Sidebar row, chat row, nav row | none | `RowHover` | `RowPressed` #E8E8E8 / #323232 | | selection, unchanged | no hover (nav rows hover) |
+| Avatar (pressable) | the avatar | `FillHover` over it | `FillPressed` over it | | — | nothing |
+| Path bar component | none | `RowHover` chip | label `Label2` | | — | no hover |
+| Link | `Link`, underlined | with `HoverUnderline`, the underline fades in with the hover | toward `LinkLook.Pressed` | | — | as before |
 - **Reduce Motion** (read from the system) sets every duration but the crossfade to 0 and stills the indeterminate progress, the spinner and the typing indicator.
 
 ### 2.6 Control sizes
@@ -194,7 +229,7 @@ Notes on the columns:
 
 | Component | Variants | States | Sizes | Native reference | Draw / host | Why |
 |---|---|---|---|---|---|---|
-| **Button** | `Default` (Fill2), `Primary` (accent, white), `Destructive` (Fill2, red label in alerts), `Plain` (borderless), `Toolbar` (hover-on, no fill at rest), `Glass` (macOS 26+) | rest, pressed, disabled, focused, inactive-window (the primary loses its accent) | all 5; large and xlarge are capsules | `push-*`, `push-default-*`, `push-destructive`, `push-capsule`, `push-xlarge` | Draw | A drawn button can be pixel-matched (ref fills are semantic colours). Hosting NSButton would cost compositing and zero-alloc control for no behavioural gain |
+| **Button** | `Default` (Fill2), `Primary` (accent, white), `Destructive` (Fill2, red label in alerts), `Plain` (borderless), `Toolbar` (hover-on, no fill at rest), `Glass` (macOS 26+) | rest, hover, pressed, disabled, focused, inactive-window (the primary loses its accent); see §2.5's state matrix | all 5; large and xlarge are capsules | `push-*`, `push-default-*`, `push-destructive`, `push-capsule`, `push-xlarge` | Draw | A drawn button can be pixel-matched (ref fills are semantic colours). Hosting NSButton would cost compositing and zero-alloc control for no behavioural gain |
 | **IconButton** | `Bordered` (Fill2 square, r = size radius), `Borderless`, `Toolbar` | as Button + hover (toolbar and borderless) | small, regular, large | `icon-rounded`, `icon-borderless`, `icon-toolbar` | Draw | SF Symbols already come from the icon atlas |
 | **Toggle** (toggle button) | `Default`, `AccessoryBar` (accent when on) | off, on, pressed, disabled, focused | small, regular | `accessorybar` | Draw | |
 | **Checkbox** | — | off, on, mixed, pressed, disabled, focused | small, regular, large | `checkbox-*` | Draw | |
@@ -219,7 +254,7 @@ Notes on the columns:
 
 | Component | Variants | States | Sizes | Native reference | Draw / host | Why |
 |---|---|---|---|---|---|---|
-| **Table** | `FullWidth`, `Inset`, `Striped` (alternating), `Plain`; with header, sortable, resizable | row: rest, selected-emphasised (solid `Selection` + white text), selected-unemphasised, drop target; no hover on macOS | row 24 (`Small` 20, `Large` 28) | `table-*` | Draw | A million rows at zero allocation is our strength; NSTableView would add a data-source bridge per row |
+| **Table** | `FullWidth`, `Inset`, `Striped` (alternating), `Plain`; with header, sortable, resizable | row: rest, selected-emphasised (solid `Selection` + white text), selected-unemphasised, drop target; hover (`RowHover`) unless strict AppKit | row 24 (`Small` 20, `Large` 28) | `table-*` | Draw | A million rows at zero allocation is our strength; NSTableView would add a data-source bridge per row |
 | **List** | `Plain`, `Inset`, `Separated` | as Table | as Table | `table-inset-*` | Draw | |
 | **Sidebar** (source list / outline) | `SourceList` (groups and items), `Navigation` | item: rest, selected-emphasised (accent block r 8.5, white bold text and icon), unemphasised, editing; group header (11 bold, secondary, 19 tall); disclosure | rows 32 (macOS 27 medium); small 24 *to measure* | `sidebar-*` | Draw rows over the `Sidebar` material (host NSVisualEffectView) | Vibrancy needs the window server; the rows themselves are ours |
 | **Tabs** | `Segmented` (default on macOS: a SegmentedControl above a Box), `TabView`, `Rex` (the titlebar capsule) | selected, rest, disabled; Rex: active pill, fading titles | regular | `tabview` (tabs not captured), `segmented` | Draw | The Rex capsule is the identity; app tabs on macOS are segments |

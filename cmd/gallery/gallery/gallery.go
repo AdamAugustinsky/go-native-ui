@@ -474,6 +474,9 @@ func (g *Gallery) Go(s int) {
 // matrix is the values the state matrix's widgets edit: one per state column.
 type matrix struct {
 	chk, sw [5]bool
+	toggle  [5]bool
+	seg     [5]int
+	step    [5]float32
 	tri     [5]widget.CheckState
 	radio   [5]int
 	sel     [5]int

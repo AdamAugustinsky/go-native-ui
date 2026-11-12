@@ -3,25 +3,47 @@ package base
 import "gonativeui/ui"
 
 // Hover is a component's hover policy: whether it reacts to the pointer
-// resting over it. AppKit's push buttons, pop-up buttons, checkboxes, switches
-// and table rows do not; toolbar, borderless and recessed buttons, menu items
-// and scroll bars do. The zero value is HoverOff, the macOS default.
+// resting over it. The zero value, HoverAuto, shows the component's hover look
+// (D103): a control answers the pointer as a web page's or Rex's do. A theme
+// that asks for strict AppKit behaviour (theme.Theme.StrictAppKit) turns it
+// off, as AppKit's push buttons, pop-up buttons, checkboxes, switches and
+// table rows have none; HoverOn hovers there too (toolbar, borderless and
+// recessed buttons, menu items and scroll bars do in AppKit), and HoverOff
+// never hovers.
 type Hover uint8
 
 const (
+	// HoverAuto: the component shows its hover look unless the theme is
+	// strict AppKit; the default.
+	HoverAuto Hover = iota
 	// HoverOff: the component does not react to hover; Visual.Hot stays 0.
-	HoverOff Hover = iota
-	// HoverOn: Visual.Hot follows the pointer, animated.
+	HoverOff
+	// HoverOn: Visual.Hot follows the pointer, whatever the theme.
 	HoverOn
 )
 
-// Visual is the visual state of a component, as of the previous frame's
-// animations (or forced with Kit.Force). A recipe draws from it and from
+// Hovers reports whether a component with hover policy h reacts to hover
+// with this kit's theme.
+func (k *Kit) Hovers(h Hover) bool {
+	switch h {
+	case HoverOn:
+		return true
+	case HoverAuto:
+		return !k.r.StrictAppKit
+	}
+	return false
+}
+
+// Visual is the visual state of a component, as of this frame's input (or
+// forced with Kit.Force). A recipe draws from it and from
 // nothing else about the interaction.
 type Visual struct {
-	// Hot is how hovered the component is, 0 to 1; 0 with HoverOff.
+	// Hot is how hovered the component is, 0 to 1; 0 when it does not
+	// hover (Kit.Hovers). It arrives at once and fades out (D103).
 	Hot float32
-	// Down is how pressed it is, 0 to 1.
+	// Down is how pressed it is, 0 to 1: 1 from the frame of the press while
+	// the pointer is on the component, fading out on a release or as the
+	// pointer leaves it held down (a release there would not click).
 	Down float32
 	// Focus is how focused it is, 0 to 1, whether the focus came from the
 	// keyboard or the pointer.
@@ -67,7 +89,7 @@ func (k *Kit) VisualOf(key ui.Key, hover Hover) Visual {
 		v.Disabled = true
 		return v
 	case f&^LookInactive != 0:
-		if f&LookHover != 0 && hover == HoverOn {
+		if f&LookHover != 0 && k.Hovers(hover) {
 			v.Hot = 1
 		}
 		if f&LookPressed != 0 {
@@ -78,7 +100,7 @@ func (k *Kit) VisualOf(key ui.Key, hover Hover) Visual {
 		}
 		return v
 	}
-	if hover == HoverOn {
+	if k.Hovers(hover) {
 		v.Hot = c.HotTOf(key)
 	}
 	v.Down, v.Focus = c.ActiveTOf(key), c.FocusTOf(key)
@@ -89,17 +111,28 @@ func (k *Kit) VisualOf(key ui.Key, hover Hover) Visual {
 }
 
 // InteractFlags are the interaction flags of a component's root: clickable, a
-// tab stop, animating press and focus (and hover with HoverOn), and inert
+// tab stop, animating press and focus (and hover when it hovers), and inert
 // (ui.Disabled) inside a disabled region.
 func (k *Kit) InteractFlags(hover Hover) ui.Flags {
 	if k.Disabled() {
 		return ui.Disabled
 	}
 	f := ui.Clickable | ui.Focusable | ui.ActiveAnimation | ui.FocusAnimation
-	if hover == HoverOn {
+	if k.Hovers(hover) {
 		f |= ui.HotAnimation
 	}
 	return f
+}
+
+// HeldDown is the press value of a component whose press is a drag (a
+// slider's knob, a scroll bar, a splitter): 1 while the left button is held
+// on it, wherever the pointer goes, else its ActiveT as a release fades. A
+// button's press follows the pointer instead (Visual.Down).
+func (k *Kit) HeldDown(key ui.Key) float32 {
+	if k.c.ActiveKey() == key {
+		return 1
+	}
+	return k.c.ActiveTOf(key)
 }
 
 // Signal is what a component reports about the frame, by value.

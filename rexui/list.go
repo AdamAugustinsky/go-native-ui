@@ -79,9 +79,11 @@ type ListOpts struct {
 	// Striped alternates the rows' background, and the room below the last
 	// row, as usesAlternatingRowBackgroundColors does.
 	Striped bool
-	// Hover fills the row under the pointer with ListRecipe.Hover (the
-	// theme's RowHover). AppKit's tables have none: off by default.
-	Hover bool
+	// The row under the pointer is filled with ListRecipe.Hover (the
+	// theme's RowHover), arriving at once and fading out (D107), unless the
+	// theme is strict AppKit, whose tables have none. Hover keeps it under
+	// strict AppKit too; NoHover turns it off.
+	Hover, NoHover bool
 }
 
 // ListRecipe is the look of the rows of lists, tables and outlines (macOS
@@ -92,7 +94,9 @@ type ListOpts struct {
 //     (emphasised); otherwise, or in an inactive window, it is
 //     unemphasizedSelectedContentBackgroundColor with label-coloured text.
 //     The focus shows through the emphasis: there is no focus ring on a
-//     row, and no hover.
+//     row. A row that is not selected has a quiet fill under the pointer
+//     (Hover; none under strict AppKit); a selected row keeps its
+//     selection.
 //   - Contiguous selected rows are one block. Full width, it is square; inset,
 //     it is rounded at its ends only, with a 1-pt lighter line between its
 //     rows, 6 pt short of each side (Finder; tools/appkitref -live).
@@ -113,7 +117,7 @@ type ListRecipe struct {
 	DividerInset float32
 	// Stripe fills the odd rows of a striped list.
 	Stripe Tint
-	// Hover fills the row under the pointer of a list with ListOpts.Hover.
+	// Hover fills the row under the pointer that is not selected (ListOpts).
 	Hover Tint
 	// Label colours a row's text, Label2 its secondary text (a date, a
 	// size), LabelDisabled both in a disabled list, and OnSelection text
@@ -169,6 +173,7 @@ type List struct {
 type rowLook struct {
 	style   ListStyle
 	striped bool
+	hover   base.Hover // the list's hover policy
 	under   [3]float32 // the rows' fills under the scroll edge less the background, by pixel rows (scrollEdge)
 	emph    bool       // the row being built shows the selection emphasised
 	fgTint  Tint       // its text colour, as a recipe names it
@@ -185,8 +190,11 @@ func listOpts(k *base.Kit, o ListOpts, header bool) base.ListOpts {
 		pad = rc.HeaderPadY[s]
 	}
 	c.NextBG(rc.Background.RGBA(r))
-	var hover base.Hover
-	if o.Hover {
+	hover := base.HoverAuto
+	switch {
+	case o.NoHover:
+		hover = base.HoverOff
+	case o.Hover:
 		hover = base.HoverOn
 	}
 	return base.ListOpts{Pad: [2]float32{rc.Inset[s], pad}, OwnPad: true, Flags: ui.DrawBackground, Hover: hover}
@@ -194,8 +202,9 @@ func listOpts(k *base.Kit, o ListOpts, header bool) base.ListOpts {
 
 // BeginList starts a list of rows rows of the theme's row height (24 pt;
 // base.Kit.NextRowHeight changes it), with st's selection, in the AppKit
-// look: no hover, no focus ring on a row, the selection emphasised while the
-// list has the focus in the key window.
+// look: no focus ring on a row, the selection emphasised while the list has
+// the focus in the key window; the row under the pointer has a quiet hover
+// fill unless the theme is strict AppKit (ListOpts).
 //
 //	l := rexui.BeginList(k, "notes", &v.list, len(v.notes), rexui.ListOpts{})
 //	for r := l.First; r < l.Last; r++ {
@@ -207,7 +216,8 @@ func listOpts(k *base.Kit, o ListOpts, header bool) base.ListOpts {
 //
 // Keyboard and pointer are base.Kit.BeginList's.
 func BeginList(k *base.Kit, label string, st *base.ListState, rows int, o ListOpts) List {
-	return List{List: k.BeginList(label, st, rows, listOpts(k, o, false)), rowLook: rowLook{style: o.Style % NumListStyles, striped: o.Striped}}
+	bo := listOpts(k, o, false)
+	return List{List: k.BeginList(label, st, rows, bo), rowLook: rowLook{style: o.Style % NumListStyles, striped: o.Striped, hover: bo.Hover}}
 }
 
 // Row starts display row r, which shows item, in the list's look, with name
@@ -233,13 +243,17 @@ func (lk *rowLook) begin(l *base.List, ol *base.Outline, rs *base.RowState, name
 		bg = rc.Selection.RGBA(r)
 	case rs.Selected:
 		bg = rc.SelectionUnemph.RGBA(r)
-	case rs.Hover:
-		bg = rc.Hover.RGBA(r)
+	default:
 		if lk.striped && rs.Row&1 == 1 {
-			bg = theme.Over(bg, rc.Stripe.RGBA(r)|0xFF)
+			bg = rc.Stripe.RGBA(r)
 		}
-	case lk.striped && rs.Row&1 == 1:
-		bg = rc.Stripe.RGBA(r)
+		if h := hoverT(k, rs.Key, rs.Hover && !rs.Disabled, lk.hover); h > 0 {
+			hv := theme.WithAlpha(rc.Hover.RGBA(r), h)
+			if bg&0xFF != 0 {
+				hv = theme.Over(hv, bg|0xFF)
+			}
+			bg = hv
+		}
 	}
 	var flags ui.Flags
 	if bg&0xFF != 0 {
@@ -384,7 +398,7 @@ func (l *List) Empty(msg []byte) {
 	c.NextAlign(ui.AlignCenter)
 	c.NextRole(ui.RoleLabel)
 	c.NextSemNameBytes(msg)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(l.BoxKey(), 2), msg)
+	c.BoxKeyed(ui.DrawText, ui.KeyN(l.BoxKey(), 2), msg)
 }
 
 // EndList ends the list: the stripes below the last row, the rows, the

@@ -174,14 +174,8 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 		c.NextSize(ui.Px(w), ui.Children(1))
 		// opaque: the raised surface under the tint, so that content does not show through
 		fill = theme.Over(fill, r.Colors[theme.Raised]|0xFF)
-		el := &r.Elevations[theme.ElevRaised]
-		sh := el.Shadows[0]
-		c.NextShadow(ui.Shadow{OffY: sh.Y, Sigma: sh.Blur, Color: sh.Color(r.Colors[theme.Shadow], r.T)})
-		fade := float32(1) // no fade under Reduce Motion or in a window that is not showing: nothing to schedule
-		if !reduced(k) && !c.Input().Hidden {
-			fade = c.AnimateValueFrom(ui.KeyN(key, 71), 0, 1, RateFor(r.Motion.Dismiss))
-		}
-		c.NextOpacity(fade)
+		// no fade under Reduce Motion or in a window that is not showing: nothing to schedule
+		c.NextOpacity(toastEnter(k, key))
 		if h == 0 { // laid out at the bottom from the second frame
 			c.RequestFrame()
 		}
@@ -189,6 +183,10 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 		k.ApplySize(ui.Pct(1), ui.Children(1))
 	}
 	c.NextBG(fill)
+	var lift ui.Flags
+	if floating { // a toast's lift (its shadows), the level's hairline kept
+		lift = nextToastLift(k) &^ ui.DrawBorder
+	}
 	c.NextBorder(edge, r.Lines.Hairline)
 	c.NextRadius(radius)
 	c.NextPad(pad)
@@ -200,9 +198,9 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 	if o.Message != "" {
 		c.NextSemValueBytes(base.StrBytes(o.Message)) // the explanation is the group's value
 	}
-	flags := ui.DrawBackground | ui.DrawBorder | disabledFlag(k)
+	flags := ui.DrawBackground | ui.DrawBorder | disabledFlag(k) | lift
 	if floating {
-		flags |= ui.DrawShadow | ui.Hoverable | base.Floating
+		flags |= ui.Hoverable | base.Floating
 	}
 	root := c.BoxKeyed(flags, key, nil)
 	c.Push(root)
@@ -224,7 +222,7 @@ func banner(k *base.Kit, title string, o BannerOpts, floating bool, tkey ui.Key)
 	c.NextSize(ui.Pct(1), ui.Px(ts.Line))
 	c.NextFont(ts.Font)
 	c.NextTextColor(rc.Title.RGBA(r))
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(key, 3), base.StrBytes(display))
+	c.BoxKeyed(ui.DrawText, ui.KeyN(key, 3), base.StrBytes(display))
 	if o.Message != "" {
 		ms := &r.Styles[theme.StyleCallout]
 		c.NextSize(ui.Pct(1), ui.TextSize(0))

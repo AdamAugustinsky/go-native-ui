@@ -37,7 +37,10 @@ type PathSignal struct {
 // points.
 type PathBarRecipe struct {
 	// Text, TextPressed colour a component's name; Chevron the separator.
+	// Hover is a quiet chip behind the component under the pointer (the
+	// rows' RowHover, D107; none under strict AppKit).
 	Text, TextPressed, Chevron Tint
+	Hover                      Tint
 	// Gap is between a symbol and its name; SepPad on each side of a
 	// chevron; Pad at the bar's ends.
 	Gap, SepPad, Pad float32
@@ -46,7 +49,8 @@ type PathBarRecipe struct {
 // PathBarLook is the path bars' recipe.
 var PathBarLook = PathBarRecipe{
 	Text: Of(theme.Label), TextPressed: Of(theme.Label2), Chevron: Of(theme.Label3),
-	Gap: 4, SepPad: 3, Pad: 4,
+	Hover: Of(theme.RowHover),
+	Gap:   4, SepPad: 3, Pad: 4,
 }
 
 // maxPath is the most components a path bar lays out; the first ones go
@@ -135,8 +139,16 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 		c.NextRole(ui.RoleButton)
 		c.NextSemName(it.Title)
 		flags := ui.Clickable | ui.Focusable | ui.ActiveAnimation | ui.FocusAnimation | base.Floating
+		vis := k.VisualOf(ikey, base.HoverAuto)
+		if k.Hovers(base.HoverAuto) {
+			flags |= ui.HotAnimation
+		}
 		if k.Disabled() {
 			flags = ui.Disabled | base.Floating
+		} else if hv := theme.WithAlpha(rc.Hover.RGBA(r), vis.Hot); hv&0xFF != 0 {
+			c.NextBG(hv)
+			c.NextRadius(k.Pt(4))
+			flags |= ui.DrawBackground
 		}
 		b := c.BoxKeyed(flags, ikey, nil)
 		c.Push(b)
@@ -156,9 +168,9 @@ func PathBar(k *base.Kit, label string, items []PathItem, o PathBarOpts) PathSig
 			theme.At(c, tx, 0, bw-tx, h) // to the button's end, snapped once
 			c.NextFont(font)
 			c.NextTextColor(col)
-			c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(ikey, 2), base.StrBytes(it.Title))
+			c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(ikey, 2), base.StrBytes(it.Title))
 		}
-		k.FocusRing(b, k.VisualOf(ikey, base.HoverOff), k.Pt(4))
+		k.FocusRing(b, vis, k.Pt(4))
 		c.Pop()
 		if sg := c.Signal(b); (sg.Clicked || sg.Activated || sg.Action&ui.ActPress != 0) && !k.Disabled() {
 			res.Index = off + i

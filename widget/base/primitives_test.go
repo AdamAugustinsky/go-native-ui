@@ -5,6 +5,7 @@ import (
 
 	"gonativeui/gpu"
 	"gonativeui/theme"
+	"gonativeui/theme/rex"
 	"gonativeui/ui"
 )
 
@@ -414,8 +415,9 @@ func textInput(k *Kit, label string, buf *ui.TextBuffer, hover Hover, out *TextI
 }
 
 // With HoverOff a text field's box does not animate hover either: moving the
-// pointer onto and across an unfocused field asks for no frames. With HoverOn
-// it does.
+// pointer onto, across and off an unfocused field asks for no frames. With
+// HoverOn it does: the hover arrives at once (D103), and fades as the pointer
+// leaves.
 func TestTextInputHoverOffAsksForNoFrames(t *testing.T) {
 	for _, h := range []Hover{HoverOff, HoverOn} {
 		var buf ui.TextBuffer
@@ -433,7 +435,7 @@ func TestTextInputHoverOffAsksForNoFrames(t *testing.T) {
 		b := g.must(ui.RoleTextField, "Name").Bounds
 		y := (b[1] + b[3]) / 2
 		busy := 0
-		for x := b[0] + 4; x < b[2]; x += 20 {
+		for x := b[0] + 4; x < b[2]+40; x += 20 {
 			g.move(x, y)
 			if g.c.Animating() || g.c.WakeAfter() != 0 {
 				busy++
@@ -446,7 +448,7 @@ func TestTextInputHoverOffAsksForNoFrames(t *testing.T) {
 			t.Errorf("HoverOff: %d frames asked for another while the pointer crossed the field", busy)
 		}
 		if h == HoverOn && busy == 0 {
-			t.Errorf("HoverOn: crossing the field animated nothing (the test sees no frames)")
+			t.Errorf("HoverOn: crossing and leaving the field animated nothing (the test sees no frames)")
 		}
 	}
 }
@@ -573,5 +575,76 @@ func TestKitNextSizeIsTheNextBoxs(t *testing.T) {
 	}
 	if s := size(auto); s[0] == 77 {
 		t.Errorf("a box after a zero NextWidth is %v: the replaced width reached it", s)
+	}
+}
+
+// A control with the default hover policy shows its hover look, in the frame
+// the pointer lands, and its press in the frame of the mouse-down; a strict
+// AppKit theme turns the default hover off and makes the release instant
+// (D103). HoverOn hovers under both, HoverOff under neither.
+func TestDefaultHoverAndStrictAppKit(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		for _, h := range []Hover{HoverAuto, HoverOn, HoverOff} {
+			var p Press
+			g := newRig(t, 400, 300, 1, func(k *Kit) {
+				k.NextPad(20)
+				k.Column("root")
+				pushButton(k, "OK", h, false, &p)
+				k.EndColumn()
+			})
+			if strict {
+				th := rex.Theme()
+				th.StrictAppKit = true
+				g.k.SetTheme(th)
+				g.frames(2)
+			}
+			r := g.c.Rect(p.ID)
+			x, y := (r[0]+r[2])/2, (r[1]+r[3])/2
+			g.move(x, y)
+			wantHot := h == HoverOn || h == HoverAuto && !strict
+			if hot := p.Hot == 1; hot != wantHot {
+				t.Errorf("strict %v, hover %v: Hot %v in the frame the pointer landed, want hovered %v", strict, h, p.Hot, wantHot)
+			}
+			g.in.SetButton(ui.ButtonLeft, true, 1)
+			g.frame()
+			if p.Down != 1 {
+				t.Errorf("strict %v, hover %v: Down %v in the frame of the press", strict, h, p.Down)
+			}
+			g.in.SetButton(ui.ButtonLeft, false, 0)
+			g.frame()
+			g.frame()
+			if fading := p.Down > 0 && p.Down < 1; fading == strict {
+				t.Errorf("strict %v, hover %v: Down %v the frame after the release", strict, h, p.Down)
+			}
+		}
+	}
+}
+
+// A slider's knob stays pressed while it is dragged off the slider: its
+// press is a drag (HeldDown), not a button's.
+func TestRangeStaysPressedWhileDragged(t *testing.T) {
+	v := float32(0.5)
+	var r Range
+	g := newRig(t, 400, 300, 1, func(k *Kit) {
+		k.NextPad(20)
+		k.Column("root")
+		r = k.RangeState("Volume", &v, 0, 1, 0, 0, HoverAuto)
+		k.BeginRange(&r, k.Fixed(200), k.Fixed(20), ui.DrawBackground)
+		k.EndRange(&r)
+		k.EndColumn()
+	})
+	b := g.c.Rect(r.ID)
+	g.move((b[0]+b[2])/2, (b[1]+b[3])/2)
+	g.in.SetButton(ui.ButtonLeft, true, 1)
+	g.frame()
+	g.move(b[2]+10, b[3]+100) // off the slider, still held
+	g.frames(20)
+	if r.Down != 1 || v != 1 {
+		t.Fatalf("dragged off: Down %v value %v, want 1 and 1", r.Down, v)
+	}
+	g.in.SetButton(ui.ButtonLeft, false, 0)
+	g.frame()
+	if r.Down == 1 {
+		t.Errorf("released: Down %v", r.Down)
 	}
 }

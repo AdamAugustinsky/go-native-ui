@@ -91,9 +91,12 @@ type AvatarRecipe struct {
 	// Presence are the dots' colours; Dot is the dot's diameter as a share
 	// of the avatar's side (at least MinDot points) and Ring the width of
 	// the backdrop-coloured ring round it, in points.
-	Presence    [numPresence]Tint
-	Dot, MinDot float32
-	Ring        float32
+	Presence [numPresence]Tint
+	// Hover and Pressed shade a pressable avatar (AvatarOpts.Pressable)
+	// under the pointer and held (D107); strict AppKit themes draw neither.
+	Hover, Pressed Tint
+	Dot, MinDot    float32
+	Ring           float32
 	// Overlap is how much of each avatar a stack covers with the next one,
 	// as a share of the side; StackRing is the width of the cut round each.
 	Overlap, StackRing float32
@@ -106,6 +109,7 @@ var AvatarLook = AvatarRecipe{
 	Presence: [numPresence]Tint{PresenceOnline: Of(theme.Green), PresenceAway: Of(theme.Orange), PresenceBusy: Of(theme.Red)},
 	Dot:      0.3, MinDot: 8, Ring: 2,
 	Overlap: 0.3, StackRing: 2,
+	Hover: Of(theme.FillHover), Pressed: Of(theme.FillPressed),
 }
 
 // initialsOf appends the initials of name (Initials) to f.
@@ -207,8 +211,8 @@ func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
 	role, flags := ui.RoleImage, disabledFlag(k)
 	var vis base.Visual
 	if o.Pressable {
-		role, flags = ui.RoleButton, k.InteractFlags(base.HoverOff)
-		vis = k.VisualOf(key, base.HoverOff)
+		role, flags = ui.RoleButton, k.InteractFlags(base.HoverAuto)
+		vis = k.VisualOf(key, base.HoverAuto)
 	}
 	c.NextRole(role)
 	if o.Label != "" {
@@ -239,6 +243,14 @@ func Avatar(k *base.Kit, name string, o AvatarOpts) ui.ID {
 		BadgeDot(k, BadgeDotOpts{Color: o.Badge, Backdrop: o.Backdrop})
 	}
 	if o.Pressable {
+		if !strict(k) {
+			if sh := stateFill(0, rc.Hover.RGBA(k.Theme()), rc.Pressed.RGBA(k.Theme()), vis); sh&0xFF != 0 {
+				theme.At(c, 0, 0, side, side)
+				c.NextBG(sh)
+				c.NextRadius(corner)
+				c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(key, 0x5ADE), nil)
+			}
+		}
 		k.FocusRing(id, vis, corner)
 	}
 	c.Pop()

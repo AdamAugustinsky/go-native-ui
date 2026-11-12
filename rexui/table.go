@@ -12,6 +12,10 @@ type TableOpts struct {
 	Style ListStyle
 	// Striped alternates the rows' background.
 	Striped bool
+	// Hover and NoHover are ListOpts': the row under the pointer has a
+	// quiet fill unless the theme is strict AppKit (Hover: even then;
+	// NoHover: never).
+	Hover, NoHover bool
 	// Glyphs are the sort indicators (AddListGlyphs; zero: the standard
 	// chevrons).
 	Glyphs ListGlyphs
@@ -103,8 +107,9 @@ func BeginTable(k *base.Kit, label string, st *base.TableState, cols []base.Colu
 	if !t.late {
 		tableHeader(k, &t.TableHead, o.Glyphs, o.ClearHeader)
 	}
-	t.List = List{List: k.BeginTableBody(&t.TableHead, rows, listOpts(k, ListOpts{Style: o.Style, Striped: o.Striped}, true)),
-		rowLook: rowLook{style: s, striped: o.Striped}, edgeOwnLine: t.late}
+	bo := listOpts(k, ListOpts{Style: o.Style, Striped: o.Striped, Hover: o.Hover, NoHover: o.NoHover}, true)
+	t.List = List{List: k.BeginTableBody(&t.TableHead, rows, bo),
+		rowLook: rowLook{style: s, striped: o.Striped, hover: bo.Hover}, edgeOwnLine: t.late}
 	return t
 }
 
@@ -154,7 +159,7 @@ func tableHeader(k *base.Kit, t *base.TableHead, g ListGlyphs, clear bool) {
 		c.NextFont(font)
 		c.NextTextColor(tc)
 		c.NextAlign(hc.Col.Align)
-		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX, ui.KeyN(hc.Key, 1), base.StrBytes(hc.Col.Title))
+		c.BoxKeyed(ui.DrawText, ui.KeyN(hc.Key, 1), base.StrBytes(hc.Col.Title))
 		if hc.Sorted {
 			ic := g.SortUp
 			if hc.Descending {
@@ -215,7 +220,7 @@ func (t *Table) cell(col int, b []byte, color uint32) {
 	c.NextFont(k.Theme().Styles[theme.StyleBody].Font)
 	c.NextTextColor(color)
 	c.NextAlign(t.Columns()[col].Align)
-	t.TextCell(&t.List.List, col, b, ui.DrawText|ui.EllipsisOverflowX)
+	t.TextCell(&t.List.List, col, b, ui.DrawText)
 }
 
 // EndTable ends the table: the stripes below the rows, the rows, the scroll

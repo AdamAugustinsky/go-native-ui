@@ -99,7 +99,7 @@ func (k *Kit) optionRow(o optionRow) ui.ID {
 	c.NextSize(ui.Px(o.lw), ui.Px(h))
 	c.NextFont(k.r.Font.UI)
 	c.NextTextColor(fg)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(o.key, 2), o.label)
+	c.BoxKeyed(ui.DrawText, ui.KeyN(o.key, 2), o.label)
 	if o.sw > 0 {
 		c.NextSize(ui.Px(o.sw+px.Gap*2), ui.Px(h))
 		c.NextFont(k.r.Font.UI)

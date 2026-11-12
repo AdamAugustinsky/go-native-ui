@@ -625,9 +625,8 @@ func (c *Context) imageRect(b *box) ([4]float32, bool) {
 // textInk is the glyph box of b's one line of display text where emitText
 // draws it, without the spaces at either end: from the pen position of the
 // first glyph that is not a space to the advance of the last, by the font's
-// ascent and descent, clipped to the padded box as emitText clips text that
-// overflows with FadeOverflowX or EllipsisOverflowX (an ellipsis ends inside
-// it). n is the number of glyphs inside it. ok is
+// ascent and descent, clipped to the padded box as emitText cuts text that
+// overflows unless its TextCut is CutNone (an ellipsis ends inside it). n is the number of glyphs inside it. ok is
 // false for a box without such text (none, wrapped or rich).
 func (c *Context) textInk(b *box) (n int, ink [4]float32, ok bool) {
 	if b.flags&DrawText == 0 || b.flags&WrapText != 0 || b.txt.Len == 0 || c.recOf(b) != nil {
@@ -677,7 +676,7 @@ func (c *Context) textInk(b *box) (n int, ink [4]float32, ok bool) {
 	}
 	baseline := snap(y0 + ((y1-y0)-(fi.ascent+fi.descent))/2 + fi.ascent)
 	ink = [4]float32{x + v.X[i0], baseline - fi.ascent, x + end, baseline + fi.descent}
-	if over && b.flags&(FadeOverflowX|EllipsisOverflowX) != 0 { // emitText clips it to the padded box
+	if over && c.cutOf(b) != CutNone { // emitText cuts it at the padded box
 		ink[0], ink[2] = max(ink[0], x0), min(ink[2], x1)
 		if ink[2] <= ink[0] {
 			return 0, ink, false

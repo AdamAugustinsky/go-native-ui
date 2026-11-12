@@ -22,7 +22,7 @@ type Look uint8
 
 const (
 	// LookHover draws the next component as if the pointer were over it
-	// (when its hover policy is HoverOn).
+	// (when it hovers: Kit.Hovers).
 	LookHover Look = 1 << iota
 	// LookPressed draws it as if the pointer button were down on it.
 	LookPressed

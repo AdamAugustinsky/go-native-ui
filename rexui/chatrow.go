@@ -42,6 +42,11 @@ type ChatRowRecipe struct {
 	// Selected and SelectedInactive are the selection's fills: the sidebar's
 	// accent, and the grey of a window that is not key.
 	Selected, SelectedInactive Tint
+	// Hover and Pressed fill a row that is not selected under the pointer
+	// and held (the rows' RowHover and RowPressed, D107); a selected row
+	// keeps its selection under the pointer, so a hover never reads as
+	// deselecting it. Strict AppKit themes show no hover.
+	Hover, Pressed Tint
 	// Title, TitleSelected, Preview, PreviewSelected, Time and Typing are the
 	// text colours.
 	Title, TitleSelected, Preview, PreviewSelected, Time, Typing Tint
@@ -52,6 +57,7 @@ var ChatRowLook = ChatRowRecipe{
 	H: [2]float32{56, 44}, AvatarSize: [2]float32{36, 28},
 	Pad: 10, Gap: 10, Radius: 8, Inset: 6,
 	Selected: Of(theme.SidebarSel), SelectedInactive: Of(theme.SidebarSelInactive),
+	Hover: Of(theme.RowHover), Pressed: Of(theme.RowPressed),
 	Title: Of(theme.Label), TitleSelected: Of(theme.OnAccent), Preview: Of(theme.Label2), PreviewSelected: Of(theme.OnAccent),
 	Time: Of(theme.Label2), Typing: Of(theme.Accent),
 }
@@ -74,7 +80,7 @@ func ChatListRow(k *base.Kit, label, title, preview, when string, o ChatRowOpts)
 	if o.Compact {
 		ci = 1
 	}
-	p := k.PressState(label, base.HoverOff)
+	p := k.PressState(label, base.HoverAuto)
 	h := pt(sc, rc.H[ci])
 	radius := pt(sc, rc.Radius)
 	inset := pt(sc, rc.Inset)
@@ -91,6 +97,10 @@ func ChatListRow(k *base.Kit, label, title, preview, when string, o ChatRowOpts)
 		titleC, previewC, timeC = rc.TitleSelected.RGBA(r), rc.PreviewSelected.RGBA(r), rc.PreviewSelected.RGBA(r)
 	case o.Selected:
 		fill = rc.SelectedInactive.RGBA(r)
+	case strict(k):
+		// AppKit's sidebar rows do not darken under the press either
+	default:
+		fill = stateFill(0, rc.Hover.RGBA(r), rc.Pressed.RGBA(r), p.Visual)
 	}
 
 	var state ui.SemState
@@ -135,7 +145,9 @@ func ChatListRow(k *base.Kit, label, title, preview, when string, o ChatRowOpts)
 	c.NextSize(ui.Pct(1), ui.Px(ts.Line))
 	c.NextFont(ts.Font)
 	c.NextTextColor(titleC)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(p.Key, 22), base.StrBytes(title))
+	if tid := c.BoxKeyed(ui.DrawText, ui.KeyN(p.Key, 22), base.StrBytes(title)); c.Truncated(tid) { // a name: cut with "…" (D105)
+		Tooltip(k, id, title) // the whole name, only when it was cut
+	}
 	if when != "" {
 		tm := &r.Styles[theme.StyleCaption1]
 		c.NextSize(ui.TextSize(0), ui.Px(tm.Line))

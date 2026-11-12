@@ -88,7 +88,7 @@ func (t *Table) CellBytes(col int, b []byte) {
 	c.NextFont(k.Theme().Styles[theme.StyleBody].Font)
 	c.NextTextColor(t.TextColor())
 	c.NextAlign(t.Columns()[col].Align)
-	t.TextCell(&t.List.List.List, col, b, ui.DrawText|ui.FadeOverflowX)
+	t.TextCell(&t.List.List.List, col, b, ui.DrawText)
 }
 
 // CellText is CellBytes for a string.

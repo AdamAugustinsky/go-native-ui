@@ -79,7 +79,8 @@ The box's text colour is the style stack's, set before it is built; its width
 fills the parent unless you say otherwise, and its height is the lines'.
 `RichOpts` has the direction (`DirAuto` takes each paragraph's from its first
 strong character), `MaxW` (a box as wide as its widest line, up to that: a chat
-bubble), `MaxLines` with `Ellipsis`, and large single-emoji messages.
+bubble), `MaxLines` (the last line kept ends in "…" unless `NoEllipsis`), and
+large single-emoji messages.
 
 The key is the box's identity. Give a box that shows a different text a different
 key, as the notes app does with the note's id, so that it is a different box.

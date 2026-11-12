@@ -64,8 +64,21 @@ type popoverRef struct {
 
 // A drawn popover has the real one's body radius, fill and edge, and its arrow
 // the real one's height and distance from the anchor, within the recipes'
-// tolerances, in light and dark.
+// tolerances, in light and dark. It runs under strict AppKit, and on the
+// default theme beside it: a popover with an arrow keeps NSPopover's look
+// there too, and only its shadows are the lift scale's (D108,
+// TestPopoverShadowsAreTheLiftsOrStrict).
 func TestPopoverMatchesAppKit(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		name := "default"
+		if strict {
+			name = "strict"
+		}
+		t.Run(name, func(t *testing.T) { popoverMatchesAppKit(t, strict) })
+	}
+}
+
+func popoverMatchesAppKit(t *testing.T, strict bool) {
 	b, err := os.ReadFile("testdata/popover-27.2.json")
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +98,7 @@ func TestPopoverMatchesAppKit(t *testing.T) {
 			body = p.ID
 		})
 		g.h = 1200
+		setStrict(g, strict)
 		g.settle()
 		br := g.c.Rect(body)
 		bg := g.k.Theme().Colors[theme.Window] | 0xFF

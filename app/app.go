@@ -192,6 +192,10 @@ type App struct {
 
 	execNs int64 // platform.Now at process start, -1 if unknown
 
+	interval float32     // the display interval frameDT has learnt, in seconds; 0 before the first frame
+	steps    [16]float32 // the last steps between frames of a running animation (frameDT)
+	nSteps   int
+
 	bench *benchRun
 	hook  func() // runs after every iteration of the loop (RunLiveResizeTest)
 

@@ -367,6 +367,19 @@ func TestHelpButtonAndToggleButton(t *testing.T) {
 	n := g.node(ui.RoleCheckbox, "Bold")
 	g.click(centre(n))
 	g.settle()
+	// under the pointer the toggle shows its hover (D107), between its tint
+	// and its pressed tint; its look at rest is checked with the pointer away
+	if hv := rexui.ToggleOnLook.FillHover.RGBA(g.k.Theme()); on && !accented() {
+		found := false
+		for _, q := range g.list.Quads {
+			found = found || q.Mode == gpu.ModeShape && q.Color[0] == hv
+		}
+		if !found {
+			t.Error("a toggle that is on shows no hover under the pointer")
+		}
+	}
+	g.in.MouseX, g.in.MouseY = -100, -100
+	g.settle()
 	if !on || !accented() || g.node(ui.RoleCheckbox, "Bold").State&ui.SemChecked == 0 {
 		t.Fatalf("after a click: on %v, in the accent %v, checked %v", on, accented(), g.node(ui.RoleCheckbox, "Bold").State&ui.SemChecked != 0)
 	}

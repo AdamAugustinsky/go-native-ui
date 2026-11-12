@@ -93,6 +93,20 @@ func over(fill, top uint32, t float32) uint32 {
 	return theme.MixRGBA(fill, top, t)
 }
 
+// tintToward blends fill toward the state's colour top by t (a hover's or a
+// press's strength): top drawing nothing keeps fill, and a fill that draws
+// nothing grows into top's own colour, alpha included, rather than through
+// transparent black.
+func tintToward(fill, top uint32, t float32) uint32 {
+	switch {
+	case t <= 0 || top&0xFF == 0:
+		return fill
+	case fill&0xFF == 0:
+		return theme.WithAlpha(top, t)
+	}
+	return theme.MixRGBA(fill, top, t)
+}
+
 // mix blends a toward b by t, keeping a when t is 0.
 func mix(a, b uint32, t float32) uint32 {
 	if t <= 0 {

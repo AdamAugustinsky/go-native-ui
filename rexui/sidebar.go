@@ -476,6 +476,11 @@ type SidebarRecipe struct {
 	// #676767 and #999999: darker in light, lighter in dark than the other
 	// rows').
 	Sel, SelUnemph, SelInactive, OnSel, OnSelInactive Tint
+	// Hover and Pressed fill a row that is not selected under the pointer
+	// and held, inset and rounded as the selection is (the rows' RowHover
+	// and RowPressed, D107); strict AppKit themes draw neither, as AppKit's
+	// source lists do not.
+	Hover, Pressed Tint
 	// Symbol colours symbols that set no Color (the accent).
 	Symbol Tint
 	// SymbolGap is the space between the symbol and the title's text field:
@@ -561,8 +566,9 @@ var SidebarLook = SidebarRecipe{
 	Header: Of(theme.SidebarHeader), HeaderInactive: Of(theme.SidebarHeaderInactive),
 	Sel: Of(theme.SidebarSel), SelUnemph: Of(theme.SidebarSelUnemph), SelInactive: Of(theme.SidebarSelInactive), OnSel: Of(theme.OnAccent),
 	OnSelInactive: Of(theme.SelectedRowTextInactive),
-	Symbol:        Of(theme.Accent),
-	SymbolGap:     4, DotW: 12, PlainTextX: 20, FieldInset: 2, DisclosureRoom: 9, DisclosureX: 12, DisclosureDY: 1, RowChevron: Of(theme.Label2),
+	Hover:         Of(theme.RowHover), Pressed: Of(theme.RowPressed),
+	Symbol:    Of(theme.Accent),
+	SymbolGap: 4, DotW: 12, PlainTextX: 20, FieldInset: 2, DisclosureRoom: 9, DisclosureX: 12, DisclosureDY: 1, RowChevron: Of(theme.Label2),
 	Detail: Of(theme.SidebarDetail), DetailOnSel: 0.7, DetailTop: 8, HeaderChevronRight: 17.5, Chevron: Of(theme.Label3),
 	Thumb: OfAlpha(theme.Label, 0.25, 0.3), ThumbW: 6,
 	LegacyKnob: Solid(0xA5A5A5, 0x5A5A5A), LegacyKnobInactive: Solid(0xABABAB, 0x585858),
@@ -841,6 +847,10 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, st *SidebarState, emph
 	c.NextSemName(it.Title)
 	c.NextSemState(state)
 	flags := ui.Clickable
+	hovers := !strict(k)
+	if hovers {
+		flags |= ui.HotAnimation | ui.ActiveAnimation
+	}
 	if k.Disabled() {
 		flags = ui.Disabled
 	}
@@ -865,6 +875,16 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, st *SidebarState, emph
 	if k.Inactive() {
 		textCol = rc.TextInactive.RGBA(r)
 		symCol = desaturate(symCol)
+	}
+	if !sel && hovers && !k.Disabled() {
+		v := base.Visual{Hot: c.HotTOf(rkey), Down: c.ActiveTOf(rkey)}
+		if fill := stateFill(0, rc.Hover.RGBA(r), rc.Pressed.RGBA(r), v); fill&0xFF != 0 {
+			inset := theme.Snap(r.Window.Selection.Inset)
+			theme.At(c, inset, 0, max(w-2*inset, 0), h)
+			c.NextBG(fill)
+			c.NextRadius(r.Window.Selection.Radius)
+			c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(rkey, 3), nil)
+		}
 	}
 	if sel {
 		sidebarSelection(k, rkey, w, h, emph)
@@ -965,7 +985,10 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, st *SidebarState, emph
 		theme.At(c, theme.Snap(textX), ty, tw, ts.Line)
 		c.NextFont(ts.Font)
 		c.NextTextColor(textCol)
-		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 2), base.StrBytes(it.Title))
+		tid := c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(rkey, 2), base.StrBytes(it.Title))
+		if c.Truncated(tid) { // the whole title, only when the row cut it (AppKit's expansion tooltip)
+			Tooltip(k, row, it.Title)
+		}
 	}
 	if dt != nil {
 		col := rc.Detail.RGBA(r)
@@ -975,7 +998,7 @@ func sidebarRow(k *base.Kit, key ui.Key, it *SidebarItem, st *SidebarState, emph
 		theme.At(c, theme.Snap(textX), ty+ts.Line+theme.Snap(k.Pt(2)), tw, dt.Line)
 		c.NextFont(dt.Font)
 		c.NextTextColor(col)
-		c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(rkey, 4), base.StrBytes(it.Detail))
+		c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(rkey, 4), base.StrBytes(it.Detail))
 	}
 	c.Pop()
 	return pressed, toggled, h
@@ -1036,7 +1059,7 @@ func sidebarHeader(k *base.Kit, key ui.Key, it *SidebarItem, rc *SidebarRecipe, 
 	theme.At(c, hx, theme.Snap((h-st.Line)/2), max(w-hx-k.Pt(28), 0), st.Line)
 	c.NextFont(st.Font)
 	c.NextTextColor(col)
-	c.BoxKeyed(ui.DrawText|ui.EllipsisOverflowX|base.Floating, ui.KeyN(hkey, 1), base.StrBytes(it.Title))
+	c.BoxKeyed(ui.DrawText|base.Floating, ui.KeyN(hkey, 1), base.StrBytes(it.Title))
 	if it.Open != nil {
 		ckey := ui.KeyN(hkey, 9)
 		show := max(c.HotTOf(hkey), c.HotTOf(ckey), c.FocusTOf(ckey))

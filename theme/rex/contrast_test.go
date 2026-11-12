@@ -245,3 +245,19 @@ func TestContrastFloorIsAppKitsOnly(t *testing.T) {
 		}
 	}
 }
+
+// The contrast guard (D107) leaves Rex's own roles as they are, light and
+// dark: the secondary roles are the system's (Rex follows the system's
+// colours) and Rex's ControlRim reads 3:1 or better on every surface.
+func TestContrastGuardLeavesRexAlone(t *testing.T) {
+	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
+		exact := Theme()
+		exact.ExactColors = true
+		a, b := Theme().Resolve(fakeui.New(), 2, m), exact.Resolve(fakeui.New(), 2, m)
+		for i := range a.Colors {
+			if a.Colors[i] != b.Colors[i] {
+				t.Errorf("%v %v: the guard moved it %08X → %08X", m, theme.Role(i), b.Colors[i], a.Colors[i])
+			}
+		}
+	}
+}

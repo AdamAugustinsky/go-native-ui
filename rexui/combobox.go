@@ -43,14 +43,18 @@ type ComboRecipe struct {
 	ButtonW, ButtonH, ButtonRight, Radius float32
 	// Button is the button's fill (#E9E9E9 over white and #2C2C2C over the dark
 	// field measured: the secondary fill), ButtonOpen while the list shows,
-	// and Chevron the chevron's colour.
+	// and Chevron the chevron's colour. ButtonHover is the button under the
+	// pointer and ButtonPressed held (D107; under strict AppKit a held
+	// button shows ButtonOpen, as before, and none hovers).
 	Button, ButtonOpen, Chevron Tint
+	ButtonHover, ButtonPressed  Tint
 }
 
 // ComboLook is the combo boxes' recipe.
 var ComboLook = ComboRecipe{
 	Width: 160, ButtonW: 23.5, ButtonH: 17.5, ButtonRight: 4, Radius: 4,
 	Button: Of(theme.Fill2), ButtonOpen: Of(theme.Fill1), Chevron: Of(theme.Label),
+	ButtonHover: Of(theme.Fill1), ButtonPressed: Of(theme.FillPressed),
 }
 
 // ComboSignal is what a combo box reports.
@@ -122,7 +126,7 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 	if w > 0 {
 		bw := pt(sc, fl.BorderW)
 		theme.At(c, -bw, -bw, w+2*bw, h+2*bw)
-		c.NextBorder(fl.Border.RGBA(r), bw)
+		c.NextBorder(fl.border(k, &ti, res.Hovering), bw)
 		c.NextRadius(radius + bw)
 		c.BoxKeyed(ui.DrawBorder|base.Floating, ui.KeyN(ti.WrapKey, 5), nil)
 	}
@@ -143,8 +147,18 @@ func Combobox(k *base.Kit, label string, st *ComboState, buf *ui.TextBuffer, ite
 		bkey := ui.KeyN(ti.WrapKey, 6)
 		fill, fg := rc.Button.RGBA(r), rc.Chevron.RGBA(r)
 		flags := ui.Clickable | ui.ActiveAnimation | base.Floating
-		if st.Open || c.ActiveTOf(bkey) > 0.5 {
+		v := base.Visual{Down: c.ActiveTOf(bkey)}
+		pressed := rc.ButtonPressed
+		if k.Hovers(base.HoverAuto) {
+			flags |= ui.HotAnimation
+			v.Hot = c.HotTOf(bkey)
+		} else {
+			pressed = rc.ButtonOpen
+		}
+		if st.Open {
 			fill = rc.ButtonOpen.RGBA(r)
+		} else {
+			fill = stateFill(fill, rc.ButtonHover.RGBA(r), pressed.RGBA(r), v)
 		}
 		if ti.Disabled {
 			flags = base.Floating

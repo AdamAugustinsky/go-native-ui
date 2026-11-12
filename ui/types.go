@@ -79,7 +79,7 @@ const (
 	FloatingY // y position is the fixed position relative to the parent, outside the flow
 
 	// Text.
-	FadeOverflowX // text wider than the box fades out at the right edge instead of being cut
+	FadeOverflowX // one line of text wider than the box fades out at its right edge: NextTextCut(CutFade), which it overrides
 
 	// Animation.
 	HotAnimation    // animate hot_t toward hover
@@ -123,12 +123,9 @@ const (
 	// as Ghostty draws by default; UI text keeps the default.
 	NoFontSmoothing
 
-	// EllipsisOverflowX ends one line of display text that is wider than the
-	// box with "…" in its font, cut after the last glyph that leaves room for
-	// it (spaces before the cut are dropped), as AppKit truncates a label's
-	// tail (NSLineBreakByTruncatingTail). Right-to-left text fades out
-	// instead (FadeOverflowX). Rich and wrapped text use text.Para's
-	// Ellipsis.
+	// EllipsisOverflowX is NextTextCut(CutTail), which is the default since
+	// D105: it overrides a TextCut set on the box. Kept for the callers that
+	// set it.
 	EllipsisOverflowX
 
 	// FocusText and FocusList give a Focusable box its focus class for Tab
@@ -235,6 +232,45 @@ const (
 	AlignCenter
 	// AlignRight ends the text at the right of the padded rectangle.
 	AlignRight
+)
+
+// TextCut is what becomes of a box's one line of display text when the box is
+// narrower than the text (D105). The zero value, CutTail, is the default: the
+// text is cut to the box and ends with "…" in its font, as AppKit truncates a
+// label (NSLineBreakByTruncatingTail). The cut falls on a grapheme boundary of
+// the text in logical order, spaces next to the "…" are dropped, and what is
+// kept is shaped again with the "…", so mixed-direction text keeps the order
+// the shaper gives it; the cut is cached per text, font, width and kind and
+// costs nothing in a frame that changes none of them. A shaper that reports no
+// clusters gets the fade. A box that cuts its text also gives way when its row
+// or column is too small (layout's last shrink step), and Truncated reports
+// whether it cut. Wrapped text is not cut (it wraps); RichText's MaxLines
+// ends its last line with "…" (RichOpts.NoEllipsis).
+//
+//	c.NextTextCut(ui.CutMiddle) // a file name: "Quarterl…sion.pdf"
+//	c.Label(name)
+type TextCut uint8
+
+const (
+	// CutTail ends the kept text with "…" (the default).
+	CutTail TextCut = iota
+	// CutMiddle keeps the start and the end with "…" between them, and keeps
+	// a file name's extension (a "." in its last 16 bytes) whole when it fits:
+	// NSLineBreakByTruncatingMiddle.
+	CutMiddle
+	// CutHead starts the kept end of the text with "…":
+	// NSLineBreakByTruncatingHead (a path whose last part matters).
+	CutHead
+	// CutFade cuts the text at the box and fades it out over its last 1.5
+	// line heights, mid-word (a text field's tail, a strip that scrolls).
+	CutFade
+	// CutClip cuts the text at the box's padded edge, with no mark.
+	CutClip
+	// CutNone draws the whole line past the box, over what is beside it,
+	// cut only by a Clip ancestor: what every box did before D105. For text
+	// meant to run past its box (a label laid over a narrower icon), and for
+	// a box that must keep its text's width in a row that is too small.
+	CutNone
 )
 
 // Anchor is where NextAnchor pins a floating box in its parent: a corner, the
@@ -417,11 +453,25 @@ type Theme struct {
 }
 
 // Rates are the animation rates k in rate = 1−2^(−k·dt), per second.
+//
+// Hover and press have a rate each way (D103): HotIn and ActiveIn are how
+// they arrive, 0 meaning at once (the default: a control answers the hand in
+// the frame the pointer or the press lands), and Hot and Active how they
+// leave (a hover fades out, a release lets go). A rate of 1e6 or more arrives
+// in one frame.
 type Rates struct {
-	// Hot is the rate of the hover animation (HotT).
+	// Hot is the rate at which HotT falls as the pointer leaves a box (the
+	// hover fades out).
 	Hot float32
-	// Active is the rate of the press animation (ActiveT).
+	// HotIn is the rate at which HotT rises as the pointer comes onto a box;
+	// 0 is at once.
+	HotIn float32
+	// Active is the rate at which ActiveT falls on a release, or as the
+	// pointer leaves a box held down.
 	Active float32
+	// ActiveIn is the rate at which ActiveT rises on a press, or as the
+	// pointer comes back onto the box held down; 0 is at once.
+	ActiveIn float32
 	// Focus is the rate of the focus animation (FocusT).
 	Focus float32
 	// Scroll is the rate at which a scroll offset approaches its target.

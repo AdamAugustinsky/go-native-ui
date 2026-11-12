@@ -10,12 +10,14 @@ import (
 
 const maxDepth = 64
 
+// truncCache is a box's cut line of text (emitTruncated): the run it was cut
+// from, the run of what is kept with its "…", and what it was cut for.
 type truncCache struct {
-	run, ellipsis text.RunRef
-	gen           uint32
-	w             float32
-	n             int32
-	ready, ok     bool
+	run, kept text.RunRef
+	gen       uint32
+	w         float32
+	mode      TextCut
+	ready, ok bool
 }
 
 // persist is the part of a box record that survives from frame to frame while
@@ -25,9 +27,11 @@ type persist struct {
 	key       Key
 	lastFrame uint32
 	cut       uint32 // 1 + the sparse truncation-cache slot, 0 without one
-	hotT      float32
-	activeT   float32
-	focusT    float32
+	// wasCut: the last layout made the box narrower than its text (Truncated).
+	wasCut  bool
+	hotT    float32
+	activeT float32
+	focusT  float32
 	// savedFocus is, for an overlay root, the focus when it opened.
 	savedFocus Key
 	// wrap is what the line breaking of a WrapText box was computed for.
@@ -91,6 +95,7 @@ type boxAttrs struct {
 	auditOff  AuditMask  // the checks of Audit the box is exempt from (NextAuditExempt)
 	cover     bool       // its subtree paints its rect opaque first (NextCover)
 	fadeEnd   float32    // its children fade out over its last fadeEnd pixels (NextFadeEnd)
+	edgeFade  float32    // ... while its content goes on past its end (NextScrollFade)
 	obscured  [2]float32 // a scroll box's view covered at its top and bottom (SetObscured)
 	stopWheel bool       // the wheel over the box scrolls nothing beneath it (StopWheel)
 	passWheel bool       // the wheel and the trackpad scroll the box around it, not it (PassWheel)
@@ -146,6 +151,7 @@ type style struct {
 	shadow    [2]Shadow
 	tint      Tint
 	opacity   float32
+	textCut   TextCut
 }
 
 type fontInfo struct {
@@ -159,6 +165,12 @@ type Context struct {
 	// Theme and Rates may be changed by the app before the first frame.
 	Theme Theme
 	Rates Rates
+	// FrameInterval is the time between two frames of a running animation,
+	// in seconds: the display's refresh interval (the app sets it from the
+	// frames it draws; 0 is 1/60). A value that starts to animate in a frame
+	// moves by at most this much time in it, whatever the frame's dt: the
+	// time before the frame, while nothing animated, belongs to no animation.
+	FrameInterval float32
 	// WheelStep is the number of pixels one wheel notch scrolls (default 48).
 	WheelStep float32
 	// WheelJumps makes a wheel jump straight to where it scrolls, as AppKit's
@@ -192,6 +204,7 @@ type Context struct {
 	reserved, trimFrames int
 	frTrim, fmtTrim      scratchTrim
 	cuts                 []truncCache
+	cutBuf               []byte // emitTruncated's scratch: the kept text and its "…"
 	cutPool              *core.Pool
 	root                 ID
 	frame                uint32
@@ -227,6 +240,7 @@ type Context struct {
 	sW, sH   stack[Size]
 	sOpacity stack[float32]
 	sTint    stack[Tint]
+	sCut     stack[TextCut]
 
 	nextPos    [2]float32
 	hasNextPos bool
@@ -242,6 +256,7 @@ type Context struct {
 	nextCover  bool       // the next box is a cover (NextCover)
 	cullBuf    []gpu.Quad // CullCovered's scratch, between frames
 	nextFade   float32    // the next box's children's fade at its end (NextFadeEnd)
+	nextSFade  float32    // ... while more follows (NextScrollFade)
 	emitFade   [2]float32 // while emitting: the fade of the boxes round this one (NextFadeEnd)
 	bd         backdrops  // this frame's backdrops and the next box's (NextBackdrop)
 	mesh       meshes     // this frame's borrowed quad meshes (mesh.go)
@@ -297,14 +312,15 @@ type Context struct {
 	swapBuf []byte // scratch for EditTranspose (keymoves.go): kept, so a swap of long clusters allocates only while it grows
 
 	// animation (see anim.go)
-	animating             bool
-	settledKey            Key // a box whose animation reached its target this frame (DebugAnimating)
-	rHot, rActive, rFocus float32
-	rScroll               float32
-	av                    []animEnt
-	avPool                *core.Pool
-	avTable               *core.Table
-	avOrder, avPrev       []uint32
+	animating       bool
+	wasAnimating    bool    // the previous frame left something moving (Begin's start)
+	dtFresh         float32 // the time step of a value that starts to move: min(dt, FrameInterval)
+	rScroll         float32
+	hover           hoverHold // what holds the hover still while content moves (signal.go)
+	av              []animEnt
+	avPool          *core.Pool
+	avTable         *core.Table
+	avOrder, avPrev []uint32
 
 	// text fields (textfield.go): the earliest time a field wants a frame
 	// again (ns from the frame start, 0 = none), and the input-method
@@ -339,6 +355,7 @@ type Context struct {
 	nOvs       int
 	ovPrev     [maxOverlays]overlay
 	nOvPrev    int
+	ovInsets   [4]float32       // SetOverlayInsets
 	ovOpen     [maxOverlays]int // c.nparents at each open BeginOverlay
 	nOvOpen    int
 	parentless bool // the next box has no parent (an overlay root)
@@ -466,6 +483,7 @@ func New(sh Shaper) *Context {
 	c.sH.init(Size{})
 	c.sOpacity.init(1)
 	c.sTint.init(Tint{})
+	c.sCut.init(CutTail)
 	c.bindStyles()
 	return c
 }
@@ -553,6 +571,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 		c.rescaleScroll(float64(scale) / float64(old))
 	}
 	c.holdScroll(changed)
+	c.wasAnimating = c.animating
 	c.animating, c.scrollSet = c.nHeld > 0, false // (held input needs the next frame)
 	c.wakeNs, c.imeOK, c.imeCancel, c.secureOn = 0, false, false, false
 	c.takeCommit()
@@ -577,10 +596,17 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 		c.imeOwner = 0
 	}
 	c.nCursorBoxes, c.nDragBoxes = 0, 0
-	c.rHot = rate(c.Rates.Hot, dt)
-	c.rActive = rate(c.Rates.Active, dt)
-	c.rFocus = rate(c.Rates.Focus, dt)
-	c.rScroll = rate(c.Rates.Scroll, dt)
+	c.dtFresh = dt
+	if iv := c.FrameInterval; iv > 0 && iv < dt {
+		c.dtFresh = iv
+	} else if iv <= 0 && dt > 1.0/60 {
+		c.dtFresh = 1.0 / 60
+	}
+	if c.wasAnimating {
+		c.rScroll = rate(c.Rates.Scroll, dt)
+	} else { // nothing moved before this frame: an offset that starts to glide takes no gap
+		c.rScroll = rate(c.Rates.Scroll, c.dtFresh)
+	}
 
 	c.hitTest()
 	c.dropBegin()
@@ -592,6 +618,7 @@ func (c *Context) Begin(in *Input, widthPx, heightPx int, scale, dt float32) {
 	c.rememberRichFocus()
 	c.richFocus = c.richFocus[:0]
 	c.stepScroll()
+	c.stepBoxes()
 	c.trimRetained()
 	c.scrollBoxes = c.scrollBoxes[:0]
 
@@ -833,6 +860,7 @@ func (c *Context) bindStyles() {
 	c.sH.bind(&c.cur.pref[1], &c.nextStyles, 1<<16)
 	c.sOpacity.bind(&c.cur.opacity, &c.nextStyles, 1<<17)
 	c.sTint.bind(&c.cur.tint, &c.nextStyles, 1<<18)
+	c.sCut.bind(&c.cur.textCut, &c.nextStyles, 1<<19)
 	c.styleOwner = c
 }
 
@@ -856,6 +884,7 @@ func (c *Context) resetStyles() {
 	c.sH.reset()
 	c.sOpacity.reset()
 	c.sTint.reset()
+	c.sCut.reset()
 	c.nextStyles = 0
 	c.hasNextPos = false
 	c.nextAnchor, c.nextInset, c.nextNudge = AnchorNone, [2]float32{}, [2]float32{}
@@ -863,7 +892,7 @@ func (c *Context) resetStyles() {
 	c.nextFlags = 0
 	c.nextAudit = 0
 	c.nextCover = false
-	c.nextFade = 0
+	c.nextFade, c.nextSFade = 0, 0
 	c.bd.n, c.bd.hasNext = 0, false
 	c.nextEscClr = false
 	c.nextStill = false
@@ -1039,6 +1068,7 @@ func (c *Context) newBox(flags Flags, key Key) ID {
 	b.auditOff, c.nextAudit = c.nextAudit, 0
 	b.cover, c.nextCover = c.nextCover, false
 	b.fadeEnd, c.nextFade = c.nextFade, 0
+	b.edgeFade, c.nextSFade = c.nextSFade, 0
 	c.takeBackdrop(b)
 	if c.hasNextPos {
 		b.fixed = c.nextPos
@@ -1129,6 +1159,9 @@ func (c *Context) takeNext(b *box) {
 	}
 	if pending&(1<<18) != 0 {
 		c.sTint.takeInto(&b.tint)
+	}
+	if pending&(1<<19) != 0 {
+		c.sCut.takeInto(&b.textCut)
 	}
 }
 

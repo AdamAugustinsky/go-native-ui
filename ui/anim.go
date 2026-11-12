@@ -50,6 +50,7 @@ func (c *Context) KeepValue(key Key, initial, v float32) (prev float32) {
 func (c *Context) animate(key Key, initial, target, k float32) float32 {
 	var e *animEnt
 	var idx uint32
+	fresh := false // the value starts to move in this frame
 	if v, ok := c.avTable.Get(uint64(key)); ok {
 		idx = v
 		e = &c.av[v]
@@ -61,20 +62,27 @@ func (c *Context) animate(key Key, initial, target, k float32) float32 {
 		}
 		c.avTable.Put(uint64(key), i)
 		e = &c.av[i]
-		*e = animEnt{key: key, cur: initial}
+		*e = animEnt{key: key, cur: initial, tgt: initial}
 	}
-	e.tgt = target
 	if e.lastFrame != c.frame { // step once per frame however often it is asked
+		fresh = e.cur == e.tgt // at rest until this frame: the time before it is no one's
+		e.tgt = target
 		c.avOrder = append(c.avOrder, idx)
 		e.lastFrame = c.frame
 		if math.Abs(float64(target-e.cur)) < animEps {
 			e.cur = target
 		} else {
-			e.cur += (target - e.cur) * rate(k, c.dt)
+			dt := c.dt
+			if fresh {
+				dt = c.dtFresh
+			}
+			e.cur += (target - e.cur) * rate(k, dt)
 			if math.Abs(float64(target-e.cur)) < animEps {
 				e.cur = target
 			}
 		}
+	} else {
+		e.tgt = target
 	}
 	if e.cur != target {
 		c.animating = true
@@ -111,10 +119,78 @@ func approach(v *float32, target, rate float32) bool {
 	return true
 }
 
-// animateBoxes steps hot_t, active_t and focus_t of the boxes built this
-// frame and drops the animation values nobody asked for.
+// boxTargets are where the hover, press and focus values of box b are going:
+// hover follows the pointer unless another box holds the button; the press
+// follows the pointer while the button is held on the box, as a release would
+// (off the box it would not click); focus follows the focus.
+func (c *Context) boxTargets(b *box) (hot, active, focus float32) {
+	if b.key == c.hotKey && (c.active[0] == 0 || c.active[0] == b.key) {
+		hot = 1
+	}
+	if b.key == c.active[0] && b.key == c.hotKey {
+		active = 1
+	}
+	if b.key == c.focusKey {
+		focus = 1
+	}
+	return hot, active, focus
+}
+
+// stepState moves a box's state value v toward target: at rate in as it
+// rises (0: at once), at rate out as it falls. A value at rest that starts to
+// move steps by the fresh time step (FrameInterval at most).
+func (c *Context) stepState(v *float32, target, in, out float32) bool {
+	if *v == target {
+		return false
+	}
+	k := out
+	if target > *v {
+		if in <= 0 {
+			*v = target
+			return false
+		}
+		k = in
+	}
+	dt := c.dt
+	if *v == 0 || *v == 1 {
+		dt = c.dtFresh
+	}
+	return approach(v, target, rate(k, dt))
+}
+
+// stepBoxes steps hot_t, active_t and focus_t of the boxes of the last build
+// toward this frame's input (Begin calls it after the pointer and the
+// buttons), so the build reads them as of this frame: a press or a hover that
+// arrives at once shows in the frame of its event.
+func (c *Context) stepBoxes() {
+	r := &c.Rates
+	for _, id := range c.prevOrder {
+		b := &c.boxes[id]
+		if b.flags&(HotAnimation|ActiveAnimation|FocusAnimation) == 0 {
+			continue
+		}
+		hot, active, focus := c.boxTargets(b)
+		moving := false
+		if b.flags&HotAnimation != 0 {
+			moving = c.stepState(&b.hotT, hot, r.HotIn, r.Hot) || moving
+		}
+		if b.flags&ActiveAnimation != 0 {
+			moving = c.stepState(&b.activeT, active, r.ActiveIn, r.Active) || moving
+		}
+		if b.flags&FocusAnimation != 0 {
+			moving = c.stepState(&b.focusT, focus, r.Focus, r.Focus) || moving
+		}
+		if moving {
+			c.animating = true
+		}
+	}
+}
+
+// animateBoxes asks for another frame for the boxes built this frame whose
+// state values are not at their targets (the targets can change after Begin
+// stepped them: the focus moves during the build and in End), and drops the
+// animation values nobody asked for.
 func (c *Context) animateBoxes() {
-	c.settledKey = 0
 	for _, id := range c.order {
 		b := &c.boxes[id]
 		if b.prevTooltip && !b.tooltip {
@@ -126,41 +202,11 @@ func (c *Context) animateBoxes() {
 		if b.flags&(HotAnimation|ActiveAnimation|FocusAnimation) == 0 {
 			continue
 		}
-		if b.flags&HotAnimation != 0 {
-			var t float32
-			if b.key == c.hotKey && (c.active[0] == 0 || c.active[0] == b.key) {
-				t = 1
-			}
-			prev := b.hotT
-			if approach(&b.hotT, t, c.rHot) {
-				c.animating = true
-			} else if b.hotT != prev { // it arrived: Build sees the final value next frame
-				c.animating, c.settledKey = true, b.key
-			}
-		}
-		if b.flags&ActiveAnimation != 0 {
-			var t float32
-			if b.key == c.active[0] {
-				t = 1
-			}
-			prev := b.activeT
-			if approach(&b.activeT, t, c.rActive) {
-				c.animating = true
-			} else if b.activeT != prev { // it arrived: Build sees the final value next frame
-				c.animating, c.settledKey = true, b.key
-			}
-		}
-		if b.flags&FocusAnimation != 0 {
-			var t float32
-			if b.key == c.focusKey {
-				t = 1
-			}
-			prev := b.focusT
-			if approach(&b.focusT, t, c.rFocus) {
-				c.animating = true
-			} else if b.focusT != prev { // it arrived: Build sees the final value next frame
-				c.animating, c.settledKey = true, b.key
-			}
+		hot, active, focus := c.boxTargets(b)
+		if b.flags&HotAnimation != 0 && b.hotT != hot ||
+			b.flags&ActiveAnimation != 0 && b.activeT != active ||
+			b.flags&FocusAnimation != 0 && b.focusT != focus {
+			c.animating = true
 		}
 	}
 	for _, i := range c.avPrev {

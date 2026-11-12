@@ -187,8 +187,7 @@ func badge(k *base.Kit, txt []byte, o BadgeOpts) ui.ID {
 	flags := ui.DrawText
 	if tag {
 		// the padded capsule's width, after a narrow row shrank it
-		c.NextSize(ui.Grow(1), ui.Px(h))
-		flags |= ui.EllipsisOverflowX
+		c.NextSize(ui.Grow(1), ui.Px(h)) // and its text cut with "…" (D105)
 	} else {
 		c.NextSize(ui.Px(w), ui.Px(h))
 	}

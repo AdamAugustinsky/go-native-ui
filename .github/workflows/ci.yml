@@ -1,7 +1,7 @@
 name: ci
 
-# Phase-1 gates: every target cross-compiles, vets and stays under the binary
-# budget; on each OS the spike opens a real window, presents nothing while
+# Phase-1 gates: every target cross-compiles and vets (stripped binary sizes
+# are recorded in the summary, with no limit: D109); on each OS the spike opens a real window, presents nothing while
 # idle and allocates nothing while animating. Runner numbers (startup, CPU,
 # memory) are recorded as artifacts but are not budgets: hosted runners have
 # no GPU and noisy neighbours.
@@ -52,7 +52,6 @@ env:
   # top-level directories, so a new package is gated as soon as it exists.
   PKGS: ./...
   PKGS_EXCLUDE: /probes/|/third_party/
-  MAX_BINARY_BYTES: "10485760"
 
 jobs:
   cross:
@@ -92,7 +91,6 @@ jobs:
             echo "| target | bytes | MiB |"
             echo "|---|---:|---:|"
           } > "$nsum"
-          fail=0
           for t in darwin/arm64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
             os=${t%/*}; arch=${t#*/}
             GOOS=$os GOARCH=$arch go vet $(GOOS=$os GOARCH=$arch go list $PKGS | grep -v -E "$PKGS_EXCLUDE")
@@ -103,30 +101,20 @@ jobs:
             mib=$(awk -v s="$size" 'BEGIN { printf "%.2f", s / 1048576 }')
             echo "| $t | $size | $mib |" >> "$GITHUB_STEP_SUMMARY"
             echo "{\"target\":\"$t\",\"bytes\":$size}" >> dist/sizes.jsonl
-            if [ "$size" -gt "$MAX_BINARY_BYTES" ]; then
-              echo "::error::$t spike is $size bytes (budget $MAX_BINARY_BYTES)"; fail=1
-            fi
             gout=dist/gallery-$os-$arch$ext
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$gout" ./cmd/gallery
             gsize=$(stat -c %s "$gout")
             gmib=$(awk -v s="$gsize" 'BEGIN { printf "%.2f", s / 1048576 }')
             echo "| $t | $gsize | $gmib |" >> "$gsum"
             echo "{\"target\":\"$t\",\"gallery_bytes\":$gsize}" >> dist/sizes.jsonl
-            if [ "$gsize" -gt "$MAX_BINARY_BYTES" ]; then
-              echo "::error::$t gallery is $gsize bytes (budget $MAX_BINARY_BYTES)"; fail=1
-            fi
             nout=dist/notes-$os-$arch$ext
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$nout" ./examples/notes
             nsize=$(stat -c %s "$nout")
             nmib=$(awk -v s="$nsize" 'BEGIN { printf "%.2f", s / 1048576 }')
             echo "| $t | $nsize | $nmib |" >> "$nsum"
             echo "{\"target\":\"$t\",\"notes_bytes\":$nsize}" >> dist/sizes.jsonl
-            if [ "$nsize" -gt "$MAX_BINARY_BYTES" ]; then
-              echo "::error::$t notes is $nsize bytes (budget $MAX_BINARY_BYTES)"; fail=1
-            fi
           done
           cat "$gsum" "$nsum" >> "$GITHUB_STEP_SUMMARY"
-          exit $fail
       - name: patched go-text (third_party/typesetting) tests
         # harfbuzz imports font (golang.org/x/image), whose sums are the root
         # module's: its test runs from here, through the replace.

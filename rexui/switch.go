@@ -25,10 +25,18 @@ type SwitchRecipe struct {
 	// CheckboxRecipe's OnInactive: labelColor at 14 % measured); the off
 	// track and the knob do not change.
 	OnInactive Tint
-	// Off and On fill the track; OffPressed and OnPressed while pressed;
-	// OffDisabled and OnDisabled when disabled (the accent at 70 %, measured
-	// #ED4D98B4 for the pink accent).
-	Off, OffPressed, OffDisabled, On, OnPressed, OnDisabled Tint
+	// Off and On fill the track; OffHover and OnHover under the pointer
+	// (D107); OffPressed and OnPressed while pressed; OffDisabled and
+	// OnDisabled when disabled (the accent at 70 %, measured #ED4D98B4 for
+	// the pink accent).
+	Off, OffHover, OffPressed, OffDisabled, On, OnHover, OnPressed, OnDisabled Tint
+	// Rim is the off track's rim, RimDisabled a disabled one's (CheckboxLook's:
+	// none under strict AppKit). It fades out as the knob travels on.
+	Rim, RimDisabled Tint
+	// Travel is how long the knob takes to cross, Rex's Short (0.18 s),
+	// and TravelStrict under strict AppKit, AppKit's Standard (0.25 s);
+	// nothing under Reduce Motion.
+	Travel, TravelStrict theme.Duration
 	// Knob is the knob's colour; KnobShadow the colour of its shadow, which
 	// lies KnobShadowY points below it with KnobShadowBlur points of blur,
 	// and KnobAmbient that of a second, wide one (KnobAmbientY,
@@ -47,17 +55,20 @@ type SwitchRecipe struct {
 var SwitchLook = SwitchRecipe{
 	KnobW: [theme.NumSizes]float32{theme.SizeRegular: 32, theme.SizeMini: 21, theme.SizeSmall: 26, theme.SizeLarge: 38, theme.SizeXLarge: 38},
 	Inset: [theme.NumSizes]float32{theme.SizeRegular: 2, theme.SizeMini: 1.5, theme.SizeSmall: 2, theme.SizeLarge: 2, theme.SizeXLarge: 2},
-	Off:   Of(theme.Fill1), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
+	Off:   Of(theme.Fill1), OffHover: Of(theme.FillHover), OffPressed: Of(theme.FillPressed), OffDisabled: Of(theme.Fill3),
 	OnInactive: OfAlpha(theme.Label, 0.141, 0.142),
-	On:         Of(theme.Accent), OnPressed: Of(theme.AccentPressed), OnDisabled: OfAlpha(theme.Accent, 0.7, 0.7),
+	On:         Of(theme.Accent), OnHover: Of(theme.AccentHover), OnPressed: Of(theme.AccentPressed), OnDisabled: OfAlpha(theme.Accent, 0.7, 0.7),
+	Rim: Of(theme.ControlRim), RimDisabled: Of(theme.Label4),
+	Travel: theme.DurShort, TravelStrict: theme.DurStandard,
 	Knob: Of(theme.Knob), KnobShadow: OfAlpha(theme.Shadow, 0.15, 0),
 	KnobShadowY: 1, KnobShadowBlur: 1,
 	KnobAmbient: OfAlpha(theme.Shadow, 0.13, 0), KnobAmbientY: 2, KnobAmbientBlur: 10,
 	Label: Of(theme.ControlText), LabelDisabled: Of(theme.TextDisabled),
 }
 
-// Switch builds a switch that edits *on; the knob slides over the theme's
-// Standard duration (at once under Reduce Motion). The label, if any, follows
+// Switch builds a switch that edits *on; the knob slides over the recipe's
+// Travel (the theme's Short; Standard under strict AppKit; at once under
+// Reduce Motion). The label, if any, follows
 // it and is its accessible name.
 //
 //	rexui.Switch(k, "Wi-Fi", &v.wifi, rexui.SwitchOpts{})
@@ -66,12 +77,20 @@ func Switch(k *base.Kit, label string, on *bool, o SwitchOpts) base.Signal {
 	rc := &SwitchLook
 	size := o.Size % theme.NumSizes
 	s := &r.Sizes[size]
-	tg := k.ToggleBool(label, on, base.HoverOff)
+	tg := k.ToggleBool(label, on, base.HoverAuto)
 	target := float32(0)
 	if *on {
 		target = 1
 	}
-	t := c.AnimateValue(ui.KeyN(tg.Key, 5), target, RateFor(r.Motion.Standard))
+	travel := rc.Travel
+	if strict(k) {
+		travel = rc.TravelStrict
+	}
+	rate := r.Enter(r.Motion.Of(travel))
+	if reduced(k) {
+		rate = theme.Instant
+	}
+	t := c.AnimateValue(ui.KeyN(tg.Key, 5), target, rate)
 
 	tw, th := theme.Snap(s.SwitchW), theme.Snap(s.SwitchH)
 	off, onc := rc.Off.RGBA(r), rc.On.RGBA(r)
@@ -81,8 +100,17 @@ func Switch(k *base.Kit, label string, on *bool, o SwitchOpts) base.Signal {
 		off, onc, lc = rc.OffDisabled.RGBA(r), rc.OnDisabled.RGBA(r), rc.LabelDisabled.RGBA(r)
 	case tg.Inactive:
 		onc = rc.OnInactive.RGBA(r)
-	case tg.Down > 0:
-		off, onc = mix(off, rc.OffPressed.RGBA(r), tg.Down), mix(onc, rc.OnPressed.RGBA(r), tg.Down)
+	default:
+		off = stateFill(off, rc.OffHover.RGBA(r), rc.OffPressed.RGBA(r), tg.Visual)
+		onc = stateFill(onc, rc.OnHover.RGBA(r), rc.OnPressed.RGBA(r), tg.Visual)
+	}
+	var rim uint32
+	if !strict(k) {
+		rim = rc.Rim.RGBA(r)
+		if tg.Disabled {
+			rim = rc.RimDisabled.RGBA(r)
+		}
+		rim = theme.WithAlpha(rim, 1-t)
 	}
 	c.NextAxis(ui.AxisX)
 	c.NextCross(ui.CrossCenter)
@@ -91,7 +119,12 @@ func Switch(k *base.Kit, label string, on *bool, o SwitchOpts) base.Signal {
 	c.NextSize(ui.Px(tw), ui.Px(th))
 	c.NextBG(theme.MixRGBA(off, onc, t))
 	c.NextRadius(th / 2)
-	tr := c.BoxKeyed(ui.DrawBackground, ui.KeyN(tg.Key, 1), nil)
+	trf := ui.DrawBackground
+	if rim&0xFF != 0 {
+		c.NextBorder(rim, r.Lines.Rim)
+		trf |= ui.DrawBorder
+	}
+	tr := c.BoxKeyed(trf, ui.KeyN(tg.Key, 1), nil)
 	c.Push(tr)
 	in := pt(k.Scale(), rc.Inset[size])
 	kw, kh := pt(k.Scale(), rc.KnobW[size]), th-2*in

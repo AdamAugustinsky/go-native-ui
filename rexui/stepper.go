@@ -30,8 +30,9 @@ type StepperRecipe struct {
 	// points (20, 24 and 6, measured: 5.8 of a body 19.6 × 23.6).
 	W, H, Radius float32
 	// Fill is the body, FillPressed what a pressed half is darkened with
-	// and FillDisabled a disabled body: ButtonDefault's.
-	Fill, FillPressed, FillDisabled Tint
+	// and FillDisabled a disabled body: ButtonDefault's. FillHover is laid
+	// over the half under the pointer (D107; none under strict AppKit).
+	Fill, FillHover, FillPressed, FillDisabled Tint
 	// Divider is the line between the halves, DividerW × DividerH points at
 	// DividerX, DividerY (14 × 1 at 3, 12; black at 13.6 % or white at
 	// 13.5 %: #CBCBCB over #EBEBEB and #4C4C4C over #303030 measured).
@@ -60,7 +61,7 @@ type StepperRecipe struct {
 // StepperLook is the steppers' recipe.
 var StepperLook = StepperRecipe{
 	W: 20, H: 24, Radius: 6,
-	Fill: Of(theme.Fill2), FillPressed: Of(theme.FillPressed), FillDisabled: Of(theme.FillDisabled),
+	Fill: Of(theme.Fill2), FillHover: Of(theme.Fill4), FillPressed: Of(theme.FillPressed), FillDisabled: Of(theme.FillDisabled),
 	Divider:  OfAlpha(theme.Label, 0.136, 0.135),
 	DividerX: 3, DividerY: 12, DividerW: 14, DividerH: 1,
 	Up:    Chevron{A: [2]float32{4.7, 9.1}, Apex: [2]float32{9.7, 3.7}, B: [2]float32{14.7, 9.1}},
@@ -85,7 +86,7 @@ func Stepper(k *base.Kit, label string, v *float32, lo, hi, step float32, o Step
 	c, r := k.Context(), k.Theme()
 	rc := &StepperLook
 	s := &r.Sizes[o.Size%theme.NumSizes]
-	p := k.PressState(label, base.HoverOff)
+	p := k.PressState(label, base.HoverAuto)
 	f := s.Height / (rc.H * k.Scale())
 	w, h := theme.Snap(rc.W*k.Scale()*f), theme.Snap(s.Height)
 	radius := rc.Radius * k.Scale() * f
@@ -146,17 +147,24 @@ func Stepper(k *base.Kit, label string, v *float32, lo, hi, step float32, o Step
 	k.BeginPress(&p, ui.RoleSlider, ui.Px(w), ui.Px(h), ui.DrawBackground, nil)
 	// the halves: what is clicked, and what darkens while it is pressed
 	var halfFlags ui.Flags
+	hovers := k.Hovers(base.HoverAuto)
 	if !p.Disabled {
 		halfFlags = ui.Clickable | ui.ActiveAnimation
+		if hovers {
+			halfFlags |= ui.HotAnimation
+		}
 	}
-	pressed := rc.FillPressed.RGBA(r)
+	pressed, hover := rc.FillPressed.RGBA(r), rc.FillHover.RGBA(r)
 	for i, key := range [2]ui.Key{upKey, downKey} {
-		a := c.ActiveTOf(key)
-		if p.Disabled {
-			a = 0
+		var v base.Visual
+		if !p.Disabled {
+			v.Down = c.ActiveTOf(key)
+			if hovers {
+				v.Hot = c.HotTOf(key)
+			}
 		}
 		c.NextSize(ui.Pct(1), ui.Px(h/2))
-		c.NextBG(theme.WithAlpha(pressed, a))
+		c.NextBG(stateFill(0, hover, pressed, v))
 		if i == 0 {
 			c.NextRadii(radius, radius, 0, 0)
 		} else {

@@ -175,7 +175,8 @@ func TestAppEventRecordsItsKind(t *testing.T) {
 }
 
 // A box that animates names itself as the cause, with its key, for as long as
-// it moves, and the frames stop when it arrives.
+// it moves, and the frames stop when it arrives. Hover arrives at once (D103),
+// so the motion watched is its fade as the pointer leaves.
 func TestAnimationRecordsTheBoxKey(t *testing.T) {
 	b := &scene{anim: true}
 	o := newStepper(t, b)
@@ -183,6 +184,8 @@ func TestAnimationRecordsTheBoxKey(t *testing.T) {
 		t.Fatal("the scene built no button")
 	}
 	o.Step(0, move(100, 80))
+	settleSteps(t, o)
+	o.Step(stepNs, move(300, 250))
 	drew := 0
 	for i := 0; i < 400; i++ {
 		if !o.Step(stepNs) {

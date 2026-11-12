@@ -48,8 +48,11 @@ type TokenRecipe struct {
 	// Fill is a token's fill (#ABD8FF over white, #0F3F63 over the dark
 	// field measured: the blue at 33 %, whatever the accent), Text its label's colour; Selected
 	// and SelectedInactive are a selected token's fills (the list selection's,
-	// emphasised in a key window), OnSelected its text.
+	// emphasised in a key window), OnSelected its text. FillHover is a
+	// token under the pointer that is not selected (the blue at 42 %, D107;
+	// none under strict AppKit).
 	Fill, Text, Selected, SelectedInactive, OnSelected Tint
+	FillHover                                          Tint
 }
 
 // TokenLook is the token fields' recipe.
@@ -58,6 +61,7 @@ var TokenLook = TokenRecipe{
 	TokenH: 15, PadX: 16.5, Radius: 1.75, Gap: 6.5, LineGap: 1, Inset: 10, MinInput: 24, PadY: 4,
 	Fill: OfAlpha(theme.Blue, 0.33, 0.33), Text: Of(theme.Label),
 	Selected: Of(theme.Selection), SelectedInactive: Of(theme.SelectionUnemph), OnSelected: Of(theme.OnSelection),
+	FillHover: OfAlpha(theme.Blue, 0.42, 0.42),
 }
 
 // TokenFieldSignal is what a token field reports.
@@ -115,7 +119,8 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 	padY := pt(sc, rc.PadY)
 	inset, padR := pt(sc, rc.Inset), pt(sc, fl.InsetX)
 	radius := s.FieldRadius
-	vis := k.VisualOf(fkey, base.HoverOff)
+	vis := k.VisualOf(fkey, base.HoverOff) // the focus ring's state: the field's hover is its tokens'
+	hovers := k.Hovers(base.HoverAuto)
 	k.ApplySize(ui.Pct(1), ui.Children(1))
 	c.NextBG(fl.Fill.RGBA(r))
 	c.NextRadius(radius)
@@ -146,6 +151,8 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 		}
 		if k.Disabled() {
 			fill, fg = r.Colors[theme.Fill2], r.Colors[theme.TextDisabled]
+		} else if hovers && !selected {
+			fill = tintToward(fill, rc.FillHover.RGBA(r), c.HotTOf(tk))
 		}
 		tw := theme.Snap(k.TextWidth(font, t)) + 2*pt(sc, rc.PadX)
 		h := pt(sc, rc.TokenH)
@@ -166,6 +173,9 @@ func TokenField(k *base.Kit, label string, st *TokenFieldState, tokens *[]string
 		tf := ui.DrawBackground
 		if !k.Disabled() {
 			tf |= ui.Clickable
+			if hovers {
+				tf |= ui.HotAnimation
+			}
 		}
 		id := c.BoxKeyed(tf, tk, nil)
 		c.Push(id)

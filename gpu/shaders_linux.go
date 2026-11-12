@@ -251,7 +251,8 @@ void main() {
 			float outer = clamp(0.5 - sd, 0.0, 1.0);
 			if (border > 0.0) {
 				float inner = clamp(0.5 - (sd + border), 0.0, 1.0);
-				col = mix(vBorderColor, col, inner);
+				// The border over the fill in the ring, not in its place (D104).
+				col = mix(vBorderColor + col * (1.0 - vBorderColor.a), col, inner);
 			}
 			res = col * outer;
 		}

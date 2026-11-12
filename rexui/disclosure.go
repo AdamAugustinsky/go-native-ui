@@ -57,6 +57,9 @@ type DisclosureRecipe struct {
 	// (#C3C3C3 and #7A7A7A over white and #1E1E1E; no role names them).
 	// Pressed and Disabled were not measured.
 	Rest, Pressed, Disabled Tint
+	// Hover colours the triangle's chevron under the pointer: half way from
+	// Rest to Pressed (D107).
+	Hover Tint
 }
 
 // DisclosureLook is the disclosure controls' recipe. The chevrons were fitted
@@ -69,6 +72,7 @@ var DisclosureLook = DisclosureRecipe{
 	Width:      1.3, PushWidth: 1.2,
 	Open: 90, PushOpen: 180,
 	Rest: OfAlpha(theme.Label, 0.235, 0.41), Pressed: Of(theme.Label2), Disabled: OfAlpha(theme.Label, 0.1, 0.15),
+	Hover: OfAlpha(theme.Label, 0.37, 0.48),
 }
 
 // Disclosure builds a disclosure triangle or push disclosure button that
@@ -82,7 +86,7 @@ func Disclosure(k *base.Kit, label string, open *bool, o DisclosureOpts) base.Si
 	c, r := k.Context(), k.Theme()
 	rc := &DisclosureLook
 	push := o.Variant%NumDisclosureVariants == DisclosurePush
-	tg := k.ToggleBool(label, open, base.HoverOff)
+	tg := k.ToggleBool(label, open, base.HoverAuto)
 	target := float32(0)
 	if *open {
 		target = 1
@@ -110,8 +114,8 @@ func Disclosure(k *base.Kit, label string, open *bool, o DisclosureOpts) base.Si
 		switch {
 		case tg.Disabled:
 			fg = rc.Disabled.RGBA(r)
-		case tg.Down > 0:
-			fg = mix(fg, rc.Pressed.RGBA(r), tg.Down)
+		default:
+			fg = stateFill(fg, rc.Hover.RGBA(r), rc.Pressed.RGBA(r), tg.Visual)
 		}
 	}
 	px := theme.Snap(box * k.Scale())

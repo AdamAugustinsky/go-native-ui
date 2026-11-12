@@ -19,6 +19,48 @@ func reduced(k *base.Kit) bool {
 	return k.ReduceMotion || k.Theme().Settings.ReduceMotion
 }
 
+// strict reports whether the kit's theme asks for AppKit's static controls
+// (theme.Theme.StrictAppKit): a recipe that departs from what AppKit draws
+// for the sake of response or contrast (a rim, a pressed knob, an eased mark)
+// draws AppKit's instead.
+func strict(k *base.Kit) bool { return k.Theme().StrictAppKit }
+
+// stateEase is how far a state the user changed has shown, 0 to 1: a check
+// mark or a radio dot fading in, keyed by key (the box it is drawn in). It
+// eases toward on over d seconds (the theme's Micro or Short), and is at once
+// under strict AppKit, Reduce Motion, and for a box that did not show.
+func stateEase(k *base.Kit, key ui.Key, on bool, d float32) float32 {
+	rate := RateFor(d)
+	if strict(k) || reduced(k) || !shown(k, key) {
+		rate = theme.Instant
+	}
+	return k.Context().AnimateValue(ui.KeyN(key, 0x5EA5E), b2f(on), rate)
+}
+
+// hoverT is how hovered a part keyed key is, 0 to 1, from whether the
+// pointer is over it this frame (hovering): at once in, fading out at the
+// theme's hover rate (Motion.Hot), and always 0 when the theme is strict
+// AppKit for the default policy (base.Kit.Hovers with h). For parts that are
+// not boxes of their own with a hover animation: a list's rows, a field's
+// outline.
+func hoverT(k *base.Kit, key ui.Key, hovering bool, h base.Hover) float32 {
+	if !k.Hovers(h) {
+		return 0
+	}
+	rate := k.Theme().Motion.Hot
+	if hovering {
+		rate = theme.Instant
+	}
+	return k.Context().AnimateValue(ui.KeyN(key, 0x40E2), b2f(hovering), rate)
+}
+
+// stateFill is a control's fill at rest, laid toward its hover fill by the
+// hover and then toward its pressed fill by the press (base.Visual's Hot and
+// Down), so a press is never lighter than the hover it follows.
+func stateFill(rest, hover, pressed uint32, v base.Visual) uint32 {
+	return tintToward(tintToward(rest, hover, v.Hot), pressed, v.Down)
+}
+
 // loops reports whether a looping animation in box id may run now: motion is
 // not reduced, the window is showing (not minimised, hidden or covered:
 // ui.Input.Hidden), and some of the box is in view as the previous frame laid

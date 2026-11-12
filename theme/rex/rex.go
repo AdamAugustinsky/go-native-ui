@@ -36,6 +36,7 @@ func Theme() *theme.Theme {
 		// edge highlight, 104 points of the top left corner of the right pane).
 		Corners:      theme.CornersCircular,
 		Roles:        roles,
+		RoleBasis:    &roles,
 		Text:         textStyles,
 		SystemColors: true,
 		NewChrome:    func() theme.Chrome { return &chrome{} },

@@ -6,8 +6,23 @@ package ui
 // hit-tested before it, wherever in the build it is made: BeginOverlay …
 // EndOverlay can be called inside any box (a menu inside its button), and the
 // overlay's boxes belong to the overlay, not to that box. Each overlay is
-// placed against an anchor rectangle and kept inside the window. They form a
+// placed against an anchor (a rectangle, or a box laid out in the same frame:
+// BeginOverlayOn) and kept inside the window's usable area (D106). They form a
 // stack in build order (a submenu is built inside its menu and lies above it).
+//
+// Placement. A popup or tooltip goes on its Placement's side of the anchor,
+// OverlayOpts.Gap away, aligned with the anchor by OverlayOpts.Align. It keeps
+// 8 pt from the window's edges and out of the insets (SetOverlayInsets, and the
+// system's window buttons, SystemButtons, below which nothing is placed). On
+// the side's axis it flips to the other side when its own has no room and the
+// other has; when neither has, it takes the larger, and with OverlayOpts.Fit
+// its length is bounded to that room (a scroll box in it that can give, sized
+// Pct, Grow or Children(0), then scrolls); without Fit it shifts into the
+// area. Along the anchor, an alignment that runs out flips to the other end
+// when that fits, then shifts, and the overlay keeps touching its anchor while
+// the window allows. A dialog (OverlayModal) and PlaceCenter centre on the
+// anchor and are kept inside the window only. A nested popup and a tooltip
+// follow the same rules.
 //
 // A popup (menu, dropdown) is closed by a press outside it and by Escape; ui
 // reports that to the popup's owner (OverlaySignal.Dismissed) and the owner
@@ -104,7 +119,36 @@ type OverlayOpts struct {
 	// the owner places it against the new layout. Only hosts below the popup
 	// count.
 	AvoidHosts bool
+
+	// Align, Gap and Fit place any overlay but a dialog (a tooltip too; the
+	// options above are a popup's only).
+
+	// Align is where the overlay sits along its anchor's edge: OverlayStart
+	// (the left edges of a PlaceBelow or PlaceAbove overlay and its anchor
+	// aligned, the tops of a PlaceRight or PlaceLeft one; the zero value),
+	// OverlayCenter or OverlayEnd.
+	Align OverlayAlign
+	// Gap is the room between the anchor and the overlay, in pixels.
+	Gap float32
+	// Fit bounds the overlay's length on its side's axis to the room there
+	// when it fits on neither side (see Placement), and its other length to
+	// the usable area.
+	Fit bool
 }
+
+// OverlayAlign is where an overlay sits along its anchor's edge
+// (OverlayOpts.Align).
+type OverlayAlign uint8
+
+const (
+	// OverlayStart aligns the overlay's start with the anchor's: left edges
+	// below or above it, tops beside it.
+	OverlayStart OverlayAlign = iota
+	// OverlayCenter centres the overlay on the anchor's edge.
+	OverlayCenter
+	// OverlayEnd aligns the ends: right edges below or above, bottoms beside.
+	OverlayEnd
+)
 
 // NextOverlay sets the options of the next BeginOverlay (a popup or modal).
 func (c *Context) NextOverlay(o OverlayOpts) { c.nextOvl = o }
@@ -117,6 +161,10 @@ type OverlaySignal struct {
 	// Rect is the overlay's rectangle (x0, y0, x1, y1) in the previous frame,
 	// zero for one that has just opened.
 	Rect [4]float32
+	// Flipped: the previous frame placed it on the other side of its anchor
+	// than its Placement asks, for want of room (an arrow points the other
+	// way).
+	Flipped bool
 }
 
 // maxOverlays is the number of overlays one frame can hold at once.
@@ -130,6 +178,8 @@ type overlay struct {
 	place  Placement
 	opened bool // it was not built in the previous frame
 	anchor [4]float32
+	on     ID   // the anchor box, laid out this frame (BeginOverlayOn); 0: anchor
+	flip   bool // placed on the other side than asked (OverlaySignal.Flipped)
 	opts   OverlayOpts
 	// avoided: AvoidHosts left it out of this frame, because it lay over the
 	// host whose clipped rectangle is avoidedHost.
@@ -150,6 +200,24 @@ var overlayBase = HashString(0, "ui:overlay")
 // Hoverable, so what it covers is not hit-tested) and can have the focus;
 // a tooltip is inert. At most 16 overlays can be open; one more panics.
 func (c *Context) BeginOverlay(key Key, kind OverlayKind, anchor [4]float32, place Placement) OverlaySignal {
+	return c.beginOverlay(key, kind, anchor, 0, place)
+}
+
+// BeginOverlayOn is BeginOverlay against box anchor of this frame (the button
+// that opens a menu, the item of a submenu): the overlay is placed against the
+// rectangle layout gives the anchor in this frame, not the last one, so it
+// never lands a frame late and then moves. The anchor must be built before
+// BeginOverlayOn (its ID says it is); the bound of OverlayOpts.Fit is
+// reckoned from the anchor's last rectangle, as sizes are known before
+// positions, and a frame is asked for when the anchor moved.
+func (c *Context) BeginOverlayOn(key Key, kind OverlayKind, anchor ID, place Placement) OverlaySignal {
+	if anchor == 0 || int(anchor) >= len(c.boxes) || c.boxes[anchor].lastFrame != c.frame {
+		panic("ui: BeginOverlayOn with a box not built this frame")
+	}
+	return c.beginOverlay(key, kind, c.boxes[anchor].rect, anchor, place)
+}
+
+func (c *Context) beginOverlay(key Key, kind OverlayKind, anchor [4]float32, on ID, place Placement) OverlaySignal {
 	if c.nOvs >= maxOverlays || c.nOvOpen >= len(c.ovOpen) {
 		panic("ui: too many overlays")
 	}
@@ -157,8 +225,8 @@ func (c *Context) BeginOverlay(key Key, kind OverlayKind, anchor [4]float32, pla
 	_, existed := c.table.Get(uint64(okey))
 	opts := c.nextOvl
 	c.nextOvl = OverlayOpts{}
-	if kind != OverlayPopup {
-		opts = OverlayOpts{} // (options are for popups)
+	if kind != OverlayPopup { // (those are a popup's; the placement is anyone's)
+		opts = OverlayOpts{Align: opts.Align, Gap: opts.Gap, Fit: opts.Fit}
 	}
 	var flags Flags
 	if kind != OverlayTooltip {
@@ -177,11 +245,16 @@ func (c *Context) BeginOverlay(key Key, kind OverlayKind, anchor [4]float32, pla
 	if !existed && !opts.NoFocus {
 		b.savedFocus = c.focusKey
 	}
-	c.ovs[c.nOvs] = overlay{id: id, key: b.key, kind: kind, place: place, opened: !existed, anchor: anchor, opts: opts}
+	c.ovs[c.nOvs] = overlay{id: id, key: b.key, kind: kind, place: place, opened: !existed, anchor: anchor, on: on, opts: opts}
 	c.nOvs++
 	c.Push(id)
 	var s OverlaySignal
 	s.Rect = b.rect
+	for i := 0; i < c.nOvPrev; i++ {
+		if c.ovPrev[i].key == b.key {
+			s.Flipped = c.ovPrev[i].flip
+		}
+	}
 	for i := 0; i < c.nDismiss; i++ {
 		if c.dismissed[i] == b.key {
 			s.Dismissed = true
@@ -341,61 +414,190 @@ func (c *Context) dismiss(k Key) {
 	}
 }
 
-// overlayEdgePt is the room a popup keeps from the window's left and right edges, in points.
+// overlayEdgePt is the room a popup or tooltip keeps from the window's edges
+// and its insets, in points.
 const overlayEdgePt = 8
 
+// SetOverlayInsets keeps popups and tooltips out of the window's edges by
+// these many pixels (left, top, right, bottom), on top of their 8 pt margin:
+// a titlebar band the app draws under which nothing should open. The
+// rectangle of the system's window buttons (SetSystemButtons) is a top inset
+// already. It holds until it is set again.
+func (c *Context) SetOverlayInsets(l, t, r, b float32) { c.ovInsets = [4]float32{l, t, r, b} }
+
+// OverlayInsets are the insets popups and tooltips keep out of (left, top,
+// right, bottom, pixels): SetOverlayInsets', with the top at least the bottom
+// of the system's window buttons when there are any.
+func (c *Context) OverlayInsets() [4]float32 {
+	in := c.ovInsets
+	if sb := c.win.buttons; sb[2] > sb[0] && sb[3] > sb[1] {
+		in[1] = max(in[1], sb[3])
+	}
+	return in
+}
+
+// overlayArea is where overlay ov may lie: lo and hi per axis, the window less
+// the insets and the margin, and insLo and insHi, the window less the insets
+// only (a dialog and a centred overlay: the window).
+func (c *Context) overlayArea(ov *overlay) (lo, hi, insLo, insHi [2]float32) {
+	W, H := float32(c.w), float32(c.h)
+	if ov.kind == OverlayModal || ov.place == PlaceCenter {
+		return [2]float32{}, [2]float32{W, H}, [2]float32{}, [2]float32{W, H}
+	}
+	in := c.OverlayInsets()
+	m := c.Pt(overlayEdgePt)
+	insLo, insHi = [2]float32{in[0], in[1]}, [2]float32{W - in[2], H - in[3]}
+	return [2]float32{insLo[0] + m, insLo[1] + m}, [2]float32{insHi[0] - m, insHi[1] - m}, insLo, insHi
+}
+
+// sideAxis is the axis along which an overlay placed so leaves its anchor: Y
+// below and above, X beside.
+func sideAxis(p Placement) int {
+	if p == PlaceRight || p == PlaceLeft {
+		return 0
+	}
+	return 1
+}
+
+// overlaySide is on which side of anchor a an overlay ov of length size on
+// its side's axis goes: after (below, right) or before, and the room there.
+// The room is reckoned within lo..hi (the margin kept); when the overlay fits
+// on neither side so, but does against the insets (insLo..insHi), the margin
+// yields: an owner that sized it to the room up to the window's edge (a
+// completion list above its field) keeps it against its anchor. It flips to
+// the other side when its own has too little room and the other has enough,
+// or more.
+func overlaySide(ov *overlay, a [4]float32, size float32, lo, hi, insLo, insHi [2]float32) (after bool, room float32) {
+	ax, g := sideAxis(ov.place), ov.opts.Gap
+	pref := ov.place == PlaceBelow || ov.place == PlaceRight
+	rooms := func(lo, hi [2]float32) (own, other float32) {
+		before, aft := a[ax]-g-lo[ax], hi[ax]-(a[ax+2]+g)
+		if pref {
+			return aft, before
+		}
+		return before, aft
+	}
+	own, other := rooms(lo, hi)
+	if size > own && size > other {
+		if io, ix := rooms(insLo, insHi); size <= io {
+			return pref, io
+		} else if size <= ix {
+			return !pref, ix
+		}
+	}
+	if size > own && (size <= other || other > own) {
+		return !pref, max(other, 0)
+	}
+	return pref, max(own, 0)
+}
+
+// fitOverlay bounds overlay root b's size on axis a for OverlayOpts.Fit (the
+// violations stage of sizeAxis, before its children are fitted to it).
+func (c *Context) fitOverlay(b *box, a int) {
+	ov := &c.ovs[b.ovl-1]
+	if !ov.opts.Fit || ov.kind == OverlayModal || ov.place == PlaceCenter {
+		return
+	}
+	lo, hi, insLo, insHi := c.overlayArea(ov)
+	if a == sideAxis(ov.place) {
+		if _, room := overlaySide(ov, ov.anchor, b.size[a], lo, hi, insLo, insHi); b.size[a] > room && room > 0 {
+			b.size[a] = room
+		}
+		return
+	}
+	if r := hi[a] - lo[a]; b.size[a] > r && r > 0 {
+		b.size[a] = r
+	}
+}
+
 // placeOverlay positions an overlay root against its anchor once its size is
-// known, keeping it inside the window.
+// known (see Placement in the package's overlay notes): side, alignment, shift
+// into the usable area, attachment to the anchor, and the window last.
 func (c *Context) placeOverlay(b *box) {
 	ov := &c.ovs[b.ovl-1]
-	W, H := float32(c.w), float32(c.h)
-	w, h := b.size[0], b.size[1]
+	if ov.on != 0 { // the anchor's rectangle of this frame: built before, so placed already
+		if r := c.boxes[ov.on].rect; r != ov.anchor {
+			if ov.opts.Fit {
+				c.animating = true // the bound was reckoned from where it was
+			}
+			ov.anchor = r
+		}
+	}
 	a := ov.anchor
-	// a popup keeps clear of the window's sides, as AppKit's menus and popovers do (it touched
-	// them: a model picker opened near the right edge ran to the last pixel); a dialog centred
-	// on the window and a tooltip keep the plain clamp
-	var m float32
-	if ov.kind != OverlayModal && ov.kind != OverlayTooltip && ov.place != PlaceCenter {
-		m = c.Pt(overlayEdgePt)
+	win := [2]float32{float32(c.w), float32(c.h)}
+	size := b.size
+	var pos [2]float32
+	ov.flip = false
+	if ov.kind == OverlayModal || ov.place == PlaceCenter {
+		pos = legacySide(ov.place, a, size)
+	} else {
+		lo, hi, insLo, insHi := c.overlayArea(ov)
+		ax := sideAxis(ov.place)
+		cx := 1 - ax
+		after, room := overlaySide(ov, a, size[ax], lo, hi, insLo, insHi)
+		ov.flip = after != (ov.place == PlaceBelow || ov.place == PlaceRight)
+		if after {
+			pos[ax] = a[ax+2] + ov.opts.Gap
+		} else {
+			pos[ax] = a[ax] - ov.opts.Gap - size[ax]
+		}
+		start, end := a[cx], a[cx+2]-size[cx]
+		switch ov.opts.Align {
+		case OverlayCenter:
+			pos[cx] = (a[cx] + a[cx+2] - size[cx]) / 2
+		case OverlayEnd:
+			pos[cx] = end
+			if end < lo[cx] && start+size[cx] <= hi[cx] { // no room before it: the starts aligned
+				pos[cx] = start
+			}
+		default:
+			pos[cx] = start
+			if start+size[cx] > hi[cx] && end >= lo[cx] { // no room after it: the ends aligned, as a menu from a button near the window's end
+				pos[cx] = end
+			}
+		}
+		for i := 0; i < 2; i++ { // shift into the area; one too large for it keeps the insets, then the window
+			l, h := lo[i], hi[i]
+			if i == ax && size[i] <= room { // it fits there: against its anchor, the margin is for its far edge
+				l, h = insLo[i], insHi[i]
+			}
+			if size[i] > h-l {
+				l, h = insLo[i], insHi[i]
+			}
+			if size[i] > h-l {
+				l, h = 0, win[i]
+			}
+			pos[i] = max(min(pos[i], h-size[i]), l)
+		}
+		// still touching its anchor along the anchor's edge (into the margin,
+		// not the insets)
+		pos[cx] = min(max(pos[cx], a[cx]-size[cx]), a[cx+2])
+		if size[cx] <= insHi[cx]-insLo[cx] {
+			pos[cx] = max(min(pos[cx], insHi[cx]-size[cx]), insLo[cx])
+		}
 	}
-	var x, y float32
-	switch ov.place {
-	case PlaceBelow:
-		x, y = a[0], a[3]
-		if y+h > H && a[1]-h >= 0 {
-			y = a[1] - h
-		}
-		if x+w > W-m && a[2]-w >= m { // no room to the right: right edges aligned, as a menu
-			x = a[2] - w // from a button near the window's end opens
-		}
-	case PlaceAbove:
-		x, y = a[0], a[1]-h
-		if y < 0 && a[3]+h <= H {
-			y = a[3]
-		}
-		if x+w > W-m && a[2]-w >= m {
-			x = a[2] - w
-		}
-	case PlaceRight:
-		x, y = a[2], a[1]
-		if x+w > W && a[0]-w >= 0 {
-			x = a[0] - w
-		}
-	case PlaceLeft:
-		x, y = a[0]-w, a[1]
-		if x < 0 && a[2]+w <= W {
-			x = a[2]
-		}
-	case PlaceCenter:
-		x, y = (a[0]+a[2]-w)/2, (a[1]+a[3]-h)/2
+	for i := 0; i < 2; i++ {
+		pos[i] = max(min(pos[i], win[i]-size[i]), 0)
 	}
-	if w+2*m > W { // too wide for the margin: the window's edge, as before
-		m = 0
-	}
-	x = max(min(x, W-w-m), m)
-	y = max(min(y, H-h), 0) // owners size popups to the height they fit (a composer's list)
-	b.origin = [2]float32{x, y}
+	b.origin = pos
 	setRect(b)
+}
+
+// legacySide is where a dialog or a centred overlay goes, before it is kept
+// in the window: centred on the anchor (PlaceCenter), or on a side of it with
+// the starts aligned (a dialog takes none of a popup's rules).
+func legacySide(p Placement, a [4]float32, size [2]float32) [2]float32 {
+	switch p {
+	case PlaceBelow:
+		return [2]float32{a[0], a[3]}
+	case PlaceAbove:
+		return [2]float32{a[0], a[1] - size[1]}
+	case PlaceRight:
+		return [2]float32{a[2], a[1]}
+	case PlaceLeft:
+		return [2]float32{a[0] - size[0], a[1]}
+	}
+	return [2]float32{(a[0] + a[2] - size[0]) / 2, (a[1] + a[3] - size[1]) / 2}
 }
 
 // avoidHosts hides, in the finished layout, the AvoidHosts overlays that lie

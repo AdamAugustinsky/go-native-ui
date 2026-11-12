@@ -244,7 +244,8 @@ fragment float4 fs_main(VOut in [[stage_in]],
 			if (border > 0.0) {
 				float inner = clamp(0.5 - (sd + border), 0.0, 1.0);
 				float4 bc = premul(unpack_rgba(quads[in.inst].borderColor));
-				col = mix(bc, col, inner);
+				// The border over the fill in the ring, not in its place (D104).
+				col = mix(bc + col * (1.0 - bc.a), col, inner);
 			}
 			res = col * outer;
 		}

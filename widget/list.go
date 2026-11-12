@@ -83,7 +83,7 @@ func empty(l *base.List, msg []byte, st TextStyle) {
 	c.NextAlign(b.TakeAlign(ui.AlignLeft))
 	c.NextRole(ui.RoleLabel)
 	c.NextSemNameBytes(msg)
-	c.BoxKeyed(ui.DrawText|ui.FadeOverflowX, ui.KeyN(l.BoxKey(), 2), msg)
+	c.BoxKeyed(ui.DrawText, ui.KeyN(l.BoxKey(), 2), msg)
 }
 
 // endList closes the rows of l and builds its scroll bar.

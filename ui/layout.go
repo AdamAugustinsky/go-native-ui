@@ -104,6 +104,25 @@ func (c *Context) shrinkLine(p *box, a int, excess float32) float32 {
 			break // one pass, as without minimums: a strictness gives its share once
 		}
 	}
+	// Last, a line of text that is cut when it does not fit gives way rather
+	// than run the line past its parent's end (D105): its strictness keeps
+	// it whole only while nothing else has to go.
+	if excess > 0.001 && a == 0 {
+		var room float32
+		for ch := p.first; ch != 0; ch = boxes[ch].next {
+			if cb := &boxes[ch]; c.textGives(cb) {
+				room += max(0, cb.size[0]-cb.lo[0])
+			}
+		}
+		if room > 0 {
+			take := min(excess, room)
+			for ch := p.first; ch != 0; ch = boxes[ch].next {
+				if cb := &boxes[ch]; c.textGives(cb) {
+					cb.size[0] -= take * max(0, cb.size[0]-cb.lo[0]) / room
+				}
+			}
+		}
+	}
 	var total float32
 	for ch := p.first; ch != 0; ch = boxes[ch].next {
 		if cb := &boxes[ch]; !cb.floatingOn(a) {
@@ -111,6 +130,15 @@ func (c *Context) shrinkLine(p *box, a int, excess float32) float32 {
 		}
 	}
 	return total
+}
+
+// textGives reports whether cb is a line of text sized by its text that layout
+// may make narrower than its text when its parent is too small: it is in the
+// flow and cuts its text (its TextCut is not CutNone). Wrapped and rich text
+// keep the old rule (strictness).
+func (c *Context) textGives(cb *box) bool {
+	return cb.pref[0].Kind == SizeText && cb.flags&(DrawText|WrapText|FloatingX) == DrawText &&
+		cb.txt.Len > 0 && cb.rich == 0 && c.cutOf(cb) != CutNone
 }
 
 // crossOf is how box cb sits across its parent's axis: its NextAlignSelf, or
@@ -366,6 +394,9 @@ func (c *Context) sizeAxis(a int) {
 	// 4. violations, parents first so a shrunk parent shrinks its children in turn
 	for _, id := range order {
 		p := &boxes[id]
+		if p.ovRoot {
+			c.fitOverlay(p, a)
+		}
 		if a == 0 {
 			c.fitText(p)
 		}
@@ -402,6 +433,9 @@ func (c *Context) sizeAxis(a int) {
 			} else {
 				if excess := cb.size[a] - inner; !p.scrollOn(a) && excess > 0 {
 					cb.size[a] -= min(excess, cb.give(a))
+					if a == 0 && cb.size[0] > inner && c.textGives(cb) { // a label wider than its column is cut to it
+						cb.size[0] = max(inner, cb.lo[0])
+					}
 				}
 				total = max(total, cb.size[a])
 			}
