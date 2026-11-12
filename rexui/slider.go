@@ -30,8 +30,11 @@ type SliderRecipe struct {
 	// held, wherever the pointer is (base.Kit.HeldDown). Strict AppKit
 	// themes show neither.
 	RestHover, FilledHover, KnobPressed Tint
-	// Rim edges the empty track (ControlRim, CheckboxLook's; none under
-	// strict AppKit), RimDisabled a disabled one's.
+	// Rim edges the empty track and RimDisabled a disabled one's (none under
+	// strict AppKit). Both are None by default: on a track 4 pt high a 1 pt
+	// rim leaves a 2 pt fill between two lines, which reads as a hollow
+	// tube, and the knob and the filled part already say where the slider
+	// is. Set Rim to theme.ControlRim for a rimmed track.
 	Rim, RimDisabled Tint
 	// FilledInactive replaces Filled in a window that is not the key window:
 	// labelColor at 22.7 % (#C5C5C5 over white, #515151 over #1E1E1E measured).
@@ -52,7 +55,7 @@ var SliderLook = SliderRecipe{
 	Rest:   Of(theme.Fill1), Filled: Of(theme.Accent), FilledDisabled: OfAlpha(theme.Label, 0.15, 0.15),
 	FilledInactive: OfAlpha(theme.Label, 0.227, 0.227),
 	RestHover:      Of(theme.FillHover), FilledHover: Of(theme.AccentHover), KnobPressed: OfAlpha(theme.Shadow, 0.1, 0.18),
-	Rim: Of(theme.ControlRim), RimDisabled: Of(theme.Label4),
+	Rim: None, RimDisabled: None,
 	Knob: Of(theme.Knob), KnobShadow: OfAlpha(theme.Shadow, 0.25, 0),
 	KnobShadowY: 0.5, KnobShadowBlur: 2,
 }

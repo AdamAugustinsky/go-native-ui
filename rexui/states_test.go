@@ -165,8 +165,9 @@ func TestStrictAppKitControlsIgnoreThePointer(t *testing.T) {
 	}
 }
 
-// The off box, radio and track have a rim at 3:1 or better on the window, in
-// both modes, and strict AppKit draws none (AppKit's box is borderless).
+// The off box, radio and switch have a rim at 3:1 or better on the window, in
+// both modes, the slider's thin track has none, and strict AppKit draws none
+// at all (AppKit's box is borderless).
 func TestOffControlsHaveARim(t *testing.T) {
 	off, sw := false, false
 	radio := 0
@@ -193,9 +194,9 @@ func TestOffControlsHaveARim(t *testing.T) {
 	for _, m := range []theme.Mode{theme.Light, theme.Dark} {
 		g := newRig(t, m, nil, build)
 		g.settle()
-		// the box, radio B, the switch and the slider's empty track
-		if n := rims(g); n != 4 {
-			t.Errorf("%v: %d rims, want 4", m, n)
+		// the box, radio B and the switch; not the slider's empty track
+		if n := rims(g); n != 3 {
+			t.Errorf("%v: %d rims, want 3", m, n)
 		}
 		r := g.k.Theme()
 		if c := theme.ContrastOn(r.Colors[theme.ControlRim], r.Colors[theme.Window], r.Colors[theme.Window]); c < 3 {

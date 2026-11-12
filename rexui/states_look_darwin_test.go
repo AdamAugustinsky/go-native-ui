@@ -89,7 +89,7 @@ func (s *statesScene) Build(c *ui.Context) {
 
 // The state matrix's look, light and dark (testdata/states-*.png): the
 // hover a step up from rest and the press a step further, the rims of the
-// off box, radio, switch and slider track (D107).
+// off box, radio and switch (D107).
 func TestStatesLook(t *testing.T) {
 	for _, m := range []struct {
 		name string
