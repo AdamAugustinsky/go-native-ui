@@ -80,10 +80,12 @@ func Link(k *base.Kit, label string, o LinkOpts) base.Signal {
 		ul = max(p.Hot, p.Ring)
 	}
 	if ul > 0 {
+		// as wide as the link itself, which is its text's width unless a
+		// crowded row has cut it (D105): never past its end
 		sc := k.Scale()
-		w := k.TextWidth(st.Font, p.Name)
 		h := theme.Snap(rc.UnderlineH * sc)
-		theme.At(c, 0, theme.Snap(st.Baseline+rc.UnderlineY*sc), w, h)
+		c.NextPos(0, theme.Snap(st.Baseline+rc.UnderlineY*sc))
+		c.NextSize(ui.Pct(1), ui.Px(h))
 		c.NextBG(theme.WithAlpha(col, ul))
 		c.BoxKeyed(ui.DrawBackground|base.Floating, ui.KeyN(p.Key, 1), nil)
 	}

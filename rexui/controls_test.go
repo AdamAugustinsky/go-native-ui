@@ -9,6 +9,7 @@ import (
 	"gonativeui/rexui/mdview"
 	"gonativeui/theme"
 	"gonativeui/ui"
+	"gonativeui/widget/widgettest"
 )
 
 // pressAt moves the pointer to (x, y) and presses the left button, a frame
@@ -388,6 +389,20 @@ func TestHelpButtonAndToggleButton(t *testing.T) {
 	if on || accented() {
 		t.Fatalf("Space with the focus: on %v, in the accent %v", on, accented())
 	}
+}
+
+// A link in a row too narrow for it is cut like any text (D105), and its
+// underline ends with it: on Linux the simulated user found it 7 px past.
+func TestACutLinksUnderlineEndsWithIt(t *testing.T) {
+	g := newRig(t, theme.Light, nil, column(func(g *rig) {
+		g.c.NextSize(ui.Px(40), ui.Children(1))
+		g.c.NextAxis(ui.AxisX)
+		g.c.Push(g.c.Box(0, "narrow"))
+		rexui.Link(g.k, "Learn more about this", rexui.LinkOpts{})
+		g.c.Pop()
+	}))
+	g.settle()
+	widgettest.AuditLayout(t, "a link in a narrow row", g.c)
 }
 
 func TestLinkReportsAndNeverOpens(t *testing.T) {
