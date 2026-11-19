@@ -87,9 +87,13 @@ type TabsRecipe struct {
 	// (x, y); MinW and MaxW a tab's width limits; CapsuleRadius and
 	// PillRadius the corners (the tabs' hover and press fills take
 	// PillRadius too).
-	Height        float32
-	Inset         [2]float32
-	MinW, MaxW    float32
+	Height     float32
+	Inset      [2]float32
+	MinW, MaxW float32
+	// Gap is the room between two tabs' pills: each tab's pill, hover and
+	// press fills and contents keep Gap/2 from its slot's ends (its press
+	// still takes the whole slot, so the room between is no dead zone).
+	Gap           float32
 	CapsuleRadius float32
 	PillRadius    float32
 	// Capsule fills the capsule top to bottom; CapsuleBackdrop replaces it
@@ -155,7 +159,7 @@ type TabsRecipe struct {
 // lengths in points are its reference pixels halved.
 var TabsRecipes = [NumTabsVariants]TabsRecipe{
 	TabsRex: {
-		Height: 30, Inset: [2]float32{1.5, 2}, MinW: 20, MaxW: 260, CapsuleRadius: 17, PillRadius: 15,
+		Height: 30, Inset: [2]float32{1.5, 2}, MinW: 20, MaxW: 260, Gap: 4, CapsuleRadius: 17, PillRadius: 15,
 		Capsule:         [2]Pair{Solid(0xE8DCE9, 0x3B343B), Solid(0xE2DCE2, 0x37313A)},
 		CapsuleBackdrop: [2]Pair{PairA(0xE8DCE9, 0x3B343B, 0.5, 0.55), PairA(0xE2DCE2, 0x37313A, 0.5, 0.55)},
 		Pill:            [2]Pair{Solid(0xFFFAFF, 0x4B4248), Solid(0xFCF8FC, 0x453E44)},
@@ -754,9 +758,10 @@ func (b *TabBar) Begin(k *base.Kit, label string, tabs []Tab, sel int, o TabsOpt
 	// the pill, with the rim around its two end caps only
 	b.pillRect = [4]float32{}
 	if sel >= 0 && sel < n {
-		pill := [4]float32{theme.Snap(t.pos[sel]), t.tabY0, theme.Snap(t.pos[sel] + slot), t.tabY1}
+		gap := rc.Gap * s / 2
+		pill := [4]float32{theme.Snap(t.pos[sel] + gap), t.tabY0, theme.Snap(t.pos[sel] + slot - gap), t.tabY1}
 		if sw > 0.001 && !(b.dragging && tabs[sel].ID == b.press) {
-			pill[0], pill[2] = theme.Snap(sx0/sw), theme.Snap(sx1/sw)
+			pill[0], pill[2] = theme.Snap(sx0/sw+gap), theme.Snap(sx1/sw-gap)
 		}
 		b.pillRect = [4]float32{t.wox + pill[0], t.woy + pill[1], t.wox + pill[2], t.woy + pill[3]}
 		theme.At(c, pill[0]-t.ox, pill[1]-t.oy, pill[2]-pill[0], pill[3]-pill[1])
@@ -819,7 +824,8 @@ func (t *TabsBuild) BeginTab(j int) TabCell {
 	}
 	t.hot[i] = hot
 	act := t.act[i]
-	rc0 := [4]float32{theme.Snap(t.pos[i]) - t.ox, t.tabY0 - t.oy, theme.Snap(t.pos[i]+t.slotW) - t.ox, t.tabY1 - t.oy}
+	g := rc.Gap * t.k.Theme().Scale / 2 // the pills' room between them
+	rc0 := [4]float32{theme.Snap(t.pos[i]+g) - t.ox, t.tabY0 - t.oy, theme.Snap(t.pos[i]+t.slotW-g) - t.ox, t.tabY1 - t.oy}
 
 	theme.At(c, rc0[0], rc0[1], rc0[2]-rc0[0], rc0[3]-rc0[1])
 	hv := rc.Hover
@@ -843,7 +849,7 @@ func (t *TabsBuild) BeginTab(j int) TabCell {
 	}
 	id := c.BoxKeyed(flags, key, nil)
 	c.Push(id)
-	cell := TabCell{Index: i, ID: id, Rect: [4]float32{rc0[0] + t.ox, t.tabY0, rc0[2] + t.ox, t.tabY1}, X: t.pos[i], Chosen: act, Hot: hot, KeyW: t.kw, Backdrop: r.Backdrop}
+	cell := TabCell{Index: i, ID: id, Rect: [4]float32{rc0[0] + t.ox, t.tabY0, rc0[2] + t.ox, t.tabY1}, X: t.pos[i] + g, Chosen: act, Hot: hot, KeyW: t.kw, Backdrop: r.Backdrop}
 
 	// held down: the tab darkens under the pointer (a segment's press), on
 	// the pill as on an unchosen tab; it was chosen on the press already

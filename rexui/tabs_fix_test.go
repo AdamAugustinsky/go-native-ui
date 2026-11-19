@@ -17,8 +17,10 @@ func TestTabsReduceMotion(t *testing.T) {
 	g.settle()
 	g.key('3', ui.PrimaryMod())
 	g.frame()
-	if p, r := m.bar.PillRect(), m.bar.TabRect(2); p[0] != r[0] || p[2] != r[2] {
-		t.Errorf("one frame after the choice the pill is at %v, want the tab's %v", p, r)
+	// the pill keeps half the recipe's Gap from the ends of the tab's slot
+	gap := theme.Snap(rexui.TabsRecipes[rexui.TabsRex].Gap * g.k.Theme().Scale / 2)
+	if p, r := m.bar.PillRect(), m.bar.TabRect(2); p[0] != r[0]+gap || p[2] != r[2]-gap {
+		t.Errorf("one frame after the choice the pill is at %v, want the tab's %v inset by %v", p, r, gap)
 	}
 	if g.c.Animating() {
 		t.Error("the bar still animates under Reduce Motion")
