@@ -185,10 +185,14 @@ func (r *Resolved) Dur(d float32) float32 {
 	return d
 }
 
-// EaseOut is t, 0 to 1, decelerated (cubic): a tween's arrival.
+// EaseOut is t, 0 to 1, decelerated: a tween's arrival. It is a strong
+// ease-out (quintic), close to the cubic-bezier(0.23, 1, 0.32, 1) that
+// interface motion guides give for things that enter and leave: most of the
+// travel is done in the first third, so a short tween reads as immediate and
+// still lands softly. A cubic's gentler start made a 250 ms slide feel late.
 func EaseOut(t float32) float32 {
 	t = 1 - min(max(t, 0), 1)
-	return 1 - t*t*t
+	return 1 - t*t*t*t*t
 }
 
 // Glide is how far a thing that comes and goes (a sidebar, a side pane, a
