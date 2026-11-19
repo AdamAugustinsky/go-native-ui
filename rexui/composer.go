@@ -52,8 +52,18 @@ type ComposerAttachment struct {
 	// accessible name of its button.
 	Name string
 	// Thumb is the thumbnail in the kit's image cache (Kit.SetImages); the
-	// zero Handle shows the file icon instead.
+	// zero Handle shows the file icon instead. With Tile the attachment is
+	// the picture itself, a square tile (ComposerRecipe.Tile) with its remove
+	// button in the corner, rather than a chip: a pasted or dropped photo the
+	// person sees before sending.
 	Thumb img.Handle
+	Tile  bool
+	// Card makes a file the height of a picture's tile: a square with its
+	// icon (Thumb, the file's own, or the file symbol), its name, and Detail
+	// under it in the secondary colour (its extension, its size), with the
+	// remove button at its end.
+	Card   bool
+	Detail string
 	// ID is the attachment's identity, which its remove button keeps while
 	// the list changes around it (a press that began on one attachment's
 	// button never ends as another's). 0 uses the attachment's place in the
@@ -445,6 +455,14 @@ type ComposerRecipe struct {
 	// button's; AttachPad is the attachments row's inset from the field's
 	// content, and AttachGap the space below it.
 	ChipH, ChipPad, ChipGap, ChipMaxW, Thumb, RemoveSize, AttachPad, AttachGap float32
+	// Tile is a picture's tile's side (ComposerAttachment.Tile) and
+	// TileRadius its corners'; TileRemove is its remove button's plate.
+	Tile, TileRadius float32
+	TileRemove       Tint
+	// CardIcon is a file card's icon square's side, CardPad its padding,
+	// CardFill its fill and CardIconFill its square's.
+	CardIcon, CardPad      float32
+	CardFill, CardIconFill Tint
 	// Fill and Border are FieldLook's; Text, Placeholder and TextDisabled
 	// colour the drawn field's text.
 	Fill, Border, Text, Placeholder, TextDisabled Tint
@@ -461,6 +479,8 @@ var ComposerLook = ComposerRecipe{
 	ExpandedMinH: 64,
 	MaxLines:     [NumComposerVariants]int{6, 8},
 	ChipH:        24, ChipPad: 8, ChipGap: 6, ChipMaxW: 160, Thumb: 16, RemoveSize: 16, AttachPad: 6, AttachGap: 2,
+	Tile: 56, TileRadius: 10, TileRemove: Of(theme.Raised),
+	CardIcon: 40, CardPad: 8, CardFill: Of(theme.Fill2), CardIconFill: Of(theme.Fill1),
 	Fill: Of(theme.InputFill), Border: Of(theme.FieldOutline),
 	Text: Of(theme.ControlText), Placeholder: Of(theme.Placeholder), TextDisabled: Of(theme.TextDisabled),
 	Chip: Of(theme.Fill2), ChipText: Of(theme.Label), ChipRemove: Of(theme.Label2), ChipRemoveHot: Of(theme.Label),
@@ -1050,6 +1070,18 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 		if a.ID != 0 { // the chip is its attachment's, wherever it sits in the row
 			ck = ui.KeyN(ui.KeyN(rowKey, 0xA8), a.ID)
 		}
+		if a.Tile && a.Thumb != 0 {
+			if composerTile(k, ck, a, i, len(list), rc) {
+				removed = i
+			}
+			continue
+		}
+		if a.Card {
+			if composerCard(k, ck, a, i, len(list), rc) {
+				removed = i
+			}
+			continue
+		}
 		nameW := theme.Snap(min(ui.CeilText(k.TextWidth(font, a.Name)), pt(sc, rc.ChipMaxW)))
 		c.NextBG(rc.Chip.RGBA(r))
 		c.NextRadius(chipH / 2)
@@ -1103,6 +1135,128 @@ func composerAttachments(k *base.Kit, fieldKey ui.Key, list []ComposerAttachment
 	}
 	c.Pop()
 	return removed
+}
+
+// composerCard is a file's attachment as tall as a picture's tile: its icon
+// in a square, its name over its detail, and its remove button. It reports
+// the button's click.
+func composerCard(k *base.Kit, ck ui.Key, a *ComposerAttachment, i, n int, rc *ComposerRecipe) bool {
+	c, r := k.Context(), k.Theme()
+	sc := k.Scale()
+	side, pad, sq := pt(sc, rc.Tile), pt(sc, rc.CardPad), pt(sc, rc.CardIcon)
+	font, small := r.Sizes[theme.SizeRegular].Font.Font, r.Sizes[theme.SizeSmall].Font.Font
+	nameW := theme.Snap(min(ui.CeilText(k.TextWidth(font, a.Name)), pt(sc, rc.ChipMaxW)))
+	nameW = max(nameW, theme.Snap(ui.CeilText(k.TextWidth(small, a.Detail))))
+	c.NextBG(rc.CardFill.RGBA(r))
+	c.NextRadius(pt(sc, rc.TileRadius))
+	c.NextAxis(ui.AxisX)
+	c.NextCross(ui.CrossCenter)
+	c.NextGap(pad)
+	c.NextPadding(pad, 0, pt(sc, 4), 0)
+	c.NextSize(ui.Children(1), ui.Px(side))
+	c.NextRole(ui.RoleListItem)
+	c.NextSemName(a.Name)
+	c.NextSemPos(i, n)
+	card := c.BoxKeyed(ui.DrawBackground, ck, nil)
+	c.Push(card)
+	// the icon's square
+	c.NextBG(rc.CardIconFill.RGBA(r))
+	c.NextRadius(pt(sc, rc.TileRadius-2))
+	c.NextAxis(ui.AxisX)
+	c.NextCross(ui.CrossCenter)
+	c.NextJustify(ui.JustifyCenter)
+	c.NextSize(ui.Px(sq), ui.Px(sq))
+	c.Push(c.BoxKeyed(ui.DrawBackground, ui.KeyN(ck, 3), nil))
+	if a.Thumb != 0 {
+		is := theme.Snap(sq * 0.7)
+		c.NextSize(ui.Px(is), ui.Px(is))
+		k.Image(uint64(i), a.Thumb, ui.FitContain, 0, "")
+	} else {
+		k.Icon(icon.File, rc.ChipRemove.RGBA(r))
+	}
+	c.Pop()
+	// the name over the detail
+	c.NextAxis(ui.AxisY)
+	c.NextGap(pt(sc, 1))
+	c.NextSize(ui.Px(nameW), ui.Children(1))
+	c.Push(c.BoxKeyed(0, ui.KeyN(ck, 4), nil))
+	c.NextSize(ui.Px(nameW), ui.TextSize(0))
+	c.NextFont(font)
+	c.NextTextColor(rc.ChipText.RGBA(r))
+	c.NextTextCut(ui.CutMiddle) // a file's name keeps its extension (D105)
+	if nid := c.BoxKeyed(ui.DrawText, ui.KeyN(ck, 1), base.StrBytes(a.Name)); c.Truncated(nid) {
+		Tooltip(k, card, a.Name)
+	}
+	if a.Detail != "" {
+		c.NextSize(ui.Px(nameW), ui.TextSize(0))
+		c.NextFont(small)
+		c.NextTextColor(rc.ChipRemove.RGBA(r))
+		c.BoxKeyed(ui.DrawText, ui.KeyN(ck, 5), base.StrBytes(a.Detail))
+	}
+	c.Pop()
+	// the remove button
+	rk := ui.KeyN(ck, 2)
+	v := k.VisualOf(rk, base.HoverOn)
+	col := mix(rc.ChipRemove.RGBA(r), rc.ChipRemoveHot.RGBA(r), v.Hot)
+	bs := pt(sc, rc.RemoveSize+4)
+	c.NextSize(ui.Px(bs), ui.Px(bs))
+	c.NextAxis(ui.AxisX)
+	c.NextCross(ui.CrossCenter)
+	c.NextJustify(ui.JustifyCenter)
+	c.NextRadius(bs / 2)
+	c.NextRole(ui.RoleButton)
+	c.NextSemNameBytes(c.Fmt().Str(str.Remove).Byte(' ').Str(a.Name).Bytes())
+	rm := c.BoxKeyed(k.InteractFlags(base.HoverOn), rk, nil)
+	c.Push(rm)
+	if f, disp := k.Icons().Prepare(c, icon.Close, col); f != 0 {
+		c.BoxKeyed(f, ui.KeyN(rk, 1), disp)
+	}
+	k.FocusRing(rm, v, bs/2)
+	c.Pop()
+	c.Pop()
+	return !k.Disabled() && k.SignalOf(rm).Clicked
+}
+
+// composerTile is a picture's attachment: the picture in a square tile,
+// and its remove button over the top right corner. It reports the button's
+// click.
+func composerTile(k *base.Kit, ck ui.Key, a *ComposerAttachment, i, n int, rc *ComposerRecipe) bool {
+	c, r := k.Context(), k.Theme()
+	sc := k.Scale()
+	side := pt(sc, rc.Tile)
+	c.NextSize(ui.Px(side), ui.Px(side))
+	c.NextRole(ui.RoleListItem)
+	c.NextSemName(a.Name)
+	c.NextSemPos(i, n)
+	tile := c.BoxKeyed(0, ck, nil)
+	c.Push(tile)
+	c.NextSize(ui.Px(side), ui.Px(side))
+	k.Image(uint64(i), a.Thumb, ui.FitFill, pt(sc, rc.TileRadius), "")
+	Tooltip(k, tile, a.Name)
+	// the remove button, on a plate so that it reads over any picture
+	rk := ui.KeyN(ck, 2)
+	v := k.VisualOf(rk, base.HoverOn)
+	col := mix(rc.ChipRemove.RGBA(r), rc.ChipRemoveHot.RGBA(r), v.Hot)
+	bs := pt(sc, rc.RemoveSize+4)
+	c.NextAnchor(ui.AnchorTopRight, pt(sc, 4), pt(sc, 4))
+	c.NextSize(ui.Px(bs), ui.Px(bs))
+	c.NextAxis(ui.AxisX)
+	c.NextCross(ui.CrossCenter)
+	c.NextJustify(ui.JustifyCenter)
+	c.NextRadius(bs / 2)
+	c.NextBG(rc.TileRemove.RGBA(r) | 0xFF)
+	c.NextAuditExempt(ui.AuditCovered.Mask()) // over the picture, as it is meant to be
+	c.NextRole(ui.RoleButton)
+	c.NextSemNameBytes(c.Fmt().Str(str.Remove).Byte(' ').Str(a.Name).Bytes())
+	rm := c.BoxKeyed(k.InteractFlags(base.HoverOn)|ui.DrawBackground, rk, nil)
+	c.Push(rm)
+	if f, disp := k.Icons().Prepare(c, icon.Close, col); f != 0 {
+		c.BoxKeyed(f, ui.KeyN(rk, 1), disp)
+	}
+	k.FocusRing(rm, v, bs/2)
+	c.Pop()
+	c.Pop()
+	return !k.Disabled() && k.SignalOf(rm).Clicked
 }
 
 // composerSend builds the send button and reports whether it was pressed,

@@ -177,6 +177,11 @@ type editorNative struct {
 	insetY   float64
 	enter    EnterPolicy
 	dirtyH   bool    // the height is to be measured again (sync)
+	// scrolls: the text is taller than MaxLines, and the scroll view has its
+	// vertical scroller (sync); otherwise it has none, so that no knob shows
+	// over a text that fits (an overlay knob showed in an empty field whose
+	// document came out a little taller than its clip)
+	scrolls bool
 	frameW   float64 // the text view's width when the height was last measured
 	quiet    bool    // SetText is setting the text: no EditorChanged
 	ph       objc.ID // the placeholder label, a subview of the text view (0: none)
@@ -295,7 +300,7 @@ func (w *Window) NewEditor(o EditorOptions) (*Editor, error) {
 	objc.Send4(objc.Send(clsNSNote, selDefaultCenter), selAddObserver, uintptr(e.del), uintptr(selFrameChanged), uintptr(edFrameNote), uintptr(tv))
 
 	sv := newViewOf(clsNSScrollView, 0, 0, 100, 20)
-	objc.Send1(sv, selSetHasVScroller, 1)
+	objc.Send1(sv, selSetHasVScroller, 0) // until the text outgrows MaxLines (sync)
 	objc.Send1(sv, selSetAutohides, 1)
 	objc.Send1(sv, selSetDrawsBackground, 0)
 	objc.Send1(sv, selSetBorderType, 0) // NSNoBorder
@@ -689,6 +694,10 @@ func (e *Editor) sync() {
 		bottom = max(bottom, extra.Y+extra.H)
 	}
 	h := min(max(bottom, float64(e.minLines)*e.lineH), float64(e.maxLines)*e.lineH) + 2*e.insetY
+	if scrolls := bottom > float64(e.maxLines)*e.lineH+0.5; scrolls != e.scrolls && e.scroll != 0 {
+		e.scrolls = scrolls
+		objc.Send1(e.scroll, selSetHasVScroller, uintptr(boolU(scrolls)))
+	}
 	if hf := float32(h); hf != e.height {
 		e.height = hf
 		e.pend |= EditorHeightChanged

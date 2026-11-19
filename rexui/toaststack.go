@@ -69,7 +69,7 @@ type StackToastOpts struct {
 	Icon icon.ID
 	// Title is its first line, in the semibold face, and its accessible
 	// name after the level's ("Error: …", as a banner's); Message the line under it, in the secondary label's colour (an
-	// error's in the readable red, wrapped); Meta sets the message as
+	// error's in the readable red); both wrap to the toast's width; Meta sets the message as
 	// metadata (theme.MetaPt, tabular figures): a percentage, a size.
 	Title, Message string
 	Meta           bool
@@ -116,8 +116,9 @@ type StackToastSignal struct {
 
 // ToastStackLook is a stack's toasts' geometry, in points: the banner's
 // radius and padding (BannerLook), Gap between the symbol, the text and the
-// close button, and TextGap between the lines.
-var ToastStackLook = struct{ Gap, TextGap float32 }{Gap: theme.Space2, TextGap: theme.Space1}
+// close button, TextGap between the lines, and Rise how far a toast rises as
+// it comes in.
+var ToastStackLook = struct{ Gap, TextGap, Rise float32 }{Gap: theme.Space2, TextGap: theme.Space1, Rise: 8}
 
 // Toast adds a toast to the stack, identified by id (the app's own: a
 // download's number), on the raised surface at a toast's lift
@@ -133,7 +134,15 @@ func (s *ToastStack) Toast(id uint64, o StackToastOpts) StackToastSignal {
 	c.NextBG(r.Colors[theme.Raised] | 0xFF)
 	lift := nextToastLift(k)
 	c.NextRadius(k.Pt(BannerLook.Radius))
-	c.NextOpacity(toastEnter(k, key))
+	// it comes from where it lives: up from the bottom, ToastStackLook.Rise
+	// points, as it fades in (still under Reduce Motion, where toastEnter is
+	// 1); the rates are exponential, so the rise eases out
+	in := toastEnter(k, key)
+	c.NextOpacity(in)
+	if in < 1 {
+		c.NextOffset(0, k.Pt(ToastStackLook.Rise)*(1-in))
+		c.NextAuditExempt(ui.AuditOverflow.Mask()) // below its stack while it rises
+	}
 	c.NextPad(k.Pt(BannerLook.Pad))
 	c.NextGap(k.Pt(ToastStackLook.Gap))
 	c.NextAxis(ui.AxisX)
@@ -154,14 +163,15 @@ func (s *ToastStack) Toast(id uint64, o StackToastOpts) StackToastSignal {
 	k.NextWidth(ui.Grow(1))
 	k.NextGap(ToastStackLook.TextGap)
 	k.Column("body")
+	// the title and the message wrap to the toast's width: a toast says a
+	// whole thing (a chat's or a file's long name), never one cut short
 	k.NextWidth(ui.Pct(1))
-	Label(k, c.Fmt().Str(o.Title).Str("###title").String(), LabelOpts{Style: TextSemibold})
+	Label(k, c.Fmt().Str(o.Title).Str("###title").String(), LabelOpts{Style: TextSemibold, Wrap: true})
 	if o.Message != "" {
 		lo := LabelOpts{Color: msg}
-		switch {
-		case o.Meta:
+		if o.Meta {
 			lo.MetaPt = theme.MetaPt
-		case lv == BannerError: // an error's explanation wraps
+		} else {
 			lo.Wrap = true
 			k.NextWidth(ui.Pct(1))
 		}

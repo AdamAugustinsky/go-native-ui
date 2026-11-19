@@ -210,6 +210,30 @@ func TestEditorHeightCountsTheEmptyLastLine(t *testing.T) {
 	})
 }
 
+// The scroll view has a vertical scroller only while the text is taller than
+// MaxLines: an empty or short text shows no knob, however its document and
+// clip round.
+func TestEditorScrollerOnlyWhileTheTextScrolls(t *testing.T) {
+	withEditor(t, EditorOptions{MaxLines: 2}, func(e *Editor) {
+		has := func() bool { return objc.SendBool(e.scroll, objc.SelZ("hasVerticalScroller\x00")) }
+		e.SetText(nil)
+		e.TakeSignals()
+		if has() {
+			t.Error("an empty editor has a scroller")
+		}
+		e.SetText([]byte("1\n2\n3\n4"))
+		e.TakeSignals()
+		if !has() {
+			t.Error("four lines in two have no scroller")
+		}
+		e.SetText([]byte("1"))
+		e.TakeSignals()
+		if has() {
+			t.Error("the scroller stays once the text fits again")
+		}
+	})
+}
+
 // SetText over a composition discards it quietly: no Changed, no Composing
 // left over, nothing marked.
 func TestEditorSetTextOverAComposition(t *testing.T) {
